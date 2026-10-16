@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <string_view>
 
 #include <rex/logging.h>
@@ -11,6 +12,7 @@
 namespace skylanders::portal {
 
 namespace {
+
 
 // hid_error() returns a UTF-16 string on Windows (wchar_t and char16_t are the same width there,
 // just distinct types) -- narrow it for REXLOG, which expects UTF-8.
@@ -92,6 +94,17 @@ Report UsbPortal::ReceiveRaw() {
   } else {
     consecutive_errors_.store(0);
   }
+  // Swap Force rejects Spyro's Adventure/Giants portals ("Wrong Portal version") by the ID in the
+  // ready reply (52 01 xx). Those portals otherwise work, so report the ID SoftwarePortal answers
+  // with (52 02 1B), which the game accepts. Newer portals are passed through unchanged.
+  if (bytes_read > 0 && report[0] == 0x52 && report[1] == 0x01) {
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true)) {
+      REXLOG_INFO("Portal (usb): old portal (ready reply 52 01 {:02X}), reporting 52 02 1B", report[2]);
+    }
+    report[1] = 0x02;
+    report[2] = 0x1B;
+  }
   return bytes_read > 0 ? report : Report{};
 }
 
@@ -130,8 +143,52 @@ Report UsbPortal::Read() {
     ObserveReply(synthetic);  // keeps PresentSlots()/the passive cache consistent with this
     return synthetic;
   }
-  Report report = ReceiveRaw();
-  if (report[0] == 0) return report;  // timeout/failure/no-device: nothing to observe
+  // The device streams status frames faster than Swap Force polls (~10 Hz), so
+  // the HID input queue grows and command replies reach the game seconds late; it then resets the
+  // portal every ~20 s and never reads a figure. Drain what is queued: command replies are passed
+  // on in order, status frames collapse to the newest one, keeping a slot's "added" state (3) if a
+  // dropped frame had it. All state below is guarded by io_mutex_.
+  static std::deque<Report> pending_replies;
+  static Report newest_status{};
+  static bool have_status = false;
+  static uint32_t added_mask = 0;  // bit per slot: a dropped frame reported "added"
+  for (int i = 0; i < 64; ++i) {
+    Report r = ReceiveRaw();
+    if (r[0] == 0) break;
+    if (r[0] != 0x53) {
+      pending_replies.push_back(r);
+      continue;
+    }
+    const uint32_t states = static_cast<uint32_t>(r[1]) | (static_cast<uint32_t>(r[2]) << 8) |
+                            (static_cast<uint32_t>(r[3]) << 16) | (static_cast<uint32_t>(r[4]) << 24);
+    for (int slot = 0; slot < kMaxFigures; ++slot) {
+      if (((states >> (2 * slot)) & 0x03) == 0x03) added_mask |= 1u << slot;
+    }
+    newest_status = r;
+    have_status = true;
+  }
+  Report report{};
+  if (!pending_replies.empty()) {
+    report = pending_replies.front();
+    pending_replies.pop_front();
+  } else if (have_status) {
+    report = newest_status;
+    have_status = false;
+    uint32_t states = static_cast<uint32_t>(report[1]) | (static_cast<uint32_t>(report[2]) << 8) |
+                      (static_cast<uint32_t>(report[3]) << 16) | (static_cast<uint32_t>(report[4]) << 24);
+    for (int slot = 0; slot < kMaxFigures; ++slot) {
+      if ((added_mask >> slot & 1u) && ((states >> (2 * slot)) & 0x03) == 0x01) {
+        states |= 0x03u << (2 * slot);  // present -> added, so the game sees the new figure
+      }
+    }
+    added_mask = 0;
+    report[1] = static_cast<uint8_t>(states);
+    report[2] = static_cast<uint8_t>(states >> 8);
+    report[3] = static_cast<uint8_t>(states >> 16);
+    report[4] = static_cast<uint8_t>(states >> 24);
+  } else {
+    return report;  // nothing queued
+  }
   ObserveReply(report);
   return report;
 }
