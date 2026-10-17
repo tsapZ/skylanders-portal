@@ -514,16 +514,6 @@ bool IsPlayableCategory(std::string_view category) {
   return category != "Items" && category != "Unreleased";
 }
 
-// Versions of a character from a later game that an earlier game reads as that character: new
-// cores, Eon's Elite, SuperChargers drivers and their variants. Not minis (Trap Team's are new
-// figures, e.g. Weeruptor), vehicles, traps or creation crystals.
-bool IsLaterVersion(const SkylanderInfo& sky) {
-  const std::string_view c = sky.category;
-  const bool character_category = c == "Cores" || c == "Eon's Elite" || c == "SuperChargers" ||
-                                  c == "Variants" || c == "Chase Variants";
-  return character_category && !sky.name.ends_with(" Mini");
-}
-
 // Each player's recent list, kept across sessions, one line per placement with the figure files
 // relative to portal_figures_dir ("Swap Force/Blast Zone Top.dump|Swap Force/Fire Kraken
 // Bottom.dump" for a swapper). A file appears in one entry only: placing a half in a new
@@ -582,21 +572,31 @@ class Library {
     const std::vector<std::string> games = AllowedGames();
 
     // Characters, each under the game it debuted in (catalog order is release order). Figures
-    // from later games count too when their character is one this game knows: a game reads a
-    // newer figure of a character it has as that character ("Eon's Elite Chop Chop" plays as
-    // Chop Chop in Swap Force). Characters that are new in a later game stay out.
+    // from later games count too when they carry the id of a character this game knows: the game
+    // goes by the id, so "Eon's Elite Chop Chop" (id 30) plays as Chop Chop in Swap Force, while
+    // a SuperChargers driver (own id) or a character new in a later game is unknown to it.
     std::unordered_map<std::string, size_t> index;
+    known_ids_.clear();
     for (const SkylanderInfo& sky : portal::AllSkylanders()) {
-      if (!IsPlayableCategory(sky.category) ||
-          portal::GetSwapperHalf(sky) == SwapperHalf::kBottom) {
+      if (!IsPlayableCategory(sky.category)) {
         continue;
       }
       const bool game_allowed = std::find(games.begin(), games.end(), sky.game) != games.end();
-      std::string name(portal::CharacterName(sky));
-      if (!game_allowed && (name.empty() || !index.contains(name) || !IsLaterVersion(sky))) {
+      if (portal::GetSwapperHalf(sky) == SwapperHalf::kBottom) {
+        // Bottoms are versions of their top's character; only known for recent entries.
+        if (game_allowed) known_ids_.emplace(sky.id, portal::SwapperBaseName(sky));
         continue;
       }
-      if (name.empty()) name = portal::DisplayName(portal::SwapperBaseName(sky));
+      std::string name;
+      if (game_allowed) {
+        name = portal::CharacterName(sky);
+        if (name.empty()) name = portal::DisplayName(portal::SwapperBaseName(sky));
+        known_ids_.emplace(sky.id, name);
+      } else if (auto known = known_ids_.find(sky.id); known != known_ids_.end()) {
+        name = known->second;
+      } else {
+        continue;
+      }
       auto [it, inserted] = index.emplace(name, characters_.size());
       if (inserted) {
         Character character;
@@ -626,7 +626,7 @@ class Library {
         entry.paths.push_back(path);
         entry.figures.push_back(it->second->sky);
       }
-      if (!entry.figures.empty() && IsUsable(*entry.figures[0], games, index)) {
+      if (!entry.figures.empty() && known_ids_.contains(entry.figures[0]->id)) {
         recent_.push_back(std::move(entry));
       }
     }
@@ -711,13 +711,6 @@ class Library {
   }
 
  private:
-  static bool IsUsable(const SkylanderInfo& sky, const std::vector<std::string>& games,
-                       const std::unordered_map<std::string, size_t>& index) {
-    if (std::find(games.begin(), games.end(), sky.game) != games.end()) return true;
-    const std::string name(portal::CharacterName(sky));
-    return !name.empty() && index.contains(name) && IsLaterVersion(sky);
-  }
-
   void ScanOwned() {
     std::error_code ec;
     std::vector<OwnedFigure> all;
@@ -747,6 +740,7 @@ class Library {
   std::vector<Character> characters_;
   std::vector<Tab> tabs_;
   std::vector<RecentEntry> recent_;
+  std::unordered_map<uint16_t, std::string> known_ids_;  // figure id -> character name
 };
 
 // --- Players on the emulated portal -----------------------------------------------------------
