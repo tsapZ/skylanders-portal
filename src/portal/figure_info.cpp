@@ -82,26 +82,53 @@ bool IsCharacterCategory(std::string_view category) {
   return category != "Items" && category != "Unreleased";
 }
 
-}  // namespace
-
-Element FigureElement(const SkylanderInfo& sky) {
+// The character entry whose name the figure's name contains; the longest match wins, so a variant
+// name that happens to contain a shorter name as well still maps to its own character.
+const CharacterElement* FindCharacter(const SkylanderInfo& sky) {
   if (!IsCharacterCategory(sky.category)) {
-    return Element::kNone;
+    return nullptr;
   }
   const std::string name = Normalize(sky.name);
-  // The longest contained base name wins, so a variant name that happens to contain a shorter
-  // name as well still maps to its own character.
   size_t best_length = 0;
-  Element best = Element::kNone;
+  const CharacterElement* best = nullptr;
   for (const CharacterElement& character : kCharacters) {
     const std::string base = Normalize(character.name);
     if (base.size() > best_length && name.find(base) != std::string::npos) {
       best_length = base.size();
-      best = character.element;
+      best = &character;
     }
   }
   return best;
 }
+
+}  // namespace
+
+Element FigureElement(const SkylanderInfo& sky) {
+  const CharacterElement* character = FindCharacter(sky);
+  return character ? character->element : Element::kNone;
+}
+
+std::string_view CharacterName(const SkylanderInfo& sky) {
+  const CharacterElement* character = FindCharacter(sky);
+  return character ? character->name : std::string_view();
+}
+
+std::string VersionBadge(const SkylanderInfo& sky) {
+  const size_t series = sky.name.find("(Series ");
+  if (series != std::string_view::npos && series + 8 < sky.name.size()) {
+    return "Series " + std::string(1, sky.name[series + 8]);
+  }
+  if (sky.category == "Cores") return "Series 1";
+  if (sky.category == "LightCores") return "LightCore";
+  if (sky.category == "Giants") return "Giant";
+  if (sky.category == "Sidekicks") return "Sidekick";
+  if (sky.category == "Swappers") return "Swapper";
+  if (sky.category == "Chase Variants") return "Chase";
+  if (sky.category == "Variants") return "Variant";
+  return std::string(sky.category);
+}
+
+
 
 std::string_view ElementName(Element element) {
   switch (element) {

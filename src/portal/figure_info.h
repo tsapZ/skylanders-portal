@@ -28,6 +28,16 @@ enum class Element {
 // games until they are added.
 Element FigureElement(const SkylanderInfo& sky);
 
+// The character a figure belongs to: "Chop Chop" for "Legendary Chop Chop" and "Twin Blade Chop
+// Chop (Series 3)", "Freeze Blade" for "Nitro Freeze Blade Top". Same coverage as FigureElement;
+// empty for items and figures it doesn't know.
+std::string_view CharacterName(const SkylanderInfo& sky);
+
+// What kind of version of its character a figure is, for a badge: "Series 1".."Series 3" for
+// cores (from the "(Series N)" suffix, Series 1 otherwise), or "LightCore", "Giant", "Sidekick",
+// "Swapper", "Variant", "Chase".
+std::string VersionBadge(const SkylanderInfo& sky);
+
 // English element name ("Magic"), empty for kNone.
 std::string_view ElementName(Element element);
 

@@ -66,6 +66,30 @@ int main() {
   CHECK(spyro && GetSwapperHalf(*spyro) == SwapperHalf::kNone && SwapperPartner(*spyro) == nullptr);
   CHECK(SwapperBaseName(*spyro) == "Spyro");
 
+  // Characters and version badges.
+  auto character = [](std::string_view name) {
+    const SkylanderInfo* sky = ByName(name);
+    return sky ? std::string(CharacterName(*sky)) : std::string("?");
+  };
+  auto badge = [](std::string_view name) {
+    const SkylanderInfo* sky = ByName(name);
+    return sky ? VersionBadge(*sky) : std::string("?");
+  };
+  CHECK(character("Legendary Chop Chop") == "Chop Chop");
+  CHECK(character("Twin Blade Chop Chop (Series 3)") == "Chop Chop");
+  CHECK(character("Metallic Blue Chop Chop") == "Chop Chop");
+  CHECK(character("Nitro Freeze Blade Top") == "Freeze Blade");
+  CHECK(character("Sparx Dragonfly").empty());
+  CHECK(badge("Chop Chop") == "Series 1");
+  CHECK(badge("Chop Chop (Series 2)") == "Series 2");
+  CHECK(badge("Twin Blade Chop Chop (Series 3)") == "Series 3");
+  CHECK(badge("Chill") == "Series 1");
+  CHECK(badge("Chill LightCore") == "LightCore");
+  CHECK(badge("Legendary Chop Chop") == "Variant");
+  CHECK(badge("Metallic Blue Chop Chop") == "Chase");
+  CHECK(badge("Tree Rex") == "Giant");
+  CHECK(badge("Freeze Blade Top") == "Swapper");
+
   CHECK(DisplayName("Dragon_s Peak") == "Dragon's Peak");
   CHECK(DisplayName("Spyro") == "Spyro");
   CHECK(ElementName(Element::kTech) == "Tech");
