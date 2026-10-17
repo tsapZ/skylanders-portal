@@ -5,7 +5,10 @@
 //   - notice its open button on any controller and know which player that controller is,
 //   - hide all controller and keyboard input from the game while the menu is open,
 //   - read each controller itself while the game sees nothing.
-// The Guide button is always hidden from the game; the game has no use for it.
+// The Guide button is always hidden from the game; the game has no use for it. Buttons that may
+// start an open entry (Back for back+start or hold_back) reach the game only once it's clear
+// they don't open the menu, so Back doesn't open the game's pause menu on the way.
+// keyboard_player picks which player the keyboard plays as.
 
 #include <cstdint>
 #include <functional>
@@ -52,12 +55,16 @@ bool MenuOpen();
 // polled there (keyboard/mouse emulation) or that are gone.
 std::optional<rex::input::X_INPUT_GAMEPAD> ReadPad(rex::input::DeviceId device);
 
-// The player a device plays as: its connection slot for controllers, 0 for the keyboard and
-// other synthetic devices.
+// The player a device plays as: its connection slot for controllers, keyboard_player - 1 for the
+// keyboard, 0 for other synthetic devices.
 uint32_t UserOf(rex::input::DeviceId device);
 
-// The keyboard/mouse emulation device, if there is one (it plays as player 0).
+// The keyboard/mouse emulation device, if there is one.
 std::optional<rex::input::DeviceId> KeyboardDevice();
+
+// Makes a device play as `user` (nullopt: back to its slot). For test scripts that act as a
+// second player.
+void SetDevicePlayer(rex::input::DeviceId device, std::optional<uint32_t> user);
 
 // True when this button set fires the open button (used by the menu to close again with the
 // same button). Edge detection is the caller's job.
