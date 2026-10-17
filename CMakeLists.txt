@@ -59,6 +59,8 @@ if(TARGET rex::runtime)
     add_library(skylanders_portal_rex STATIC
         src/portal_rex/portal_rex.cpp
         src/portal_rex/portal_overlay_dialog.cpp
+        src/portal_rex/portal_menu.cpp
+        src/portal_rex/portal_menu_input.cpp
         src/portal/usb/usb_portal.cpp
         src/portal_rex/sdl_audio_sink.cpp
     )

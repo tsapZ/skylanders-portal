@@ -385,21 +385,25 @@ bool RemoveFigureFromSlot(int slot) {
   return software->RemoveFigure(slot);
 }
 
-bool CreateAndPlaceFigure(int slot, const portal::SkylanderInfo& sky) {
-  portal::SoftwarePortal* software = g_software_portal.load();
-  if (!software) return false;
+std::optional<std::filesystem::path> CreateFigureFile(const portal::SkylanderInfo& sky) {
   const std::string dir_utf8 = REXCVAR_GET(portal_figures_dir);
-  if (dir_utf8.empty()) return false;
+  if (dir_utf8.empty()) return std::nullopt;
 
   const std::filesystem::path game_dir = Utf8ToPath(dir_utf8) / std::string(sky.game);
   std::error_code ec;
   std::filesystem::create_directories(game_dir, ec);
-  if (ec) return false;
+  if (ec) return std::nullopt;
 
   const std::filesystem::path path = portal::UniqueFigurePath(game_dir, sky.name);
   const portal::FigureData data = portal::CreateBlankFigure(sky.id, sky.variant);
-  if (!portal::SaveFigureFileAtomic(path, data)) return false;
-  return PlaceFigureFromFile(slot, path);
+  if (!portal::SaveFigureFileAtomic(path, data)) return std::nullopt;
+  return path;
+}
+
+bool CreateAndPlaceFigure(int slot, const portal::SkylanderInfo& sky) {
+  if (!g_software_portal.load()) return false;
+  const std::optional<std::filesystem::path> path = CreateFigureFile(sky);
+  return path && PlaceFigureFromFile(slot, *path);
 }
 
 bool CreateAndPlaceVillainTrap(int slot, const portal::TrapVillain& villain) {
@@ -480,7 +484,9 @@ void SubmitSpeakerPcm(std::span<const int16_t> pcm) {
 
 void RegisterPortalOverlay(rex::ui::ImGuiDrawer* drawer) {
   static std::unique_ptr<PortalOverlayDialog> overlay;  // UI thread only
-  rex::ui::RegisterBind("bind_portal_overlay", "F6", "Toggle the portal figure picker", [drawer] {
+  // Developer tool: figure files, USB figure dumps, any slot. Players use the portal menu
+  // (portal_menu.h, F6 and the controller open button).
+  rex::ui::RegisterBind("bind_portal_overlay", "F8", "Toggle the portal developer tools", [drawer] {
     if (overlay) {
       overlay.reset();
     } else {

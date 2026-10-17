@@ -54,6 +54,10 @@ bool RemoveFigureFromSlot(int slot);
 // or the folder can't be created.
 bool CreateAndPlaceFigure(int slot, const portal::SkylanderInfo& sky);
 
+// Creates a new blank figure file for `sky` like CreateAndPlaceFigure, without placing it.
+// Returns its path, or nullopt if portal_figures_dir is unset or the file can't be written.
+std::optional<std::filesystem::path> CreateFigureFile(const portal::SkylanderInfo& sky);
+
 // Like CreateAndPlaceFigure, but a Trap Team trap holding `villain`: the first crystal trap shape
 // of the villain's element, saved as "<villain>.dump" under the "Trap Team" folder.
 bool CreateAndPlaceVillainTrap(int slot, const portal::TrapVillain& villain);
