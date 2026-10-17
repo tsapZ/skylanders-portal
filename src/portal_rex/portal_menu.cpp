@@ -78,6 +78,7 @@ enum class Text {
   kOnPortal,
   kTakeOff,
   kCategory,
+  kTakeOffItem,
   kCount,
 };
 
@@ -108,6 +109,7 @@ constexpr const char* kEnglish[] = {
     "On the portal",
     "Take off",
     "Category",
+    "Take item off",
 };
 constexpr const char* kGerman[] = {
     "PORTAL OF POWER",
@@ -137,6 +139,7 @@ constexpr const char* kGerman[] = {
     "Auf dem Portal",
     "Runternehmen",
     "Kategorie",
+    "Item runternehmen",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -905,13 +908,12 @@ class Library {
 // slots and assigns players by the order figures arrive; when one player's figure is lifted and
 // another placed, that player gets it. UI thread only.
 std::array<std::vector<int>, rex::input::kMaxGuestUsers> g_player_slots;
-// The slot of the magic item / adventure pack each player put on through the menu, or -1. Items
-// stay on the portal when the player's figure is lifted.
-std::array<int, rex::input::kMaxGuestUsers> g_player_items = {-1, -1, -1, -1};
+// The slot of the magic item / adventure pack put on through the menu, or -1. There is one, shared
+// by all players: any player can replace it or take it off, and it stays on the portal when a
+// player's figure is lifted.
+int g_item_slot = -1;
 
-bool IsItemSlot(int slot) {
-  return std::find(g_player_items.begin(), g_player_items.end(), slot) != g_player_items.end();
-}
+bool IsItemSlot(int slot) { return slot >= 0 && slot == g_item_slot; }
 
 bool OwnedByOther(int slot, uint32_t user) {
   for (uint32_t u = 0; u < g_player_slots.size(); ++u) {
@@ -1043,10 +1045,10 @@ void RestoreLifted(uint32_t user, const std::vector<LiftedFigure>& lifted) {
   }
 }
 
-// The item a player put on through the menu, if it's still there.
-const SkylanderInfo* PlayerItem(uint32_t user) {
+// The item put on through the menu, if it's still there.
+const SkylanderInfo* PortalItem() {
   portal::SoftwarePortal* software = GetSoftwarePortal();
-  int& slot = g_player_items[user];
+  int& slot = g_item_slot;
   if (!software || slot < 0 || !software->HasFigure(slot)) {
     slot = -1;
     return nullptr;
@@ -1054,12 +1056,12 @@ const SkylanderInfo* PlayerItem(uint32_t user) {
   return FigureIn(slot);
 }
 
-// Puts an item on the portal for a player in place of their previous one; no path just takes
-// the previous one off. A different slot each time, so the game sees the old one leave.
-void SetPlayerItem(uint32_t user, const std::optional<std::filesystem::path>& path) {
+// Puts an item on the portal in place of the previous one; no path just takes the previous one
+// off. A different slot each time, so the game sees the old one leave.
+void SetPortalItem(uint32_t user, const std::optional<std::filesystem::path>& path) {
   portal::SoftwarePortal* software = GetSoftwarePortal();
   if (!software) return;
-  int& slot = g_player_items[user];
+  int& slot = g_item_slot;
   const int old_slot = slot;
   if (slot >= 0 && software->HasFigure(slot)) RemoveFigureFromSlot(slot);
   slot = -1;
@@ -1074,6 +1076,7 @@ struct Actions {
   bool up = false, down = false, left = false, right = false;
   bool accept = false, back = false, details = false, lb = false, rb = false, lt = false,
        rt = false;
+  bool take_off = false;  // Y: take the item off the portal
 };
 
 // Edge and key-repeat detection for one controller.
@@ -1086,6 +1089,7 @@ class PadReader {
     a.accept = pressed(rex::input::X_INPUT_GAMEPAD_A);
     a.back = pressed(rex::input::X_INPUT_GAMEPAD_B);
     a.details = pressed(rex::input::X_INPUT_GAMEPAD_X);
+    a.take_off = pressed(rex::input::X_INPUT_GAMEPAD_Y);
     a.lb = pressed(rex::input::X_INPUT_GAMEPAD_LEFT_SHOULDER);
     a.rb = pressed(rex::input::X_INPUT_GAMEPAD_RIGHT_SHOULDER);
     const bool lt = pad.left_trigger > 128, rt = pad.right_trigger > 128;
@@ -1140,10 +1144,11 @@ Actions ReadKeyboard() {
   a.left = key(ImGuiKey_LeftArrow) || key(ImGuiKey_A);
   a.right = key(ImGuiKey_RightArrow) || key(ImGuiKey_D);
   // The same keys the keyboard controller emulation uses: Space/Enter = A, Backspace = B,
-  // L = X, 1/3 = LB/RB, Q/E = LT/RT.
+  // L = X, P = Y, 1/3 = LB/RB, Q/E = LT/RT.
   a.accept = once(ImGuiKey_Enter) || once(ImGuiKey_KeypadEnter) || once(ImGuiKey_Space);
   a.back = once(ImGuiKey_Escape) || once(ImGuiKey_Backspace);
   a.details = once(ImGuiKey_L) || once(ImGuiKey_Tab);
+  a.take_off = once(ImGuiKey_P);
   a.lb = once(ImGuiKey_1);
   a.rb = once(ImGuiKey_3);
   a.lt = once(ImGuiKey_Q);
@@ -1163,6 +1168,7 @@ void Merge(Actions& into, const Actions& from) {
   into.rb |= from.rb;
   into.lt |= from.lt;
   into.rt |= from.rt;
+  into.take_off |= from.take_off;
 }
 
 // --- The dialog ---------------------------------------------------------------------------------
@@ -1216,7 +1222,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         const std::string name = library_.CharacterOf(*sky);
         if (!name.empty()) taken_.emplace(name, owner);
       }
-      current_item_ = PlayerItem(user_);
+      current_item_ = PortalItem();
       // Recent opens first; with nothing recent, the lifted figure's character.
       tab_ = 0;
       if (library_.recent().empty() && library_.tabs().size() > 1) {
@@ -1253,7 +1259,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
           for (const LiftedFigure& f : lifted_) preferred.push_back(f.slot);
           PlaceForPlayer(user_, pending_paths_, preferred);
         }
-        if (item_change_) SetPlayerItem(user_, item_path_);
+        if (item_change_) SetPortalItem(user_, item_path_);
         Finish();
       }
       return;
@@ -1409,6 +1415,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     element_ = 0;
     selected_ = 0;
     scroll_row_ = 0;
+    if (CurrentTab().items && current_item_) {
+      size_t tab = 0;
+      if (library_.Locate(current_item_, tab, element_, selected_) && tab != tab_) {
+        element_ = selected_ = 0;
+      }
+    }
   }
 
   void SwitchRow(int delta) {
@@ -1446,6 +1458,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     if (a.back) {
       StartCancel();
+      return;
+    }
+    if (a.take_off && current_item_) {
+      ToggleItem(*current_item_);
       return;
     }
     if (a.lt) SwitchTab(-1);
@@ -1671,8 +1687,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     } else if (state_ == State::kBrowsing) {
       x += Hint(dl, {x, y}, kb ? "Q / E" : "LT / RT", grey, T(Text::kCategory), false);
       if (!CurrentTab().recent) {
-        Hint(dl, {x, y}, kb ? "1 / 3" : "LB / RB", grey,
-             CurrentTab().items ? T(Text::kGame) : T(Text::kElement), false);
+        x += Hint(dl, {x, y}, kb ? "1 / 3" : "LB / RB", grey,
+                  CurrentTab().items ? T(Text::kGame) : T(Text::kElement), false);
+      }
+      if (current_item_) {
+        Hint(dl, {x, y}, kb ? "P" : "Y", Rgba(230, 180, 40), T(Text::kTakeOffItem), !kb);
       }
     }
   }
@@ -1842,8 +1861,16 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (character.item) {
       const bool on = current_item_ == character.versions.front().sky;
       const OwnedFigure* owned = library_.Owned(character.versions.front().sky);
-      Label(dl, BoldFont(), S(17), {a.x + S(14), b.y - S(28)}, on || owned ? kGold : kDim,
-            on ? std::string(T(Text::kOnPortal)) : std::string(GameShortName(character.debut_game)));
+      if (on) {
+        const ImVec2 ts = TextSize(BoldFont(), S(17), T(Text::kOnPortal));
+        const ImVec2 q0{a.x + S(10), b.y - S(36)}, q1{a.x + S(34) + ts.x, b.y - S(8)};
+        dl->AddRectFilled(q0, q1, Rgba(60, 170, 80), S(14));
+        dl->AddRect(q0, q1, Rgba(255, 255, 255, 150), S(14), 0, S(1.5f));
+        Label(dl, BoldFont(), S(17), {q0.x + S(12), q0.y + S(4)}, kWhite, T(Text::kOnPortal));
+      } else {
+        Label(dl, BoldFont(), S(17), {a.x + S(14), b.y - S(28)}, owned ? kGold : kDim,
+              GameShortName(character.debut_game));
+      }
       return;
     }
     if (character.swapper) {
