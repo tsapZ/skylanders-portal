@@ -514,6 +514,16 @@ bool IsPlayableCategory(std::string_view category) {
   return category != "Items" && category != "Unreleased";
 }
 
+// Versions of a character from a later game that an earlier game reads as that character: new
+// cores, Eon's Elite, SuperChargers drivers and their variants. Not minis (Trap Team's are new
+// figures, e.g. Weeruptor), vehicles, traps or creation crystals.
+bool IsLaterVersion(const SkylanderInfo& sky) {
+  const std::string_view c = sky.category;
+  const bool character_category = c == "Cores" || c == "Eon's Elite" || c == "SuperChargers" ||
+                                  c == "Variants" || c == "Chase Variants";
+  return character_category && !sky.name.ends_with(" Mini");
+}
+
 // Each player's recent list, kept across sessions, one line per placement with the figure files
 // relative to portal_figures_dir ("Swap Force/Blast Zone Top.dump|Swap Force/Fire Kraken
 // Bottom.dump" for a swapper). A file appears in one entry only: placing a half in a new
@@ -571,15 +581,21 @@ class Library {
     ScanOwned();
     const std::vector<std::string> games = AllowedGames();
 
-    // Characters, each under the game it debuted in (catalog order is release order).
+    // Characters, each under the game it debuted in (catalog order is release order). Figures
+    // from later games count too when their character is one this game knows: a game reads a
+    // newer figure of a character it has as that character ("Eon's Elite Chop Chop" plays as
+    // Chop Chop in Swap Force). Characters that are new in a later game stay out.
     std::unordered_map<std::string, size_t> index;
     for (const SkylanderInfo& sky : portal::AllSkylanders()) {
-      if (std::find(games.begin(), games.end(), sky.game) == games.end() ||
-          !IsPlayableCategory(sky.category) ||
+      if (!IsPlayableCategory(sky.category) ||
           portal::GetSwapperHalf(sky) == SwapperHalf::kBottom) {
         continue;
       }
+      const bool game_allowed = std::find(games.begin(), games.end(), sky.game) != games.end();
       std::string name(portal::CharacterName(sky));
+      if (!game_allowed && (name.empty() || !index.contains(name) || !IsLaterVersion(sky))) {
+        continue;
+      }
       if (name.empty()) name = portal::DisplayName(portal::SwapperBaseName(sky));
       auto [it, inserted] = index.emplace(name, characters_.size());
       if (inserted) {
@@ -610,8 +626,7 @@ class Library {
         entry.paths.push_back(path);
         entry.figures.push_back(it->second->sky);
       }
-      if (!entry.figures.empty() &&
-          std::find(games.begin(), games.end(), entry.figures[0]->game) != games.end()) {
+      if (!entry.figures.empty() && IsUsable(*entry.figures[0], games, index)) {
         recent_.push_back(std::move(entry));
       }
     }
@@ -696,6 +711,13 @@ class Library {
   }
 
  private:
+  static bool IsUsable(const SkylanderInfo& sky, const std::vector<std::string>& games,
+                       const std::unordered_map<std::string, size_t>& index) {
+    if (std::find(games.begin(), games.end(), sky.game) != games.end()) return true;
+    const std::string name(portal::CharacterName(sky));
+    return !name.empty() && index.contains(name) && IsLaterVersion(sky);
+  }
+
   void ScanOwned() {
     std::error_code ec;
     std::vector<OwnedFigure> all;

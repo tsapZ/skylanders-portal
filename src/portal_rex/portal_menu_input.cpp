@@ -206,10 +206,12 @@ class MenuInputDriver final : public InputDriver {
     const size_t first = out.size();
     inner_->EnumerateDevices(out);
     std::lock_guard lock(g_mutex);
+    devices_.clear();
     for (size_t i = first; i < out.size(); ++i) {
       DeviceRecord& record = g_devices[uint64_t(out[i].id)];
       record.driver = this;
       record.synthetic = out[i].synthetic;
+      devices_.push_back(out[i].id);
       if (keyboard_) {
         g_keyboard = out[i].id;
       }
@@ -222,34 +224,14 @@ class MenuInputDriver final : public InputDriver {
     if (result != X_ERROR_SUCCESS) {
       return result;
     }
-    bool fire = false;
     bool hide = !is_active() || g_menu_open.load();
-    uint32_t user = 0;
-    {
-      std::lock_guard lock(g_mutex);
-      DeviceRecord& record = g_devices[uint64_t(id)];
-      record.driver = this;
-      fire = ObserveLocked(record, state.gamepad) && !g_menu_open.load();
-      if (record.hidden_until_release) {
-        if (AnyButtonDown(state.gamepad)) {
-          hide = true;
-        } else {
-          record.hidden_until_release = false;
-        }
-      }
-      user = UserOfLocked(record);
-    }
-    if (fire) {
-      std::function<void(DeviceId, uint32_t)> handler;
-      {
-        std::lock_guard lock(g_mutex);
-        handler = g_open_handler;
-      }
-      if (handler) {
-        handler(id, user);
-      }
+    if (Observe(id, state.gamepad, &hide)) {
       hide = true;
     }
+    // The game only polls the players it knows about; a second player who hasn't joined yet
+    // must still be able to open the menu (and join by placing a figure). So every game poll
+    // also checks the open button on this driver's other controllers.
+    WatchOtherDevices(id);
     state.gamepad.buttons = uint16_t(state.gamepad.buttons) &
                             uint16_t(~uint16_t(rex::input::X_INPUT_GAMEPAD_GUIDE));
     if (hide) {
@@ -278,6 +260,59 @@ class MenuInputDriver final : public InputDriver {
     return inner_->GetDeviceKeystroke(id, flags, out_keystroke);
   }
 
+ private:
+  // Updates the open-button state of a device; calls the open handler and returns true when it
+  // fired. `hide` is set while the device must stay hidden after the menu closed.
+  bool Observe(DeviceId id, const X_INPUT_GAMEPAD& pad, bool* hide) {
+    bool fire = false;
+    uint32_t user = 0;
+    std::function<void(DeviceId, uint32_t)> handler;
+    {
+      std::lock_guard lock(g_mutex);
+      DeviceRecord& record = g_devices[uint64_t(id)];
+      record.driver = this;
+      fire = ObserveLocked(record, pad) && !g_menu_open.load();
+      if (record.hidden_until_release && hide) {
+        if (AnyButtonDown(pad)) {
+          *hide = true;
+        } else {
+          record.hidden_until_release = false;
+        }
+      }
+      user = UserOfLocked(record);
+      if (fire) handler = g_open_handler;
+    }
+    if (fire && handler) {
+      handler(id, user);
+    }
+    return fire;
+  }
+
+  void WatchOtherDevices(DeviceId polled) {
+    if (!pollable_) {
+      return;
+    }
+    const auto now = Clock::now();
+    std::vector<DeviceId> others;
+    {
+      std::lock_guard lock(g_mutex);
+      if (now - last_watch_ < std::chrono::milliseconds(15)) {
+        return;
+      }
+      last_watch_ = now;
+      for (DeviceId other : devices_) {
+        if (other != polled) others.push_back(other);
+      }
+    }
+    for (DeviceId other : others) {
+      X_INPUT_STATE state{};
+      if (inner_->GetDeviceState(other, &state) == X_ERROR_SUCCESS) {
+        Observe(other, state.gamepad, nullptr);
+      }
+    }
+  }
+
+ public:
   std::optional<X_INPUT_GAMEPAD> Poll(DeviceId id) {
     if (!pollable_) {
       return std::nullopt;
@@ -293,6 +328,8 @@ class MenuInputDriver final : public InputDriver {
   std::unique_ptr<InputDriver> inner_;
   bool pollable_;
   bool keyboard_;
+  std::vector<DeviceId> devices_;  // guarded by g_mutex
+  Clock::time_point last_watch_{};  // guarded by g_mutex
 };
 
 // SlotAssignment (a controller in connection slot N plays as player N), plus a record of each

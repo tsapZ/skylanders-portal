@@ -92,6 +92,7 @@ int main() {
 
   CHECK(DisplayName("Dragon_s Peak") == "Dragon's Peak");
   CHECK(DisplayName("Spyro") == "Spyro");
+  CHECK(DisplayName("Eon\xE2\x80\x99s Elite Boomer") == "Eon's Elite Boomer");
   CHECK(ElementName(Element::kTech) == "Tech");
   CHECK(ElementName(Element::kNone).empty());
   return Finish("figure_info");

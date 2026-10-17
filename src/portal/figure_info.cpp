@@ -196,6 +196,11 @@ std::string DisplayName(std::string_view catalog_name) {
   for (size_t pos = out.find("_s"); pos != std::string::npos; pos = out.find("_s", pos + 2)) {
     out.replace(pos, 2, "'s");
   }
+  // A few names use a typographic apostrophe (U+2019), which UI fonts often lack.
+  for (size_t pos = out.find("\xE2\x80\x99"); pos != std::string::npos;
+       pos = out.find("\xE2\x80\x99", pos + 1)) {
+    out.replace(pos, 3, "'");
+  }
   return out;
 }
 

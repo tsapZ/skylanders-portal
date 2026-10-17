@@ -52,7 +52,8 @@ const SkylanderInfo* SwapperPartner(const SkylanderInfo& sky);
 // The swapper's name without " Top" / " Bottom" ("Freeze Blade"); the plain name otherwise.
 std::string_view SwapperBaseName(const SkylanderInfo& sky);
 
-// The name shown in menus: "_s" in catalog names stands for an apostrophe ("Dragon_s Peak").
+// The name shown in menus: "_s" in catalog names stands for an apostrophe ("Dragon_s Peak"), and
+// typographic apostrophes become plain ones.
 std::string DisplayName(std::string_view catalog_name);
 
 }  // namespace skylanders::portal
