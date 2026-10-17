@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <rex/cvar.h>
 #include <rex/input/device.h>
 #include <rex/input/input.h>
@@ -293,6 +294,17 @@ void OutlinedLabel(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 c
   }
   Label(dl, font, size, {pos.x, pos.y + outline * 1.5f}, shadow, text);
   Label(dl, font, size, pos, col, text);
+}
+
+// A rounded rectangle with a vertical gradient; ImGui's multi-colour rectangles have square
+// corners, so the rounded shape is drawn in white and its vertices recoloured.
+void GradientRect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom, float rounding,
+                  ImDrawFlags flags = 0) {
+  const int first = dl->VtxBuffer.Size;
+  dl->AddRectFilled(a, b, IM_COL32(255, 255, 255, (top >> IM_COL32_A_SHIFT) & 0xFF), rounding,
+                    flags);
+  ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, first, dl->VtxBuffer.Size, a, {a.x, b.y}, top,
+                                                bottom);
 }
 
 ImVec2 TextSize(ImFont* font, float size, std::string_view text, float wrap = 0.0f) {
@@ -1800,15 +1812,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       dl->AddRectFilled({a.x - S(6), a.y - S(6)}, {b.x + S(6), b.y + S(6)}, Rgba(244, 196, 84, 80),
                         S(18));
     }
-    dl->AddRectFilledMultiColor(a, b, ElementColor(element, 0.62f, 255),
-                                ElementColor(element, 0.62f, 255), ElementColor(element, 0.30f, 255),
-                                ElementColor(element, 0.30f, 255));
-    // Rounded corners over the gradient.
-    dl->AddRect(a, b, Rgba(10, 14, 40, 255), S(14), 0, S(6));
+    GradientRect(dl, a, b, ElementColor(element, 0.62f, 255), ElementColor(element, 0.30f, 255),
+                 S(14));
     // The element as a faded watermark.
-    DrawElementIcon(dl, {b.x - S(42), a.y + (b.y - a.y) * 0.54f}, S(44), element,
+    DrawElementIcon(dl, {b.x - S(46), a.y + (b.y - a.y) * 0.54f}, S(42), element,
                     IM_COL32(255, 255, 255, 38));
-    dl->AddRect(a, b, selected ? kGold : Rgba(255, 255, 255, 46), S(12), 0,
+    dl->AddRect(a, b, selected ? kGold : Rgba(255, 255, 255, 46), S(14), 0,
                 selected ? S(4) : S(1.5f));
   }
 
@@ -1872,10 +1881,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const SkylanderInfo* main = figures[0];
     const bool item = IsItem(main);
     const Element element = portal::FigureElement(*main);
-    dl->AddRectFilledMultiColor(a, b, ElementColor(element, 0.50f, 245),
-                                ElementColor(element, 0.50f, 245), ElementColor(element, 0.18f, 245),
-                                ElementColor(element, 0.18f, 245));
-    dl->AddRect(a, b, Rgba(16, 22, 60, 255), S(20), 0, S(8));
+    GradientRect(dl, a, b, ElementColor(element, 0.50f, 245), ElementColor(element, 0.18f, 245),
+                 S(20));
+    dl->AddRect(a, b, Rgba(255, 255, 255, 40), S(20), 0, S(1.5f));
     // Element band with the medallion.
     const float band = S(62);
     dl->AddRectFilled(a, {b.x, a.y + band}, ElementColor(element), S(20),
