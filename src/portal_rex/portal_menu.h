@@ -64,6 +64,11 @@ void SetFigureImageProvider(FigureImageProvider provider);
 using FigureNameProvider = std::function<std::optional<std::string>(uint16_t id, uint16_t variant)>;
 void SetFigureNameProvider(FigureNameProvider provider);
 
+// True while the game is busy with a figure change (its "place your Skylander" sequence). Putting
+// an item on or taking it off waits until this is false, so the player's Skylander is back in
+// the game first. Called from a background thread. Without it, item changes wait 0.7 s.
+void SetGameBusyProvider(std::function<bool()> busy);
+
 // For a game integration that knows when the game waits for a player's figure (its "place your
 // Skylander" screen): opens the menu for that player (guest user index), steered by their
 // controller, unless portal_menu_auto_open is off, a menu is already open or the portal isn't

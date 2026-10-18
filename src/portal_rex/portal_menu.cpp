@@ -5,6 +5,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +16,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -67,7 +69,6 @@ enum class Text {
   kTop,
   kBottom,
   kNewFigure,
-  kYourFigure,
   kUsbActive,
   kNoPortal,
   kNothingRecent,
@@ -98,7 +99,6 @@ constexpr const char* kEnglish[] = {
     "Top",
     "Bottom",
     "New figure, created when placed",
-    "Your figure",
     "The real USB portal is active. Put your figures on it.",
     "No portal is active (portal_mode = none).",
     "Nothing placed yet. Choose a game with LT / RT.",
@@ -128,7 +128,6 @@ constexpr const char* kGerman[] = {
     "Oben",
     "Unten",
     "Neue Figur, wird beim Auflegen angelegt",
-    "Deine Figur",
     "Das echte USB-Portal ist aktiv. Stell deine Figuren direkt aufs Portal.",
     "Kein Portal aktiv (portal_mode = none).",
     "Noch nichts aufgelegt. W\xC3\xA4hle mit LT / RT ein Spiel.",
@@ -553,17 +552,39 @@ float Hint(ImDrawList* dl, ImVec2 pos, std::string_view glyph, ImU32 glyph_col,
   return glyph_w + S(8) + TextSize(BoldFont(), S(20), label).x + S(28);
 }
 
-// The glowing ring of a Portal of Power, drawn under the preview figure.
-void DrawPortalGlow(ImDrawList* dl, ImVec2 c, float w) {
-  for (int i = 8; i >= 1; --i) {
-    const float k = float(i) / 8.0f;
-    dl->AddEllipseFilled(c, {w * 0.5f * (0.6f + 0.6f * k), w * 0.11f * (0.6f + 0.6f * k)},
-                         IM_COL32(80, 190, 255, int(26 * (1.0f - k) + 6)));
+// A Portal of Power for the preview figure to stand on: a dark round base, a silver rim and a
+// glowing top, with light rising from it. `c` is the middle of the top, `w` the width. Returns
+// the lowest point drawn.
+float DrawPortalOfPower(ImDrawList* dl, ImVec2 c, float w) {
+  const float rx = w * 0.5f, ry = w * 0.15f, h = w * 0.12f;
+  // Light rising from the top, behind the figure.
+  const ImVec2 beam0{c.x - rx * 0.62f, c.y - w * 0.95f}, beam1{c.x + rx * 0.62f, c.y};
+  dl->AddRectFilledMultiColor(beam0, beam1, IM_COL32(120, 210, 255, 0), IM_COL32(120, 210, 255, 0),
+                              IM_COL32(120, 210, 255, 70), IM_COL32(120, 210, 255, 70));
+  // A soft glow on the "floor".
+  for (int i = 6; i >= 1; --i) {
+    const float k = float(i) / 6.0f;
+    dl->AddEllipseFilled({c.x, c.y + h}, {rx * (1.0f + 0.35f * k), ry * (1.0f + 0.35f * k)},
+                         IM_COL32(80, 190, 255, int(14 * (1.0f - k) + 4)));
   }
-  dl->AddEllipse(c, {w * 0.42f, w * 0.085f}, IM_COL32(140, 225, 255, 210), 0, 0, S(3));
-  dl->AddEllipse(c, {w * 0.30f, w * 0.060f}, IM_COL32(244, 196, 84, 160), 0, 0, S(2));
+  // The base: its side, then the top.
+  const ImU32 side = IM_COL32(22, 24, 40, 255);
+  dl->AddEllipseFilled({c.x, c.y + h}, {rx, ry}, side);
+  dl->AddRectFilled({c.x - rx, c.y}, {c.x + rx, c.y + h}, side);
+  dl->PathEllipticalArcTo({c.x, c.y + h}, {rx, ry}, 0, 0, 3.14159265f, 32);
+  dl->PathStroke(IM_COL32(90, 100, 140, 220), 0, std::max(1.0f, w * 0.008f));
+  dl->AddEllipseFilled(c, {rx, ry}, IM_COL32(52, 58, 86, 255));
+  dl->AddEllipse(c, {rx, ry}, IM_COL32(190, 200, 225, 255), 0, 48, std::max(1.5f, w * 0.014f));
+  dl->AddEllipse(c, {rx * 0.88f, ry * 0.88f}, IM_COL32(96, 106, 140, 255), 0, 48,
+                 std::max(1.0f, w * 0.008f));
+  // The glowing middle, from blue at the edge to white in the centre.
+  for (int i = 0; i < 8; ++i) {
+    const float k = float(i) / 7.0f;
+    dl->AddEllipseFilled(c, {rx * (0.80f - 0.55f * k), ry * (0.80f - 0.55f * k)},
+                         IM_COL32(int(40 + 190 * k), int(130 + 110 * k), 255, int(150 + 90 * k)));
+  }
+  return c.y + h + ry;
 }
-
 // --- Figure library ---------------------------------------------------------------------------
 
 uint32_t Key(uint16_t id, uint16_t variant) { return (uint32_t(id) << 16) | variant; }
@@ -1136,6 +1157,73 @@ void SetPortalItem(uint32_t user, const std::optional<std::filesystem::path>& pa
   if (free >= 0 && PlaceFigureFromFile(free, *path)) slot = free;
 }
 
+// An item change waits until the player's Skylander is back in the game: putting the figure back
+// and taking the item off in the same moment made the game ask for a Skylander again. So the
+// figure goes back first, and the item follows once the game is no longer busy with figures
+// (SetGameBusyProvider), at least 0.7 s later and at most 10 s.
+struct PendingItem {
+  uint32_t user = 0;
+  std::optional<std::filesystem::path> path;  // nullopt: take it off
+  uint64_t serial = 0;
+};
+std::mutex g_item_mutex;
+std::condition_variable g_item_cv;
+std::optional<PendingItem> g_pending_item;
+uint64_t g_item_serial = 0;
+bool g_item_stop = false;
+std::thread g_item_thread;
+std::function<bool()> g_game_busy;  // guarded by g_provider_mutex
+rex::ui::WindowedAppContext* g_item_app_context = nullptr;
+
+void ItemThread() {
+  std::unique_lock lock(g_item_mutex);
+  while (true) {
+    g_item_cv.wait(lock, [] { return g_item_stop || g_pending_item.has_value(); });
+    if (g_item_stop) return;
+    const PendingItem item = *g_pending_item;
+    const auto start = Clock::now();
+    while (true) {
+      g_item_cv.wait_for(lock, std::chrono::milliseconds(50));
+      if (g_item_stop) return;
+      if (!g_pending_item || g_pending_item->serial != item.serial) break;  // replaced
+      const auto waited = Clock::now() - start;
+      if (waited < std::chrono::milliseconds(700)) continue;
+      std::function<bool()> busy;
+      {
+        std::lock_guard provider_lock(g_provider_mutex);
+        busy = g_game_busy;
+      }
+      lock.unlock();
+      const bool still_busy = busy && busy();
+      lock.lock();
+      if (g_item_stop) return;
+      if (!g_pending_item || g_pending_item->serial != item.serial) break;
+      if (still_busy && waited < std::chrono::seconds(10)) continue;
+      g_pending_item.reset();
+      if (g_item_app_context) {
+        g_item_app_context->CallInUIThread([item] { SetPortalItem(item.user, item.path); });
+      }
+      break;
+    }
+  }
+}
+
+void ScheduleItemChange(uint32_t user, std::optional<std::filesystem::path> path) {
+  std::lock_guard lock(g_item_mutex);
+  g_pending_item = PendingItem{user, std::move(path), ++g_item_serial};
+  if (!g_item_thread.joinable()) g_item_thread = std::thread(ItemThread);
+  g_item_cv.notify_all();
+}
+
+void StopItemThread() {
+  {
+    std::lock_guard lock(g_item_mutex);
+    g_item_stop = true;
+    g_pending_item.reset();
+  }
+  g_item_cv.notify_all();
+  if (g_item_thread.joinable()) g_item_thread.join();
+}
 // --- Menu input ---------------------------------------------------------------------------------
 
 struct Actions {
@@ -1328,7 +1416,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
           for (const LiftedFigure& f : lifted_) preferred.push_back(f.slot);
           PlaceForPlayer(user_, pending_paths_, preferred);
         }
-        if (item_change_) SetPortalItem(user_, item_path_);
+        if (item_change_) ScheduleItemChange(user_, item_path_);
         Finish();
       }
       return;
@@ -2039,9 +2127,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
     // The picture, standing on a portal; a swapper combination shows both characters.
     float y = a.y + band + S(16);
-    const float pic = std::min(b.x - a.x - S(80), S(190));
+    const float pic = std::min(b.x - a.x - S(80), S(170));
     const float cx = (a.x + b.x) / 2;
-    DrawPortalGlow(dl, {cx, y + pic - S(4)}, pic * 1.6f);
+    const float portal_y = y + pic - pic * 0.07f;
+    const float portal_bottom = DrawPortalOfPower(dl, {cx, portal_y}, pic * 1.5f);
     const bool combo = figures.size() == 2 && portal::SwapperPartner(*figures[0]) != figures[1];
     if (combo) {
       const float s = pic * 0.58f;
@@ -2052,7 +2141,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     } else {
       DrawFigurePicture(dl, {cx - pic / 2, y}, {cx + pic / 2, y + pic}, main, S(18));
     }
-    y += pic + pic * 0.22f + S(10);  // below the glow
+    y = portal_bottom + S(14);
 
     const float wrap = b.x - a.x - S(44);
     const std::string name = ComboName(figures);
@@ -2087,10 +2176,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
 
     const OwnedFigure* owned = library_.Owned(main);
-    if (owned) {
-      Label(dl, BoldFont(), S(22), {a.x + S(22), y}, kGold, T(Text::kYourFigure));
-      y += S(30);
-      if (owned->stats && !item) {
+    if (owned && !item) {
+      if (owned->stats) {
         std::string stats = "Level " + std::to_string(owned->stats->level) + "   " +
                             std::to_string(owned->stats->gold) + " Gold";
         Label(dl, BoldFont(), S(23), {a.x + S(22), y}, kWhite, stats);
@@ -2100,8 +2187,6 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                 "\"" + owned->stats->nickname + "\"", wrap);
         }
       }
-    } else {
-      Label(dl, BoldFont(), S(20), {a.x + S(22), y}, kDim, T(Text::kNewFigure), wrap);
     }
   }
 
@@ -2327,6 +2412,7 @@ void CloseAutoOpenedPortalMenu() {
 }
 
 void ShutdownPortalMenu() {
+  StopItemThread();
   g_menu.reset();
   g_textures.clear();
   g_immediate_drawer = nullptr;
@@ -2340,6 +2426,11 @@ void SetFigureImageProvider(FigureImageProvider provider) {
 void SetFigureNameProvider(FigureNameProvider provider) {
   std::lock_guard lock(g_provider_mutex);
   g_name_provider = std::move(provider);
+}
+
+void SetGameBusyProvider(std::function<bool()> busy) {
+  std::lock_guard lock(g_provider_mutex);
+  g_game_busy = std::move(busy);
 }
 
 void AddPortalMenuFonts(ImFontAtlas* atlas) {
@@ -2356,6 +2447,7 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
   g_drawer = drawer;
   g_app_context = app_context;
   g_immediate_drawer = immediate_drawer;
+  g_item_app_context = app_context;
   menu_input::SetOpenHandler([](DeviceId device, uint32_t user) {
     if (!g_app_context) return;
     g_app_context->CallInUIThread([device, user] { OpenMenu(device, user, false); });
