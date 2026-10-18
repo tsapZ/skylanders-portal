@@ -80,6 +80,7 @@ std::unordered_map<uint64_t, DeviceRecord> g_devices;  // by DeviceId
 std::function<void(DeviceId, uint32_t)> g_open_handler;
 std::atomic<bool> g_menu_open{false};
 std::optional<DeviceId> g_keyboard;
+std::vector<DeviceId> g_connected;  // the devices the input system has now
 
 struct OpenEntry {
   uint16_t buttons = 0;
@@ -398,6 +399,8 @@ class MenuInputDriver final : public InputDriver {
   }
 
  public:
+  bool pollable() const { return pollable_; }
+
   std::optional<X_INPUT_GAMEPAD> Poll(DeviceId id) {
     if (!pollable_) {
       return std::nullopt;
@@ -425,11 +428,13 @@ class TrackingAssignment final : public rex::input::DeviceAssignment {
   void OnDevicesChanged(const std::vector<DeviceInfo>& devices) override {
     std::lock_guard lock(g_mutex);
     devices_.clear();
+    g_connected.clear();
     for (const DeviceInfo& info : devices) {
       DeviceRecord& record = g_devices[uint64_t(info.id)];
       record.ordinal = info.ordinal;
       record.synthetic = info.synthetic;
       devices_.push_back(info.id);
+      g_connected.push_back(info.id);
     }
   }
 
@@ -534,6 +539,36 @@ uint32_t UserOf(DeviceId device) {
 std::optional<DeviceId> KeyboardDevice() {
   std::lock_guard lock(g_mutex);
   return g_keyboard;
+}
+
+std::optional<PlayerDevice> DeviceForUser(uint32_t user) {
+  std::lock_guard lock(g_mutex);
+  std::optional<PlayerDevice> keyboard;
+  for (DeviceId id : g_connected) {
+    auto it = g_devices.find(uint64_t(id));
+    if (it == g_devices.end() || !it->second.driver || UserOfLocked(it->second) != user) {
+      continue;
+    }
+    if (it->second.keyboard) {
+      keyboard = PlayerDevice{id, true};
+    } else if (it->second.driver->pollable()) {
+      return PlayerDevice{id, false};
+    }
+  }
+  return keyboard;
+}
+
+std::vector<DeviceId> PadsOfUser(uint32_t user) {
+  std::lock_guard lock(g_mutex);
+  std::vector<DeviceId> pads;
+  for (DeviceId id : g_connected) {
+    auto it = g_devices.find(uint64_t(id));
+    if (it != g_devices.end() && it->second.driver && !it->second.keyboard &&
+        it->second.driver->pollable() && UserOfLocked(it->second) == user) {
+      pads.push_back(id);
+    }
+  }
+  return pads;
 }
 
 void SetDevicePlayer(DeviceId device, std::optional<uint32_t> user) {

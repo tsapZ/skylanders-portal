@@ -39,6 +39,8 @@
 REXCVAR_DEFINE_STRING(portal_menu_games, "", "Portal",
                       "Games whose Skylanders the portal menu offers, separated by ';' (empty: "
                       "all games)");
+REXCVAR_DEFINE_BOOL(portal_menu_auto_open, true, "Portal",
+                    "Open the portal menu by itself when the game asks a player for a Skylander");
 
 namespace skylanders {
 namespace {
@@ -128,8 +130,8 @@ constexpr const char* kGerman[] = {
     "Das echte USB-Portal ist aktiv. Stell deine Figuren direkt aufs Portal.",
     "Kein Portal aktiv (portal_mode = none).",
     "Noch nichts aufgelegt. W\xC3\xA4hle mit LT / RT ein Spiel.",
-    "Welche Fassung?",
-    "Fassungen",
+    "Welche Variante?",
+    "Varianten",
     "Spitzname",
     "Datei",
     "Items",
@@ -1202,12 +1204,13 @@ std::string ComboName(const std::vector<const SkylanderInfo*>& figures) {
 class PortalMenuDialog final : public rex::ui::ImGuiDialog {
  public:
   PortalMenuDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> on_done, DeviceId device,
-                   uint32_t user, bool from_keyboard)
+                   uint32_t user, bool from_keyboard, bool auto_opened)
       : ImGuiDialog(drawer),
         on_done_(std::move(on_done)),
         device_(device),
         user_(user),
-        keyboard_(from_keyboard) {
+        keyboard_(from_keyboard),
+        auto_opened_(auto_opened) {
     g_german = rex::cvar::GetFlagByName("language") == "german";
     menu_input::SetMenuOpen(true);
     // The keyboard steers the menu of the player it plays as.
@@ -1232,7 +1235,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         }
       }
     }
-    REXLOG_INFO("Portal menu: opened for player {}", user_ + 1);
+    REXLOG_INFO("Portal menu: opened for player {}{}", user_ + 1,
+                auto_opened_ ? " (the game asks for a Skylander)" : "");
   }
 
   ~PortalMenuDialog() override {
@@ -1245,6 +1249,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   }
 
   uint32_t user() const { return user_; }
+  bool auto_opened() const { return auto_opened_; }
 
  protected:
   void OnDraw(ImGuiIO& io) override {
@@ -1319,17 +1324,26 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   Actions ReadActions() {
     Actions actions;
-    std::optional<rex::input::X_INPUT_GAMEPAD> pad;
-    if (!keyboard_) pad = menu_input::ReadPad(device_);
+    // Every controller of this player steers the menu: the one that opened it and any other.
+    std::vector<DeviceId> pads = menu_input::PadsOfUser(user_);
+    if (!keyboard_ && std::find(pads.begin(), pads.end(), device_) == pads.end()) {
+      pads.push_back(device_);
+    }
+    bool pads_released = true;
+    for (DeviceId id : pads) {
+      const std::optional<rex::input::X_INPUT_GAMEPAD> pad = menu_input::ReadPad(id);
+      if (!pad) continue;
+      PadReader& reader = pad_readers_[uint64_t(id)];
+      pads_released = pads_released && reader.Released(*pad);
+      const Actions read = reader.Read(*pad);
+      if (!waiting_for_release_) Merge(actions, read);
+    }
     if (waiting_for_release_) {
-      const bool pad_released = !pad || pad_reader_.Released(*pad);
       const bool keys_released =
           !ImGui::IsKeyDown(ImGuiKey_F6) && !ImGui::IsKeyDown(ImGuiKey_Enter);
-      if (pad_released && keys_released) waiting_for_release_ = false;
-      if (pad) pad_reader_.Read(*pad);
-      return actions;
+      if (pads_released && keys_released) waiting_for_release_ = false;
+      return {};
     }
-    if (pad) Merge(actions, pad_reader_.Read(*pad));
     if (keyboard_controls_) Merge(actions, ReadKeyboard());
     return actions;
   }
@@ -2125,6 +2139,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   DeviceId device_;
   uint32_t user_;
   bool keyboard_;
+  bool auto_opened_;
   bool keyboard_controls_ = false;
   bool software_ = false;
   bool first_frame_ = true;
@@ -2154,7 +2169,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   int build_column_ = 0;
   size_t build_top_ = 0, build_bottom_ = 0;
   size_t top_scroll_ = 0, bottom_scroll_ = 0;
-  PadReader pad_reader_;
+  std::unordered_map<uint64_t, PadReader> pad_readers_;  // by device
 };
 
 // UI thread only.
@@ -2162,7 +2177,7 @@ std::unique_ptr<PortalMenuDialog> g_menu;
 rex::ui::ImGuiDrawer* g_drawer = nullptr;
 rex::ui::WindowedAppContext* g_app_context = nullptr;
 
-void OpenMenu(DeviceId device, uint32_t user, bool keyboard) {
+void OpenMenu(DeviceId device, uint32_t user, bool keyboard, bool auto_opened = false) {
   if (g_menu || !g_drawer) return;
   g_menu = std::make_unique<PortalMenuDialog>(
       g_drawer,
@@ -2170,10 +2185,27 @@ void OpenMenu(DeviceId device, uint32_t user, bool keyboard) {
         // The dialog finishes inside its own OnDraw; destroy it afterwards.
         g_app_context->CallInUIThreadDeferred([] { g_menu.reset(); });
       },
-      device, user, keyboard);
+      device, user, keyboard, auto_opened);
 }
 
 }  // namespace
+
+void AutoOpenPortalMenu(uint32_t user) {
+  if (!g_app_context || user >= rex::input::kMaxGuestUsers) return;
+  g_app_context->CallInUIThread([user] {
+    if (!REXCVAR_GET(portal_menu_auto_open) || g_menu || !GetSoftwarePortal()) return;
+    // The player's controller steers it; without one, the keyboard.
+    const auto device = menu_input::DeviceForUser(user);
+    OpenMenu(device ? device->id : DeviceId::kInvalid, user, !device || device->keyboard, true);
+  });
+}
+
+void CloseAutoOpenedPortalMenu() {
+  if (!g_app_context) return;
+  g_app_context->CallInUIThread([] {
+    if (g_menu && g_menu->auto_opened()) g_menu->Cancel();
+  });
+}
 
 void AddPortalMenuFonts(ImFontAtlas* atlas) {
 #ifdef _WIN32

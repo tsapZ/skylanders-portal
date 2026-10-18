@@ -21,6 +21,7 @@ class WindowedAppContext;
 }  // namespace rex::ui
 
 REXCVAR_DECLARE(std::string, portal_menu_games);
+REXCVAR_DECLARE(bool, portal_menu_auto_open);
 
 namespace skylanders {
 
@@ -30,5 +31,15 @@ void AddPortalMenuFonts(ImFontAtlas* atlas);
 
 // Registers the menu's keyboard bind and the controller open handler.
 void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext* app_context);
+
+// For a game integration that knows when the game waits for a player's figure (its "place your
+// Skylander" screen): opens the menu for that player (guest user index), steered by their
+// controller, unless portal_menu_auto_open is off, a menu is already open or the portal isn't
+// the emulated one. Callable from any thread.
+void AutoOpenPortalMenu(uint32_t user);
+
+// The game stopped waiting: closes the menu again if AutoOpenPortalMenu opened it and nothing was
+// chosen yet. Callable from any thread.
+void CloseAutoOpenedPortalMenu();
 
 }  // namespace skylanders

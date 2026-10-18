@@ -14,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include <rex/cvar.h>
 #include <rex/input/device.h>
@@ -61,6 +62,17 @@ uint32_t UserOf(rex::input::DeviceId device);
 
 // The keyboard/mouse emulation device, if there is one.
 std::optional<rex::input::DeviceId> KeyboardDevice();
+
+// A device that plays as a given player: a controller the menu can poll if there is one, else
+// the keyboard when it plays as that player.
+struct PlayerDevice {
+  rex::input::DeviceId id;
+  bool keyboard = false;
+};
+std::optional<PlayerDevice> DeviceForUser(uint32_t user);
+
+// All controllers the menu can poll that play as this player.
+std::vector<rex::input::DeviceId> PadsOfUser(uint32_t user);
 
 // Makes a device play as `user` (nullopt: back to its slot). For test scripts that act as a
 // second player.
