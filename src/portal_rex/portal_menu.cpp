@@ -10,6 +10,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -25,6 +26,7 @@
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
+#include <rex/ui/immediate_drawer.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/windowed_app_context.h>
 
@@ -904,6 +906,68 @@ class Library {
   std::unordered_map<uint16_t, std::string> known_ids_;  // figure id -> character name
 };
 
+// --- Figure pictures and names ----------------------------------------------------------------
+
+std::mutex g_provider_mutex;
+FigureImageProvider g_image_provider;
+FigureNameProvider g_name_provider;
+rex::ui::ImmediateDrawer* g_immediate_drawer = nullptr;
+// Uploaded pictures by figure. UI thread only.
+std::unordered_map<uint32_t, std::unique_ptr<rex::ui::ImmediateTexture>> g_textures;
+
+// The figure's picture as a texture, or null while there is none (yet).
+ImTextureID FigureTexture(const SkylanderInfo* sky) {
+  if (!sky || !g_immediate_drawer) return ImTextureID{};
+  const uint32_t key = Key(*sky);
+  if (auto it = g_textures.find(key); it != g_textures.end()) {
+    return reinterpret_cast<ImTextureID>(it->second.get());
+  }
+  FigureImageProvider provider;
+  {
+    std::lock_guard lock(g_provider_mutex);
+    provider = g_image_provider;
+  }
+  std::shared_ptr<const FigureImage> image = provider ? provider(sky->id, sky->variant) : nullptr;
+  if (!image || image->width <= 0 || image->height <= 0 ||
+      image->rgba.size() < size_t(image->width) * image->height * 4) {
+    return ImTextureID{};
+  }
+  auto texture = g_immediate_drawer->CreateTexture(uint32_t(image->width),
+                                                   uint32_t(image->height),
+                                                   rex::ui::ImmediateTextureFilter::kLinear, false,
+                                                   image->rgba.data());
+  if (!texture) return ImTextureID{};
+  ImTextureID id = reinterpret_cast<ImTextureID>(texture.get());
+  g_textures.emplace(key, std::move(texture));
+  return id;
+}
+
+// The name the game shows for the figure in its language, else the catalog's.
+std::string FigureName(const SkylanderInfo& sky) {
+  FigureNameProvider provider;
+  {
+    std::lock_guard lock(g_provider_mutex);
+    provider = g_name_provider;
+  }
+  if (provider) {
+    if (auto name = provider(sky.id, sky.variant)) return *name;
+  }
+  return portal::DisplayName(sky.name);
+}
+
+// The picture in a rounded square, or the element symbol when there is no picture.
+void DrawFigurePicture(ImDrawList* dl, ImVec2 a, ImVec2 b, const SkylanderInfo* sky,
+                       float rounding) {
+  if (ImTextureID texture = FigureTexture(sky)) {
+    dl->AddImageRounded(texture, a, b, {0, 0}, {1, 1}, IM_COL32_WHITE, rounding);
+    return;
+  }
+  const Element element = sky ? portal::FigureElement(*sky) : Element::kNone;
+  dl->AddRectFilled(a, b, ElementColor(element, 0.38f, 255), rounding);
+  DrawElementIcon(dl, {(a.x + b.x) / 2, (a.y + b.y) / 2}, (b.x - a.x) * 0.32f, element,
+                  ElementColor(element, 1.2f, 150));
+}
+
 // --- Players on the emulated portal -----------------------------------------------------------
 
 // Which portal slots hold each player's figure (two for a swapper). The game itself only sees
@@ -1198,7 +1262,7 @@ std::string ComboName(const std::vector<const SkylanderInfo*>& figures) {
     return portal::DisplayName(portal::SwapperBaseName(*figures[0])) + " / " +
            portal::DisplayName(portal::SwapperBaseName(*figures[1]));
   }
-  return portal::DisplayName(figures[0]->name);
+  return FigureName(*figures[0]);
 }
 
 class PortalMenuDialog final : public rex::ui::ImGuiDialog {
@@ -1390,7 +1454,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   std::vector<Choice> ChoicesFor(const Character& character) const {
     std::vector<Choice> choices;
     for (const Version& v : character.versions) {
-      choices.push_back({portal::DisplayName(v.sky->name), portal::VersionBadge(*v.sky), {v.sky}});
+      choices.push_back({FigureName(*v.sky), portal::VersionBadge(*v.sky), {v.sky}});
     }
     return choices;
   }
@@ -1752,7 +1816,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       return;
     }
     const float gap = S(16);
-    const float card_w = S(226), card_h = S(126);
+    const float card_w = S(172), card_h = S(214);
     columns_ = std::max<size_t>(1, size_t((grid1.x - area0.x + gap) / (card_w + gap)));
     const size_t rows_visible =
         std::max<size_t>(1, size_t((grid1.y - area0.y + gap) / (card_h + gap)));
@@ -1847,11 +1911,49 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     GradientRect(dl, a, b, ElementColor(element, 0.62f, 255), ElementColor(element, 0.30f, 255),
                  S(14));
-    // The element as a faded watermark.
-    DrawElementIcon(dl, {b.x - S(46), a.y + (b.y - a.y) * 0.54f}, S(42), element,
-                    IM_COL32(255, 255, 255, 38));
     dl->AddRect(a, b, selected ? kGold : Rgba(255, 255, 255, 46), S(14), 0,
                 selected ? S(4) : S(1.5f));
+  }
+
+  // A small rounded label; returns its width.
+  float Pill(ImDrawList* dl, ImVec2 pos, std::string_view text, ImU32 bg, ImU32 fg,
+             float size = 14) {
+    const ImVec2 ts = TextSize(BoldFont(), S(size), text);
+    const ImVec2 end{pos.x + ts.x + S(14), pos.y + ts.y + S(4)};
+    dl->AddRectFilled(pos, end, bg, S(8));
+    Label(dl, BoldFont(), S(size), {pos.x + S(7), pos.y + S(2)}, fg, text);
+    return end.x - pos.x;
+  }
+
+  float PillWidth(std::string_view text, float size = 14) {
+    return TextSize(BoldFont(), S(size), text).x + S(14);
+  }
+
+  // A collection tile: the picture on top, the name below. Returns the picture's rectangle.
+  std::pair<ImVec2, ImVec2> DrawTile(ImDrawList* dl, ImVec2 a, ImVec2 b, Element element,
+                                     bool selected, const SkylanderInfo* picture,
+                                     const std::string& name) {
+    DrawCardFrame(dl, a, b, element, selected);
+    const float pad = S(9);
+    const ImVec2 p0{a.x + pad, a.y + pad};
+    const ImVec2 p1{b.x - pad, a.y + pad + (b.x - a.x - 2 * pad)};
+    DrawFigurePicture(dl, p0, p1, picture, S(12));
+    const float size = S(19), wrap = b.x - a.x - S(14);
+    const ImVec2 ts = TextSize(BoldFont(), size, name, wrap);
+    const float x = ts.x < wrap ? (a.x + b.x - ts.x) / 2 : a.x + S(7);
+    dl->PushClipRect(a, b, true);
+    Label(dl, BoldFont(), size, {x, p1.y + S(6)}, kWhite, name, wrap);
+    dl->PopClipRect();
+    return {p0, p1};
+  }
+
+  // The version a character's card shows: the one played last, else the first.
+  const SkylanderInfo* ShownVersion(const Character& character) const {
+    const OwnedFigure* best = library_.BestOwned(character);
+    for (const Version& v : character.versions) {
+      if (best && (best->sky == v.sky || best->sky == v.bottom)) return v.sky;
+    }
+    return character.versions.front().sky;
   }
 
   // Darkens a card another player's figure is using and says whose it is.
@@ -1860,7 +1962,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     char text[48];
     std::snprintf(text, sizeof(text), T(Text::kTaken), owner + 1);
     const ImVec2 ts = TextSize(BoldFont(), S(19), text);
-    const ImVec2 c{(a.x + b.x) / 2, (a.y + b.y) / 2 + S(14)};
+    const ImVec2 c{(a.x + b.x) / 2, (a.y + b.y) / 2};
     const ImVec2 q0{c.x - ts.x / 2 - S(14), c.y - S(15)}, q1{c.x + ts.x / 2 + S(14), c.y + S(15)};
     dl->AddRectFilled(q0, q1, PlayerColor(owner), S(15));
     dl->AddRect(q0, q1, Rgba(255, 255, 255, 140), S(15), 0, S(1.5f));
@@ -1869,47 +1971,49 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   void DrawCharacterCard(ImDrawList* dl, ImVec2 a, ImVec2 b, const Character& character,
                          bool selected) {
-    DrawCardFrame(dl, a, b, character.element, selected);
-    Label(dl, BoldFont(), S(character.item ? 21 : 24), {a.x + S(14), a.y + S(12)}, kWhite,
-          character.name, b.x - a.x - S(60));
+    const SkylanderInfo* shown = ShownVersion(character);
+    const std::string name = character.item ? FigureName(*shown) : character.name;
+    const auto [p0, p1] = DrawTile(dl, a, b, character.element, selected, shown, name);
     if (character.item) {
-      const bool on = current_item_ == character.versions.front().sky;
-      const OwnedFigure* owned = library_.Owned(character.versions.front().sky);
-      if (on) {
-        const ImVec2 ts = TextSize(BoldFont(), S(17), T(Text::kOnPortal));
-        const ImVec2 q0{a.x + S(10), b.y - S(36)}, q1{a.x + S(34) + ts.x, b.y - S(8)};
-        dl->AddRectFilled(q0, q1, Rgba(60, 170, 80), S(14));
-        dl->AddRect(q0, q1, Rgba(255, 255, 255, 150), S(14), 0, S(1.5f));
-        Label(dl, BoldFont(), S(17), {q0.x + S(12), q0.y + S(4)}, kWhite, T(Text::kOnPortal));
-      } else {
-        Label(dl, BoldFont(), S(17), {a.x + S(14), b.y - S(28)}, owned ? kGold : kDim,
-              GameShortName(character.debut_game));
+      if (current_item_ == character.versions.front().sky) {
+        const float w = PillWidth(T(Text::kOnPortal), 15);
+        Pill(dl, {(p0.x + p1.x - w) / 2, p1.y - S(30)}, T(Text::kOnPortal), Rgba(60, 170, 80),
+             kWhite, 15);
       }
       return;
     }
-    if (character.swapper) {
-      const ImVec2 ts = TextSize(BoldFont(), S(15), "SWAP");
-      dl->AddRectFilled({a.x + S(14), b.y - S(58)}, {a.x + S(26) + ts.x, b.y - S(36)}, kGold, S(6));
-      Label(dl, BoldFont(), S(15), {a.x + S(20), b.y - S(57)}, kInk, "SWAP");
+    if (character.swapper) Pill(dl, {p0.x + S(6), p0.y + S(6)}, "SWAP", kGold, kInk);
+    if (character.versions.size() > 1) {
+      Pill(dl, {p0.x + S(6), p1.y - S(27)},
+           std::to_string(character.versions.size()) + " " + T(Text::kVersions),
+           Rgba(10, 12, 30, 200), kWhite);
     }
-    std::string info = std::to_string(character.versions.size()) + " " + T(Text::kVersions);
-    const OwnedFigure* owned = library_.BestOwned(character);
-    if (owned && owned->stats) info += "   Lv " + std::to_string(owned->stats->level);
-    Label(dl, BoldFont(), S(17), {a.x + S(14), b.y - S(28)},
-          owned ? kGold : Rgba(210, 215, 235, 190), info);
+    if (const OwnedFigure* owned = library_.BestOwned(character); owned && owned->stats) {
+      const std::string lv = "Lv " + std::to_string(owned->stats->level);
+      Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
+    }
     if (auto owner = TakenBy(character)) DrawTaken(dl, a, b, *owner);
   }
 
   void DrawRecentCard(ImDrawList* dl, ImVec2 a, ImVec2 b, const RecentEntry& entry,
                       bool selected) {
     const Element element = portal::FigureElement(*entry.figures[0]);
-    DrawCardFrame(dl, a, b, element, selected);
-    Label(dl, BoldFont(), S(22), {a.x + S(14), a.y + S(12)}, kWhite, ComboName(entry.figures),
-          b.x - a.x - S(60));
-    std::string info(GameShortName(entry.figures[0]->game));
-    const OwnedFigure* owned = library_.OwnedAt(entry.paths[0]);
-    if (owned && owned->stats) info += "   Lv " + std::to_string(owned->stats->level);
-    Label(dl, BoldFont(), S(17), {a.x + S(14), b.y - S(28)}, kGold, info);
+    const auto [p0, p1] =
+        DrawTile(dl, a, b, element, selected, entry.figures[0], ComboName(entry.figures));
+    // A swapper combination: the bottom's character small in the corner.
+    if (entry.figures.size() == 2 && portal::SwapperPartner(*entry.figures[0]) != entry.figures[1]) {
+      const float s = (p1.x - p0.x) * 0.42f;
+      dl->AddRectFilled({p1.x - s - S(7), p1.y - s - S(7)}, {p1.x - S(3), p1.y - S(3)},
+                        Rgba(10, 12, 30, 220), S(10));
+      DrawFigurePicture(dl, {p1.x - s - S(5), p1.y - s - S(5)}, {p1.x - S(5), p1.y - S(5)},
+                        entry.figures[1], S(8));
+    }
+    Pill(dl, {p0.x + S(6), p0.y + S(6)}, GameShortName(entry.figures[0]->game),
+         Rgba(10, 12, 30, 200), kWhite);
+    if (const OwnedFigure* owned = library_.OwnedAt(entry.paths[0]); owned && owned->stats) {
+      const std::string lv = "Lv " + std::to_string(owned->stats->level);
+      Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
+    }
     if (auto owner = TakenBy(entry)) DrawTaken(dl, a, b, *owner);
   }
 
@@ -1932,17 +2036,28 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     DrawElementBadge(dl, {a.x + S(40), a.y + band / 2}, S(25), element);
     Label(dl, BoldFont(), S(28), {a.x + S(76), a.y + S(14)}, kInk,
           item ? T(Text::kItems) : ElementLabel(element));
-    // Until there are portraits: the element symbol stands on the portal.
-    const ImVec2 portal_c{(a.x + b.x) / 2, b.y - S(70)};
-    DrawPortalGlow(dl, portal_c, b.x - a.x);
-    DrawElementIcon(dl, {portal_c.x, portal_c.y - S(92)}, S(78), element,
-                    ElementColor(element, 1.25f, 95));
 
-    float y = a.y + band + S(22);
+    // The picture, standing on a portal; a swapper combination shows both characters.
+    float y = a.y + band + S(16);
+    const float pic = std::min(b.x - a.x - S(80), S(190));
+    const float cx = (a.x + b.x) / 2;
+    DrawPortalGlow(dl, {cx, y + pic - S(4)}, pic * 1.6f);
+    const bool combo = figures.size() == 2 && portal::SwapperPartner(*figures[0]) != figures[1];
+    if (combo) {
+      const float s = pic * 0.58f;
+      DrawFigurePicture(dl, {cx - s - S(5), y + pic - s - S(8)}, {cx - S(5), y + pic - S(8)},
+                        figures[0], S(14));
+      DrawFigurePicture(dl, {cx + S(5), y + pic - s - S(8)}, {cx + s + S(5), y + pic - S(8)},
+                        figures[1], S(14));
+    } else {
+      DrawFigurePicture(dl, {cx - pic / 2, y}, {cx + pic / 2, y + pic}, main, S(18));
+    }
+    y += pic + pic * 0.22f + S(10);  // below the glow
+
     const float wrap = b.x - a.x - S(44);
     const std::string name = ComboName(figures);
-    OutlinedLabel(dl, TitleFont(), S(40), {a.x + S(22), y}, kWhite, name, S(2));
-    y += TextSize(TitleFont(), S(40), name, wrap).y + S(8);
+    OutlinedLabel(dl, TitleFont(), S(38), {a.x + S(22), y}, kWhite, name, S(2));
+    y += TextSize(TitleFont(), S(38), name, wrap).y + S(8);
     // Badges.
     float bx = a.x + S(22);
     std::vector<std::string> badges;
@@ -1954,34 +2069,34 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       Label(dl, BoldFont(), S(18), {bx + S(10), y + S(4)}, kWhite, text);
       bx += ts.x + S(30);
     }
-    y += S(46);
+    y += S(44);
 
     if (figures.size() == 2) {
       for (int i = 0; i < 2; ++i) {
         const SkylanderInfo* half = figures[i];
-        const float bh = S(66);
+        const float bh = S(56);
         dl->AddRectFilled({a.x + S(22), y}, {b.x - S(22), y + bh},
                           ElementColor(portal::FigureElement(*half), 0.62f, 240), S(12));
-        Label(dl, BoldFont(), S(17), {a.x + S(36), y + S(7)}, Rgba(232, 232, 245),
+        Label(dl, BoldFont(), S(15), {a.x + S(36), y + S(5)}, Rgba(232, 232, 245),
               T(i == 0 ? Text::kTop : Text::kBottom));
-        Label(dl, BoldFont(), S(23), {a.x + S(36), y + S(30)}, kWhite,
+        Label(dl, BoldFont(), S(21), {a.x + S(36), y + S(25)}, kWhite,
               portal::DisplayName(half->name), wrap - S(28));
-        y += bh + S(10);
+        y += bh + S(8);
       }
-      y += S(6);
+      y += S(4);
     }
 
     const OwnedFigure* owned = library_.Owned(main);
     if (owned) {
       Label(dl, BoldFont(), S(22), {a.x + S(22), y}, kGold, T(Text::kYourFigure));
-      y += S(32);
+      y += S(30);
       if (owned->stats && !item) {
         std::string stats = "Level " + std::to_string(owned->stats->level) + "   " +
                             std::to_string(owned->stats->gold) + " Gold";
-        Label(dl, BoldFont(), S(24), {a.x + S(22), y}, kWhite, stats);
-        y += S(34);
+        Label(dl, BoldFont(), S(23), {a.x + S(22), y}, kWhite, stats);
+        y += S(32);
         if (!owned->stats->nickname.empty()) {
-          Label(dl, BoldFont(), S(22), {a.x + S(22), y}, kDim,
+          Label(dl, BoldFont(), S(21), {a.x + S(22), y}, kDim,
                 "\"" + owned->stats->nickname + "\"", wrap);
         }
       }
@@ -2023,7 +2138,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       }
       dl->AddRectFilled(r0, r1, active ? Rgba(255, 255, 255, 52) : Rgba(255, 255, 255, 14), S(14));
       if (active) dl->AddRect(r0, r1, kGold, S(14), 0, S(3));
-      Label(dl, BoldFont(), S(23), {r0.x + S(18), r0.y + S(8)}, kWhite, choice.label);
+      const float ph = row_h - S(12);
+      DrawFigurePicture(dl, {r0.x + S(8), r0.y + S(6)}, {r0.x + S(8) + ph, r0.y + S(6) + ph},
+                        choice.figures[0], S(8));
+      const float tx = r0.x + S(20) + ph;
+      Label(dl, BoldFont(), S(23), {tx, r0.y + S(8)}, kWhite, choice.label);
       std::string sub = BadgeLabel(choice.badge);
       if (choice.figures[0]->game != CurrentTab().title) {
         sub += "   " + std::string(GameShortName(choice.figures[0]->game));
@@ -2031,7 +2150,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       if (const OwnedFigure* owned = library_.Owned(choice.figures[0]); owned && owned->stats) {
         sub += "   Lv " + std::to_string(owned->stats->level);
       }
-      Label(dl, BoldFont(), S(17), {r0.x + S(18), r0.y + S(39)}, kDim, sub);
+      Label(dl, BoldFont(), S(17), {tx, r0.y + S(39)}, kDim, sub);
     }
   }
 
@@ -2079,7 +2198,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                           S(12));
         if (chosen) dl->AddRect(r0, r1, focused ? kGold : Rgba(255, 255, 255, 90), S(12), 0,
                                 focused ? S(3) : S(1.5f));
-        DrawElementBadge(dl, {r0.x + S(28), (r0.y + r1.y) / 2}, S(18), element);
+        DrawFigurePicture(dl, {r0.x + S(5), r0.y + S(5)}, {r0.x + S(49), r0.y + S(49)}, sky, S(8));
         Label(dl, BoldFont(), S(21), {r0.x + S(56), r0.y + S(14)}, kWhite,
               portal::DisplayName(portal::SwapperBaseName(*sky)), col_w - S(130));
         if (auto owner = TakenBy(sky)) {
@@ -2107,7 +2226,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     float y = a.y + S(76);
     for (const SkylanderInfo* sky : figures) {
       const Element element = portal::FigureElement(*sky);
-      DrawElementBadge(dl, {a.x + S(52), y + S(24)}, S(24), element);
+      DrawFigurePicture(dl, {a.x + S(22), y}, {a.x + S(78), y + S(56)}, sky, S(10));
       Label(dl, BoldFont(), S(26), {a.x + S(88), y + S(6)}, kWhite, portal::DisplayName(sky->name));
       y += S(48);
       std::string line = IsItem(sky) ? std::string(T(Text::kItems))
@@ -2207,6 +2326,22 @@ void CloseAutoOpenedPortalMenu() {
   });
 }
 
+void ShutdownPortalMenu() {
+  g_menu.reset();
+  g_textures.clear();
+  g_immediate_drawer = nullptr;
+}
+
+void SetFigureImageProvider(FigureImageProvider provider) {
+  std::lock_guard lock(g_provider_mutex);
+  g_image_provider = std::move(provider);
+}
+
+void SetFigureNameProvider(FigureNameProvider provider) {
+  std::lock_guard lock(g_provider_mutex);
+  g_name_provider = std::move(provider);
+}
+
 void AddPortalMenuFonts(ImFontAtlas* atlas) {
 #ifdef _WIN32
   g_font_title = atlas->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguibl.ttf", kTitleBakeSize);
@@ -2216,9 +2351,11 @@ void AddPortalMenuFonts(ImFontAtlas* atlas) {
 #endif
 }
 
-void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext* app_context) {
+void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext* app_context,
+                        rex::ui::ImmediateDrawer* immediate_drawer) {
   g_drawer = drawer;
   g_app_context = app_context;
+  g_immediate_drawer = immediate_drawer;
   menu_input::SetOpenHandler([](DeviceId device, uint32_t user) {
     if (!g_app_context) return;
     g_app_context->CallInUIThread([device, user] { OpenMenu(device, user, false); });
