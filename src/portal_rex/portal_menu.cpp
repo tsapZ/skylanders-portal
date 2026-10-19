@@ -2694,8 +2694,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (character.sidekick && current_sidekick_ && current_sidekick_->id == shown->id) {
       Pill(dl, {p0.x + S(6), p0.y + S(6)}, T(Text::kWithYou), Rgba(60, 170, 80), kWhite, 15);
     }
+    DrawElementBadge(dl, {p0.x + S(19), p1.y - S(19)}, S(15), character.element);
     if (character.versions.size() > 1) {
-      Pill(dl, {p0.x + S(6), p1.y - S(27)},
+      Pill(dl, {p0.x + S(38), p1.y - S(27)},
            std::to_string(character.versions.size()) + " " + T(Text::kVersions),
            Rgba(10, 12, 30, 200), kWhite);
     }
