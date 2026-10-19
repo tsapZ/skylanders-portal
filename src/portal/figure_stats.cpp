@@ -157,6 +157,7 @@ std::optional<FigureStats> ParseFigureStats(const FigureData& data) {
   }
   stats.xp = xp;
   stats.level = LevelForXp(xp);
+  stats.level_xp = kLevelXpTable[stats.level - 1];
   stats.next_xp = stats.level < kLevelXpTable.size() ? kLevelXpTable[stats.level] : 0;
   return stats;
 }

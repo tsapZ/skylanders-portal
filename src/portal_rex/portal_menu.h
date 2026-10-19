@@ -77,10 +77,51 @@ void SetFigureImageProvider(FigureImageProvider provider);
 using FigureNameProvider = std::function<std::optional<std::string>(uint16_t id, uint16_t variant)>;
 void SetFigureNameProvider(FigureNameProvider provider);
 
-// The name the game shows for a hat (its kTfbSpyroTag_Hat_* number, as a figure stores it), for
-// the details view. Same rules as above; without it the view shows the number.
-using HatNameProvider = std::function<std::optional<std::string>(uint16_t hat)>;
-void SetHatNameProvider(HatNameProvider provider);
+// Pictures from the game's own files by key, for the menu's symbols: "element:magic" (the eight
+// element names in lower case), and the keys the upgrade and hat data below name. Same rules as
+// the figure pictures: return nullptr while loading; without one the menu draws its own symbols.
+using ArtImageProvider = std::function<std::shared_ptr<const FigureImage>(const std::string& key)>;
+void SetArtImageProvider(ArtImageProvider provider);
+
+// A figure's upgrades as the game's upgrade screen lists them, for the details view.
+struct FigureUpgrade {
+  std::string name;
+  std::string description;
+  uint32_t cost = 0;
+  int bit = -1;       // its bit in FigureStats::upgrades; -1: always there (the starting attacks)
+  int alternate_bit = -1;  // a path's upgrade: its bit while the other path is the chosen one
+  std::string image;  // key for the art image provider
+};
+struct FigureUpgradePath {
+  enum class Kind { kStart, kBasic, kPath, kSoulGem, kWowPow };
+  Kind kind = Kind::kBasic;
+  std::string name;
+  std::string description;
+  std::vector<FigureUpgrade> upgrades;
+};
+struct FigureUpgrades {
+  std::vector<FigureUpgradePath> paths;  // in the game's order: start, basic, two paths, ...
+};
+// The upgrades for exactly this figure (the Wow Pow follows the variant's year); nullptr while
+// loading or if the game has none (items, sidekicks). Called on the UI thread, must not block.
+using FigureUpgradesProvider =
+    std::function<std::shared_ptr<const FigureUpgrades>(uint16_t id, uint16_t variant)>;
+void SetFigureUpgradesProvider(FigureUpgradesProvider provider);
+
+// A hat (its kTfbSpyroTag_Hat_* number, as a figure stores it): the game's name for it in its
+// language, its picture and what it adds to the wearer's stats.
+struct HatStat {
+  std::string name;   // "Kritische Trefferwahrscheinlichkeit"
+  float value = 0;
+  std::string image;  // the stat's symbol, a key for the art image provider (may be empty)
+};
+struct HatInfo {
+  std::string name;
+  std::string image;
+  std::vector<HatStat> stats;
+};
+using HatInfoProvider = std::function<std::shared_ptr<const HatInfo>(uint16_t hat)>;
+void SetHatInfoProvider(HatInfoProvider provider);
 
 // True while the game is busy with a figure change (its "place your Skylander" sequence). Putting
 // an item on or taking it off waits until this is false, so the player's Skylander is back in

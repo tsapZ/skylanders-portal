@@ -18,6 +18,7 @@ struct FigureDate {
 struct FigureStats {
   uint8_t level;
   uint32_t xp;       // total, all games' parts together
+  uint32_t level_xp;  // total XP the current level starts at
   uint32_t next_xp;  // total XP for the next level; 0 at the top level
   uint32_t gold;
   std::string nickname;

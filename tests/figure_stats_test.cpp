@@ -90,6 +90,7 @@ int main() {
     REQUIRE_OR_RETURN(stats.has_value());
     CHECK(stats->xp == 5614);
     CHECK(stats->level == 4);  // 3800 <= 5614 < 6000
+    CHECK(stats->level_xp == 3800);
     CHECK(stats->next_xp == 6000);
     CHECK(stats->gold == 455);
     CHECK(stats->play_seconds == 3151);

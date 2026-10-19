@@ -120,6 +120,15 @@ enum class Text {
   kHatNumber,
   kLastPlayed,
   kPlayedOn,
+  kWithYou,
+  kBringAlong,
+  kXp,
+  kStartingAttacks,
+  kBought,
+  kPrice,
+  kNoUpgrades,
+  kTopLevelShort,
+  kNoProgress,
   kCount,
 };
 
@@ -174,6 +183,15 @@ constexpr const char* kEnglish[] = {
     "hat no. %u",
     "Last played",
     "on",
+    "With you",
+    "Bring along",
+    "XP",
+    "Starting attacks",
+    "Bought",
+    "Price: %u gold",
+    "No upgrades bought yet",
+    "MAX",
+    "No progress saved yet: the game writes it onto the figure once it has played with it.",
 };
 constexpr const char* kGerman[] = {
     "PORTAL OF POWER",
@@ -228,6 +246,15 @@ constexpr const char* kGerman[] = {
     "Hut Nr. %u",
     "Zuletzt gespielt",
     "auf",
+    "Dabei",
+    "Mitnehmen",
+    "EP",
+    "Grundangriffe",
+    "Gekauft",
+    "Preis: %u Gold",
+    "Noch keine Upgrades gekauft",
+    "MAX",
+    "Noch kein Spielstand: Das Spiel speichert ihn auf der Figur, sobald es mit ihr gespielt hat.",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -548,9 +575,33 @@ void DrawElementIcon(ImDrawList* dl, ImVec2 c, float r, Element element, ImU32 c
   DrawElementShape(dl, c, r, element, col, detail, glow);
 }
 
-// The element as a medallion: gold ring, a disc shaded in the element colour, the symbol in
-// white on top, like the badges on the game's own menus.
+// The game's own picture for a key (SetArtImageProvider), or a null id while there is none.
+ImTextureID ArtTexture(const std::string& key);
+
+// "element:magic": the key of the game's symbol for an element; empty for none.
+std::string ElementKey(Element element) {
+  switch (element) {
+    case Element::kMagic: return "element:magic";
+    case Element::kEarth: return "element:earth";
+    case Element::kWater: return "element:water";
+    case Element::kFire: return "element:fire";
+    case Element::kTech: return "element:tech";
+    case Element::kUndead: return "element:undead";
+    case Element::kLife: return "element:life";
+    case Element::kAir: return "element:air";
+    default: return {};
+  }
+}
+
+// The element as a medallion: the game's own element symbol when there is one, else a gold
+// ring, a disc shaded in the element colour and a drawn symbol in white on top.
 void DrawElementBadge(ImDrawList* dl, ImVec2 c, float r, Element element, int alpha = 255) {
+  if (ImTextureID art = ArtTexture(ElementKey(element))) {
+    dl->AddCircleFilled({c.x, c.y + r * 0.08f}, r * 1.02f, IM_COL32(0, 0, 0, alpha / 3));
+    dl->AddImage(art, {c.x - r * 1.08f, c.y - r * 1.08f}, {c.x + r * 1.08f, c.y + r * 1.08f},
+                 {0, 0}, {1, 1}, IM_COL32(255, 255, 255, alpha));
+    return;
+  }
   dl->AddCircleFilled({c.x, c.y + r * 0.08f}, r * 1.04f, IM_COL32(0, 0, 0, alpha / 3));
   for (int i = 0; i < 8; ++i) {
     const float k = float(i) / 7.0f;
@@ -633,6 +684,7 @@ struct Character {
   std::string debut_game;
   bool swapper = false;
   bool item = false;
+  bool sidekick = false;  // tags along next to the player's Skylander
   std::vector<Version> versions;  // catalog (release) order
 
   bool HasVersionFrom(std::string_view game) const {
@@ -702,6 +754,8 @@ std::vector<std::string> ShownGames(const std::vector<std::string>& games) {
   return shown.empty() ? games : shown;
 }
 
+bool IsSidekick(const SkylanderInfo* sky) { return sky && sky->category == "Sidekicks"; }
+
 bool IsPlayableCategory(std::string_view category) {
   return category != "Items" && category != "Unreleased";
 }
@@ -722,6 +776,9 @@ std::filesystem::path RecentFile(uint32_t user) {
   return FiguresDir() / ("portal_menu_recent_p" + std::to_string(user + 1) + ".txt");
 }
 
+// The Recent tab keeps this many entries per player, newest first.
+constexpr size_t kMaxRecent = 12;
+
 std::vector<std::vector<std::filesystem::path>> LoadRecentPaths(uint32_t user) {
   std::vector<std::vector<std::filesystem::path>> recent;
   std::ifstream in(RecentFile(user));
@@ -735,6 +792,7 @@ std::vector<std::vector<std::filesystem::path>> LoadRecentPaths(uint32_t user) {
     }
     if (!paths.empty()) recent.push_back(std::move(paths));
   }
+  if (recent.size() > kMaxRecent) recent.resize(kMaxRecent);  // older files kept 16
   return recent;
 }
 
@@ -748,7 +806,7 @@ void AddRecent(uint32_t user, const std::vector<std::filesystem::path>& paths) {
   };
   recent.erase(std::remove_if(recent.begin(), recent.end(), shares_file), recent.end());
   recent.insert(recent.begin(), paths);
-  if (recent.size() > 16) recent.resize(16);
+  if (recent.size() > kMaxRecent) recent.resize(kMaxRecent);
   std::ofstream out(RecentFile(user), std::ios::trunc);
   std::error_code ec;
   for (const auto& entry : recent) {
@@ -835,6 +893,7 @@ class Library {
         character.element = portal::FigureElement(sky);
         character.debut_game = debut[name];
         character.swapper = portal::GetSwapperHalf(sky) == SwapperHalf::kTop;
+        character.sidekick = IsSidekick(&sky);
         characters_.push_back(std::move(character));
       }
       characters_[it->second].versions.push_back(version);
@@ -1011,10 +1070,14 @@ class Library {
 std::mutex g_provider_mutex;
 FigureImageProvider g_image_provider;
 FigureNameProvider g_name_provider;
-HatNameProvider g_hat_provider;
+ArtImageProvider g_art_provider;
+FigureUpgradesProvider g_upgrades_provider;
+HatInfoProvider g_hat_info_provider;
 rex::ui::ImmediateDrawer* g_immediate_drawer = nullptr;
 // Uploaded pictures by figure. UI thread only.
 std::unordered_map<uint32_t, std::unique_ptr<rex::ui::ImmediateTexture>> g_textures;
+// Uploaded art by key. UI thread only.
+std::unordered_map<std::string, std::unique_ptr<rex::ui::ImmediateTexture>> g_art_textures;
 
 // The figure's picture as a texture, or null while there is none (yet).
 ImTextureID FigureTexture(const SkylanderInfo* sky) {
@@ -1056,34 +1119,75 @@ std::string FigureName(const SkylanderInfo& sky) {
   return portal::DisplayName(sky.name);
 }
 
-// The hat's name in the game's language, else its number.
-std::string HatName(uint16_t hat) {
-  HatNameProvider provider;
+ImTextureID ArtTexture(const std::string& key) {
+  if (key.empty() || !g_immediate_drawer) return ImTextureID{};
+  if (auto it = g_art_textures.find(key); it != g_art_textures.end()) {
+    return reinterpret_cast<ImTextureID>(it->second.get());
+  }
+  ArtImageProvider provider;
   {
     std::lock_guard lock(g_provider_mutex);
-    provider = g_hat_provider;
+    provider = g_art_provider;
   }
-  if (provider) {
-    if (auto name = provider(hat)) return *name;
+  std::shared_ptr<const FigureImage> image = provider ? provider(key) : nullptr;
+  if (!image || image->width <= 0 || image->height <= 0 ||
+      image->rgba.size() < size_t(image->width) * image->height * 4) {
+    return ImTextureID{};
   }
+  auto texture = g_immediate_drawer->CreateTexture(uint32_t(image->width),
+                                                   uint32_t(image->height),
+                                                   rex::ui::ImmediateTextureFilter::kLinear, false,
+                                                   image->rgba.data());
+  if (!texture) return ImTextureID{};
+  ImTextureID id = reinterpret_cast<ImTextureID>(texture.get());
+  g_art_textures.emplace(key, std::move(texture));
+  return id;
+}
+
+std::shared_ptr<const HatInfo> HatInfoFor(uint16_t hat) {
+  HatInfoProvider provider;
+  {
+    std::lock_guard lock(g_provider_mutex);
+    provider = g_hat_info_provider;
+  }
+  return provider ? provider(hat) : nullptr;
+}
+
+std::shared_ptr<const FigureUpgrades> UpgradesFor(const SkylanderInfo& sky) {
+  FigureUpgradesProvider provider;
+  {
+    std::lock_guard lock(g_provider_mutex);
+    provider = g_upgrades_provider;
+  }
+  return provider ? provider(sky.id, sky.variant) : nullptr;
+}
+
+// The hat's name in the game's language, else its number.
+std::string HatName(uint16_t hat) {
+  if (auto info = HatInfoFor(hat); info && !info->name.empty()) return info->name;
   char text[64];
   std::snprintf(text, sizeof(text), T(Text::kHatNumber), unsigned(hat));
   return text;
 }
 
-// The lines the details view shows for a figure's progress.
+// Whether a figure has bought an upgrade. Both paths share their bits, which count for the chosen
+// path; the other one's are its alternate bits (the game's eTAFB_AlternateUpgradePath, from 11).
+bool UpgradeOwned(const portal::FigureStats& s, const FigureUpgradePath& path, int path_index,
+                  const FigureUpgrade& u) {
+  if (u.bit < 0) return true;
+  if (path.kind != FigureUpgradePath::Kind::kPath) return (s.upgrades >> u.bit) & 1;
+  const int chosen = portal::UpgradePath(s);
+  if (chosen == 0) return false;
+  const int bit = chosen == path_index + 1 ? u.bit : u.alternate_bit;
+  return bit >= 0 && ((s.upgrades >> bit) & 1);
+}
+
+// The details view's facts below the level bar: play time, hero points, when and where last
+// played, the nickname.
 std::vector<std::string> StatsLines(const portal::FigureStats& s) {
   const std::string dot = " \xC2\xB7 ";
   std::vector<std::string> lines;
   char text[256];
-  if (s.next_xp) {
-    std::snprintf(text, sizeof(text), T(Text::kXpToNext), unsigned(s.level), unsigned(s.xp),
-                  unsigned(s.next_xp - s.xp), unsigned(s.level + 1));
-  } else {
-    std::snprintf(text, sizeof(text), T(Text::kXpTop), unsigned(s.level), unsigned(s.xp));
-  }
-  lines.emplace_back(text);
-
   char time[64];
   const unsigned minutes = s.play_seconds / 60;
   if (minutes >= 60) {
@@ -1091,28 +1195,17 @@ std::vector<std::string> StatsLines(const portal::FigureStats& s) {
   } else {
     std::snprintf(time, sizeof(time), T(Text::kMinutes), minutes);
   }
-  std::string line = std::to_string(s.gold) + " Gold" + dot + T(Text::kPlayTime) + " " + time;
+  std::string line = std::string(T(Text::kPlayTime)) + " " + time;
   if (s.hero_points) line += dot + T(Text::kHeroPoints) + " " + std::to_string(s.hero_points);
   lines.push_back(line);
-
-  line = std::string(T(Text::kUpgrades)) + ": " + std::to_string(portal::UpgradeCount(s)) + dot;
-  if (const int path = portal::UpgradePath(s)) {
-    std::snprintf(text, sizeof(text), T(Text::kPath), path);
-    line += text;
-  } else {
-    line += T(Text::kNoPath);
-  }
-  if (s.hat) line += dot + T(Text::kHat) + ": " + HatName(s.hat);
-  lines.push_back(line);
-
   if (s.last_played) {
     const portal::FigureDate& d = *s.last_played;
     if (g_german) {
-      std::snprintf(text, sizeof(text), "%02u.%02u.%04u %02u:%02u", unsigned(d.day),
-                    unsigned(d.month), unsigned(d.year), unsigned(d.hour), unsigned(d.minute));
+      std::snprintf(text, sizeof(text), "%02u.%02u.%04u", unsigned(d.day), unsigned(d.month),
+                    unsigned(d.year));
     } else {
-      std::snprintf(text, sizeof(text), "%04u-%02u-%02u %02u:%02u", unsigned(d.year),
-                    unsigned(d.month), unsigned(d.day), unsigned(d.hour), unsigned(d.minute));
+      std::snprintf(text, sizeof(text), "%04u-%02u-%02u", unsigned(d.year), unsigned(d.month),
+                    unsigned(d.day));
     }
     line = std::string(T(Text::kLastPlayed)) + ": " + text;
     std::string platforms;
@@ -1125,6 +1218,17 @@ std::vector<std::string> StatsLines(const portal::FigureStats& s) {
   }
   if (!s.nickname.empty()) lines.push_back(std::string(T(Text::kNickname)) + ": " + s.nickname);
   return lines;
+}
+
+// "+2 Rüstung", "+0.5 ..." for a hat stat.
+std::string StatText(const HatStat& stat) {
+  char text[160];
+  if (stat.value == float(int(stat.value))) {
+    std::snprintf(text, sizeof(text), "%+d %s", int(stat.value), stat.name.c_str());
+  } else {
+    std::snprintf(text, sizeof(text), "%+.1f %s", stat.value, stat.name.c_str());
+  }
+  return text;
 }
 
 // The picture in a rounded square, or the element symbol when there is no picture.
@@ -1150,8 +1254,24 @@ std::array<std::vector<int>, rex::input::kMaxGuestUsers> g_player_slots;
 // by all players: any player can replace it or take it off, and it stays on the portal when a
 // player's figure is lifted.
 int g_item_slot = -1;
+// Each player's sidekick, or -1. In Giants and Swap Force a sidekick only tags along behind the
+// player's Skylander (it stores no data and isn't played), so like an item it goes on the portal
+// next to the Skylander and stays there when the Skylander is lifted.
+std::array<int, rex::input::kMaxGuestUsers> g_sidekick_slots = [] {
+  std::array<int, rex::input::kMaxGuestUsers> slots;
+  slots.fill(-1);
+  return slots;
+}();
 
 bool IsItemSlot(int slot) { return slot >= 0 && slot == g_item_slot; }
+
+bool IsSidekickSlot(int slot) {
+  return slot >= 0 && std::find(g_sidekick_slots.begin(), g_sidekick_slots.end(), slot) !=
+                          g_sidekick_slots.end();
+}
+
+// A slot that belongs to no player's Skylander: the item or a sidekick.
+bool IsExtraSlot(int slot) { return IsItemSlot(slot) || IsSidekickSlot(slot); }
 
 bool OwnedByOther(int slot, uint32_t user) {
   for (uint32_t u = 0; u < g_player_slots.size(); ++u) {
@@ -1191,10 +1311,10 @@ std::vector<std::pair<uint32_t, const SkylanderInfo*>> OtherPlayersFigures(uint3
   portal::SoftwarePortal* software = GetSoftwarePortal();
   if (!software) return figures;
   for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
-    if (!software->HasFigure(slot) || IsItemSlot(slot)) continue;
+    if (!software->HasFigure(slot) || IsExtraSlot(slot)) continue;
     const SkylanderInfo* sky = FigureIn(slot);
     const uint32_t owner = OwnerOf(slot);
-    if (sky && !IsItem(sky) && owner != user) figures.emplace_back(owner, sky);
+    if (sky && !IsItem(sky) && !IsSidekick(sky) && owner != user) figures.emplace_back(owner, sky);
   }
   return figures;
 }
@@ -1217,8 +1337,8 @@ std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
   // Figures placed some other way (start-up figure, the developer tools) belong to player 1.
   if (slots.empty() && user == 0) {
     for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
-      if (software->HasFigure(slot) && !OwnedByOther(slot, user) && !IsItemSlot(slot) &&
-          !IsItem(FigureIn(slot))) {
+      if (software->HasFigure(slot) && !OwnedByOther(slot, user) && !IsExtraSlot(slot) &&
+          !IsItem(FigureIn(slot)) && !IsSidekick(FigureIn(slot))) {
         slots.push_back(slot);
       }
     }
@@ -1294,27 +1414,53 @@ const SkylanderInfo* PortalItem() {
   return FigureIn(slot);
 }
 
-// Puts an item on the portal in place of the previous one; no path just takes the previous one
-// off. A different slot each time, so the game sees the old one leave.
-void SetPortalItem(uint32_t user, const std::optional<std::filesystem::path>& path) {
+// A player's sidekick put on through the menu, if it's still there.
+const SkylanderInfo* PlayerSidekick(uint32_t user) {
+  portal::SoftwarePortal* software = GetSoftwarePortal();
+  if (user >= g_sidekick_slots.size()) return nullptr;
+  int& slot = g_sidekick_slots[user];
+  if (!software || slot < 0 || !software->HasFigure(slot)) {
+    slot = -1;
+    return nullptr;
+  }
+  return FigureIn(slot);
+}
+
+// Puts an item (or a player's sidekick) on the portal in place of the previous one; no path just
+// takes the previous one off. A different slot each time, so the game sees the old one leave.
+void SetExtraFigure(int& slot, uint32_t user, const std::optional<std::filesystem::path>& path) {
   portal::SoftwarePortal* software = GetSoftwarePortal();
   if (!software) return;
-  int& slot = g_item_slot;
   const int old_slot = slot;
   if (slot >= 0 && software->HasFigure(slot)) RemoveFigureFromSlot(slot);
   slot = -1;
   if (!path) return;
   const int free = FreeSlot(user, {}, {old_slot});
   if (free >= 0 && PlaceFigureFromFile(free, *path)) slot = free;
+  REXLOG_INFO("Portal menu: {} {} slot {}", PathUtf8(path->filename()),
+              slot >= 0 ? "placed in" : "could not be placed in", free);
+}
+
+void SetPortalItem(uint32_t user, const std::optional<std::filesystem::path>& path) {
+  SetExtraFigure(g_item_slot, user, path);
+}
+
+void SetPlayerSidekick(uint32_t user, const std::optional<std::filesystem::path>& path) {
+  if (user < g_sidekick_slots.size()) SetExtraFigure(g_sidekick_slots[user], user, path);
 }
 
 // An item change waits until the player's Skylander is back in the game: putting the figure back
 // and taking the item off in the same moment made the game ask for a Skylander again. So the
 // figure goes back first, and the item follows once the game is no longer busy with figures
-// (SetGameBusyProvider), at least 0.7 s later and at most 10 s.
+// (SetGameBusyProvider), at least 0.7 s later and at most 10 s. A sidekick change goes the same
+// way, together with an item change if both are pending.
 struct PendingItem {
   uint32_t user = 0;
+  bool item = false;  // an item change is pending
   std::optional<std::filesystem::path> path;  // nullopt: take it off
+  bool sidekick = false;  // a sidekick change for sidekick_user is pending
+  uint32_t sidekick_user = 0;
+  std::optional<std::filesystem::path> sidekick_path;
   uint64_t serial = 0;
 };
 std::mutex g_item_mutex;
@@ -1352,18 +1498,39 @@ void ItemThread() {
       if (still_busy && waited < std::chrono::seconds(10)) continue;
       g_pending_item.reset();
       if (g_item_app_context) {
-        g_item_app_context->CallInUIThread([item] { SetPortalItem(item.user, item.path); });
+        g_item_app_context->CallInUIThread([item] {
+          if (item.item) SetPortalItem(item.user, item.path);
+          if (item.sidekick) SetPlayerSidekick(item.sidekick_user, item.sidekick_path);
+        });
       }
       break;
     }
   }
 }
 
-void ScheduleItemChange(uint32_t user, std::optional<std::filesystem::path> path) {
-  std::lock_guard lock(g_item_mutex);
-  g_pending_item = PendingItem{user, std::move(path), ++g_item_serial};
+// Adds to a pending change (an item and a sidekick change can wait together).
+PendingItem& PendingChange() {
+  if (!g_pending_item) g_pending_item = PendingItem{};
+  g_pending_item->serial = ++g_item_serial;
   if (!g_item_thread.joinable()) g_item_thread = std::thread(ItemThread);
   g_item_cv.notify_all();
+  return *g_pending_item;
+}
+
+void ScheduleItemChange(uint32_t user, std::optional<std::filesystem::path> path) {
+  std::lock_guard lock(g_item_mutex);
+  PendingItem& change = PendingChange();
+  change.user = user;
+  change.item = true;
+  change.path = std::move(path);
+}
+
+void ScheduleSidekickChange(uint32_t user, std::optional<std::filesystem::path> path) {
+  std::lock_guard lock(g_item_mutex);
+  PendingItem& change = PendingChange();
+  change.sidekick = true;
+  change.sidekick_user = user;
+  change.sidekick_path = std::move(path);
 }
 
 void StopItemThread() {
@@ -1533,6 +1700,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         if (!name.empty()) taken_.emplace(name, owner);
       }
       current_item_ = PortalItem();
+      current_sidekick_ = PlayerSidekick(user_);
       OpenFirstTab();
     }
     // Opened with a button, the figure was just lifted: the menu stays hidden while the game
@@ -1585,6 +1753,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
           PlaceForPlayer(user_, pending_paths_, preferred);
         }
         if (item_change_) ScheduleItemChange(user_, item_path_);
+        if (sidekick_change_) ScheduleSidekickChange(user_, sidekick_path_);
         // The game's own way out: B "leave the game" on its portal screen for this player.
         if (leave_) menu_input::TapButton(user_, rex::input::X_INPUT_GAMEPAD_B);
         Finish();
@@ -1842,6 +2011,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   void HandleInput(const Actions& a) {
     if (state_ == State::kDetails) {
       if (a.back || a.details) state_ = previous_state_;
+      if (a.left) MoveDetailFocus(-1, 0);
+      if (a.right) MoveDetailFocus(+1, 0);
+      if (a.up) MoveDetailFocus(0, -1);
+      if (a.down) MoveDetailFocus(0, +1);
+      if (a.lb && detail_half_ > 0) --detail_half_, detail_focus_ = 0;
+      if (a.rb && detail_half_ + 1 < PreviewFigures().size()) ++detail_half_, detail_focus_ = 0;
       return;
     }
     if (state_ == State::kOptions) {
@@ -1851,6 +2026,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (a.details) {
       previous_state_ = state_;
       state_ = State::kDetails;
+      detail_half_ = 0;
+      detail_focus_ = 0;
       return;
     }
     if (state_ == State::kBuilding) {
@@ -1909,6 +2086,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (!character) return;
     if (character->item) {
       ToggleItem(*character->versions.front().sky);
+      return;
+    }
+    if (character->sidekick) {
+      ToggleSidekick(*ShownVersion(*character).sky);
       return;
     }
     if (TakenBy(*character)) return;
@@ -2052,6 +2233,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     pending_paths_.clear();
     restore_ = false;
     item_change_ = false;
+    // A player who leaves takes their sidekick along.
+    sidekick_change_ = current_sidekick_ != nullptr;
+    sidekick_path_.reset();
     leave_ = true;
     state_ = State::kWaiting;
     REXLOG_INFO("Portal menu: player {} leaves the game", user_ + 1);
@@ -2137,6 +2321,30 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     StartCancel();
   }
 
+  // A sidekick goes on next to the player's Skylander, or off again if it is the one already with
+  // them; the Skylander stays.
+  void ToggleSidekick(const SkylanderInfo& sidekick) {
+    if (current_sidekick_ && current_sidekick_->id == sidekick.id) {
+      sidekick_path_.reset();
+      REXLOG_INFO("Portal menu: player {} takes off sidekick {}", user_ + 1, sidekick.name);
+    } else {
+      std::optional<std::filesystem::path> path;
+      if (const OwnedFigure* owned = library_.Owned(&sidekick)) {
+        path = owned->path;
+      } else {
+        path = CreateFigureFile(sidekick);
+      }
+      if (!path) {
+        REXLOG_WARN("Portal menu: could not create a figure file for {}", sidekick.name);
+        return;
+      }
+      sidekick_path_ = path;
+      REXLOG_INFO("Portal menu: player {} brings sidekick {}", user_ + 1, sidekick.name);
+    }
+    sidekick_change_ = true;
+    StartCancel();
+  }
+
   void Confirm(const std::vector<const SkylanderInfo*>& figures) {
     std::vector<std::filesystem::path> paths;
     std::vector<const SkylanderInfo*> placed;
@@ -2219,9 +2427,14 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     const Character* character = SelectedCharacter();
     const bool item = state_ == State::kBrowsing && character && character->item;
+    const bool sidekick = state_ == State::kBrowsing && character && character->sidekick;
     const char* accept = item && current_item_ == character->versions.front().sky
                              ? T(Text::kTakeOff)
-                             : T(Text::kPlace);
+                         : sidekick ? (current_sidekick_ &&
+                                               current_sidekick_->id == ShownVersion(*character).sky->id
+                                           ? T(Text::kTakeOff)
+                                           : T(Text::kBringAlong))
+                                    : T(Text::kPlace);
     x += Hint(dl, {x, y}, kb ? "Enter" : "A", Rgba(76, 175, 80), accept, !kb);
     x += Hint(dl, {x, y}, kb ? "Esc" : "B", Rgba(232, 73, 43), T(Text::kBack), !kb);
     x += Hint(dl, {x, y}, kb ? "L" : "X", Rgba(46, 134, 222), T(Text::kDetails), !kb);
@@ -2457,6 +2670,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       return;
     }
     if (character.swapper) Pill(dl, {p0.x + S(6), p0.y + S(6)}, "SWAP", kGold, kInk);
+    if (character.sidekick && current_sidekick_ && current_sidekick_->id == shown->id) {
+      Pill(dl, {p0.x + S(6), p0.y + S(6)}, T(Text::kWithYou), Rgba(60, 170, 80), kWhite, 15);
+    }
     if (character.versions.size() > 1) {
       Pill(dl, {p0.x + S(6), p1.y - S(27)},
            std::to_string(character.versions.size()) + " " + T(Text::kVersions),
@@ -2486,11 +2702,114 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     Pill(dl, {p0.x + S(6), p0.y + S(6)}, GameShortName(entry.figures[0]->game),
          Rgba(10, 12, 30, 200), kWhite);
+    DrawElementBadge(dl, {p0.x + S(19), p1.y - S(19)}, S(15), element);
     if (const OwnedFigure* owned = library_.OwnedAt(entry.paths[0]); owned && owned->stats) {
       const std::string lv = "Lv " + std::to_string(owned->stats->level);
       Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
     }
     if (auto owner = TakenBy(entry)) DrawTaken(dl, a, b, *owner);
+  }
+
+  // Level and gold, and the bar to the next level like the game's own one. Returns the y below it.
+  float DrawLevelBar(ImDrawList* dl, ImVec2 a, float width, const portal::FigureStats& s,
+                     float scale = 1.0f) {
+    char text[96];
+    std::snprintf(text, sizeof(text), "Level %u", unsigned(s.level));
+    OutlinedLabel(dl, TitleFont(), S(30) * scale, a, kGold, text, S(1.5f));
+    // Gold: a coin and the amount at the right.
+    const std::string gold = std::to_string(s.gold);
+    const ImVec2 gs = TextSize(BoldFont(), S(22) * scale, gold);
+    const float coin = S(11) * scale;
+    const ImVec2 cc{a.x + width - gs.x - coin - S(10), a.y + S(18) * scale};
+    dl->AddCircleFilled(cc, coin, Rgba(250, 205, 70));
+    dl->AddCircle(cc, coin * 0.72f, Rgba(196, 140, 30), 0, S(2));
+    dl->AddCircle(cc, coin, Rgba(130, 84, 10), 0, S(1.5f));
+    Label(dl, BoldFont(), S(22) * scale, {cc.x + coin + S(6), a.y + S(6) * scale}, kWhite, gold);
+    float y = a.y + S(42) * scale;
+    const float h = S(24) * scale;
+    const ImVec2 b0{a.x, y}, b1{a.x + width, y + h};
+    dl->AddRectFilled(b0, b1, Rgba(8, 10, 28, 210), h / 2);
+    const float fraction =
+        s.next_xp > s.level_xp ? std::clamp(float(s.xp - s.level_xp) / float(s.next_xp - s.level_xp),
+                                            0.0f, 1.0f)
+                               : 1.0f;
+    if (fraction > 0.0f) {
+      const float inset = S(3);
+      const float fill = std::max(h - 2 * inset, (width - 2 * inset) * fraction);
+      GradientRect(dl, {b0.x + inset, b0.y + inset}, {b0.x + inset + fill, b1.y - inset},
+                   Rgba(150, 228, 255), Rgba(40, 132, 228), (h - 2 * inset) / 2);
+    }
+    dl->AddRect(b0, b1, Rgba(255, 255, 255, 90), h / 2, 0, S(1.5f));
+    if (s.next_xp) {
+      std::snprintf(text, sizeof(text), "%u / %u %s", unsigned(s.xp), unsigned(s.next_xp),
+                    T(Text::kXp));
+    } else {
+      std::snprintf(text, sizeof(text), "%u %s \xC2\xB7 %s", unsigned(s.xp), T(Text::kXp),
+                    T(Text::kTopLevelShort));
+    }
+    const ImVec2 ts = TextSize(BoldFont(), S(15) * scale, text);
+    OutlinedLabel(dl, BoldFont(), S(15) * scale, {(b0.x + b1.x - ts.x) / 2, y + (h - ts.y) / 2},
+                  kWhite, text, S(1));
+    return y + h + S(12) * scale;
+  }
+
+  // An upgrade as the game's icon: bright with a check when bought, dimmed otherwise.
+  void DrawUpgradeIcon(ImDrawList* dl, ImVec2 a, float size, const FigureUpgrade& u, bool owned,
+                       bool focused) {
+    const ImVec2 b{a.x + size, a.y + size};
+    if (focused) {
+      dl->AddRectFilled({a.x - S(5), a.y - S(5)}, {b.x + S(5), b.y + S(5)},
+                        Rgba(244, 196, 84, 90), S(14));
+    }
+    dl->AddRectFilled(a, b, owned ? Rgba(36, 56, 128, 235) : Rgba(16, 18, 36, 230), S(10));
+    const float pad = size * 0.06f;
+    if (ImTextureID t = ArtTexture(u.image)) {
+      dl->AddImageRounded(t, {a.x + pad, a.y + pad}, {b.x - pad, b.y - pad}, {0, 0}, {1, 1},
+                          owned ? IM_COL32_WHITE : Rgba(150, 150, 170, 120), S(8));
+    } else {
+      const ImVec2 qs = TextSize(TitleFont(), size * 0.45f, "?");
+      Label(dl, TitleFont(), size * 0.45f, {(a.x + b.x - qs.x) / 2, (a.y + b.y - qs.y) / 2},
+            Rgba(255, 255, 255, 90), "?");
+    }
+    dl->AddRect(a, b, focused ? kGold : owned ? Rgba(130, 205, 255, 200) : Rgba(255, 255, 255, 40),
+                S(10), 0, focused ? S(3) : S(1.5f));
+    if (owned && u.bit >= 0) {
+      const float r = size * 0.15f;
+      const ImVec2 c{b.x - r * 0.6f, b.y - r * 0.6f};
+      dl->AddCircleFilled(c, r, Rgba(60, 170, 80));
+      dl->AddCircle(c, r, IM_COL32_WHITE, 0, S(1.5f));
+      const ImVec2 tick[] = {{c.x - r * 0.5f, c.y}, {c.x - r * 0.1f, c.y + r * 0.42f},
+                             {c.x + r * 0.55f, c.y - r * 0.4f}};
+      dl->AddPolyline(tick, 3, IM_COL32_WHITE, 0, std::max(1.5f, r * 0.28f));
+    }
+  }
+
+  // The hat: its picture, the game's name for it and what it adds.
+  float DrawHat(ImDrawList* dl, ImVec2 a, float width, uint16_t hat, bool compact) {
+    const float pic = compact ? S(52) : S(70);
+    auto info = HatInfoFor(hat);
+    dl->AddRectFilled(a, {a.x + pic, a.y + pic}, Rgba(255, 255, 255, 26), S(10));
+    if (ImTextureID t = info ? ArtTexture(info->image) : ImTextureID{}) {
+      dl->AddImageRounded(t, {a.x + S(3), a.y + S(3)}, {a.x + pic - S(3), a.y + pic - S(3)}, {0, 0},
+                          {1, 1}, IM_COL32_WHITE, S(8));
+    }
+    const float x = a.x + pic + S(12);
+    Label(dl, BoldFont(), compact ? S(19) : S(22), {x, a.y + S(2)}, kWhite, HatName(hat),
+          width - pic - S(12));
+    float y = a.y + (compact ? S(26) : S(32));
+    if (info) {
+      for (const HatStat& stat : info->stats) {
+        float sx = x;
+        if (ImTextureID t = ArtTexture(stat.image)) {
+          dl->AddImage(t, {sx, y}, {sx + S(20), y + S(20)});
+          sx += S(24);
+        }
+        Label(dl, BoldFont(), compact ? S(15) : S(17), {sx, y + S(1)}, Rgba(150, 230, 150),
+              StatText(stat), width - (sx - a.x));
+        y += compact ? S(20) : S(24);
+      }
+    }
+    return std::max(y, a.y + pic) + S(10);
   }
 
   void DrawPreview(ImDrawList* dl, ImVec2 a, ImVec2 b,
@@ -2564,16 +2883,41 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
 
     const OwnedFigure* owned = library_.Owned(main);
-    if (owned && !item) {
-      if (owned->stats) {
-        std::string stats = "Level " + std::to_string(owned->stats->level) + "   " +
-                            std::to_string(owned->stats->gold) + " Gold";
-        Label(dl, BoldFont(), S(23), {a.x + S(22), y}, kWhite, stats);
-        y += S(32);
-        if (!owned->stats->nickname.empty()) {
-          Label(dl, BoldFont(), S(21), {a.x + S(22), y}, kDim,
-                "\"" + owned->stats->nickname + "\"", wrap);
+    if (owned && !item && owned->stats) {
+      const portal::FigureStats& stats = *owned->stats;
+      const float width = b.x - a.x - S(44);
+      y = DrawLevelBar(dl, {a.x + S(22), y}, width, stats);
+      if (stats.hat) y = DrawHat(dl, {a.x + S(22), y}, width, stats.hat, true);
+      // The upgrades bought, as the game's icons in a row.
+      if (auto upgrades = UpgradesFor(*main)) {
+        const float size = S(46), gap = S(7);
+        float x = a.x + S(22);
+        int shown = 0, path_index = 0;
+        for (const FigureUpgradePath& path : upgrades->paths) {
+          for (const FigureUpgrade& u : path.upgrades) {
+            if (path.kind == FigureUpgradePath::Kind::kStart) continue;
+            if (!UpgradeOwned(stats, path, path_index, u)) continue;
+            if (x + size > b.x - S(22)) {
+              x = a.x + S(22);
+              y += size + gap;
+            }
+            if (y + size > b.y - S(16)) break;
+            DrawUpgradeIcon(dl, {x, y}, size, u, true, false);
+            x += size + gap;
+            ++shown;
+          }
+          if (path.kind == FigureUpgradePath::Kind::kPath) ++path_index;
         }
+        if (shown) {
+          y += size + gap;
+        } else {
+          Label(dl, BoldFont(), S(18), {a.x + S(22), y}, kDim, T(Text::kNoUpgrades), wrap);
+          y += S(28);
+        }
+      }
+      if (!stats.nickname.empty() && y + S(30) < b.y) {
+        Label(dl, BoldFont(), S(21), {a.x + S(22), y + S(4)}, kDim, "\"" + stats.nickname + "\"",
+              wrap);
       }
     }
   }
@@ -2691,45 +3035,184 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
   }
 
+  // The details view, for one figure at a time (a swapper's halves with LB / RB): level, hat and
+  // the other facts on the left, the upgrades as the game's upgrade screen shows them on the right,
+  // with the one the cursor is on described below them.
   void DrawDetails(ImDrawList* dl, ImVec2 area0, ImVec2 area1) {
     const auto figures = PreviewFigures();
-    // The progress lines first, to size the panel.
-    std::vector<std::vector<std::string>> stats(figures.size());
-    float height = S(140);
-    for (size_t i = 0; i < figures.size(); ++i) {
-      const OwnedFigure* owned = library_.Owned(figures[i]);
-      if (owned && owned->stats && !IsItem(figures[i])) stats[i] = StatsLines(*owned->stats);
-      height += S(190) + stats[i].size() * S(30) - (stats[i].empty() ? 0 : S(32));
-    }
+    detail_icons_.clear();
+    if (figures.empty()) return;
+    detail_half_ = std::min(detail_half_, figures.size() - 1);
+    const SkylanderInfo* sky = figures[detail_half_];
+    const OwnedFigure* owned = library_.Owned(sky);
+    const portal::FigureStats* stats = owned && owned->stats && !IsItem(sky) ? &*owned->stats : nullptr;
+    const auto upgrades = !IsItem(sky) && !IsSidekick(sky) ? UpgradesFor(*sky) : nullptr;
+
+    const float avail_w = area1.x - area0.x - S(24), avail_h = area1.y - area0.y - S(24);
     ImVec2 a, b;
-    DrawOverlayPanel(dl, area0, area1, {S(860), height}, a, b);
-    Label(dl, BoldFont(), S(28), {a.x + S(28), a.y + S(22)}, kGold, T(Text::kDetails));
-    float y = a.y + S(76);
-    for (size_t index = 0; index < figures.size(); ++index) {
-      const SkylanderInfo* sky = figures[index];
-      const Element element = portal::FigureElement(*sky);
-      DrawFigurePicture(dl, {a.x + S(22), y}, {a.x + S(78), y + S(56)}, sky, S(10));
-      Label(dl, BoldFont(), S(26), {a.x + S(88), y + S(6)}, kWhite, portal::DisplayName(sky->name));
-      y += S(48);
-      std::string line = IsItem(sky) ? std::string(T(Text::kItems))
-                                     : BadgeLabel(portal::VersionBadge(*sky)) + "   " +
-                                           std::string(ElementLabel(element));
-      line += "   " + std::string(sky->game);
-      Label(dl, BoldFont(), S(19), {a.x + S(88), y}, kDim, line);
-      y += S(32);
-      if (const OwnedFigure* owned = library_.Owned(sky)) {
-        for (size_t i = 0; i < stats[index].size(); ++i) {
-          Label(dl, BoldFont(), i == 0 ? S(21) : S(19), {a.x + S(88), y}, i == 0 ? kWhite : kDim,
-                stats[index][i]);
-          y += S(30);
-        }
-        Label(dl, BoldFont(), S(17), {a.x + S(88), y}, Rgba(180, 190, 220),
-              std::string(T(Text::kFile)) + ": " + PathUtf8(owned->path.filename()));
-      } else {
-        Label(dl, BoldFont(), S(19), {a.x + S(88), y}, kDim, T(Text::kNewFigure));
+    DrawOverlayPanel(dl, area0, area1, {std::min(S(1240), avail_w), std::min(S(800), avail_h)}, a, b);
+
+    // Header: picture, name, version / element / game, the halves.
+    const Element element = portal::FigureElement(*sky);
+    DrawFigurePicture(dl, {a.x + S(26), a.y + S(22)}, {a.x + S(110), a.y + S(106)}, sky, S(14));
+    OutlinedLabel(dl, TitleFont(), S(34), {a.x + S(126), a.y + S(26)}, kWhite, FigureName(*sky),
+                  S(2));
+    std::string line = IsItem(sky) ? std::string(T(Text::kItems))
+                                   : BadgeLabel(portal::VersionBadge(*sky)) + "   " +
+                                         std::string(ElementLabel(element));
+    line += "   " + std::string(sky->game);
+    DrawElementBadge(dl, {a.x + S(140), a.y + S(88)}, S(14), element);
+    Label(dl, BoldFont(), S(19), {a.x + S(162), a.y + S(77)}, kDim, line);
+    if (figures.size() == 2) {
+      float px = b.x - S(26);
+      for (int i = 1; i >= 0; --i) {
+        const char* text = T(i == 0 ? Text::kTop : Text::kBottom);
+        const float w = PillWidth(text, 17);
+        px -= w;
+        Pill(dl, {px, a.y + S(30)}, text, size_t(i) == detail_half_ ? kGold : Rgba(255, 255, 255, 40),
+             size_t(i) == detail_half_ ? kInk : kWhite, 17);
+        px -= S(10);
       }
-      y += S(78);
     }
+    const float top = a.y + S(126);
+    dl->AddLine({a.x + S(24), top - S(8)}, {b.x - S(24), top - S(8)}, Rgba(255, 255, 255, 30),
+                S(1.5f));
+
+    // Left column.
+    const float left_w = S(380);
+    float y = top + S(6);
+    const float lx = a.x + S(28);
+    if (stats) {
+      y = DrawLevelBar(dl, {lx, y}, left_w - S(20), *stats, 0.95f);
+      if (stats->hat) y = DrawHat(dl, {lx, y}, left_w - S(20), stats->hat, false);
+      for (const std::string& text : StatsLines(*stats)) {
+        Label(dl, BoldFont(), S(17), {lx, y}, kDim, text, left_w - S(20));
+        y += TextSize(BoldFont(), S(17), text, left_w - S(20)).y + S(8);
+      }
+    } else if (!IsItem(sky) && !IsSidekick(sky)) {
+      Label(dl, BoldFont(), S(19), {lx, y}, kDim, T(owned ? Text::kNoProgress : Text::kNewFigure),
+            left_w - S(20));
+      y += S(80);
+    }
+    if (owned) {
+      Label(dl, BoldFont(), S(15), {lx, b.y - S(36)}, Rgba(160, 170, 205),
+            std::string(T(Text::kFile)) + ": " + PathUtf8(owned->path.filename()), left_w - S(10));
+    }
+
+    // Right column: the upgrade tree.
+    const float rx = a.x + left_w + S(30), rw = b.x - S(28) - rx;
+    dl->AddLine({rx - S(16), top}, {rx - S(16), b.y - S(24)}, Rgba(255, 255, 255, 26), S(1.5f));
+    if (!upgrades) return;
+    const float icon = S(62), gap = S(12);
+    float ry = top + S(4);
+    int path_index = 0;
+    auto add_icon = [&](const FigureUpgradePath& path, int pi, const FigureUpgrade& u, ImVec2 at) {
+      const bool owned_upgrade = stats ? UpgradeOwned(*stats, path, pi, u) : u.bit < 0;
+      const bool focused = detail_icons_.size() == detail_focus_;
+      DrawUpgradeIcon(dl, at, icon, u, owned_upgrade, focused);
+      if (!owned_upgrade && u.cost) {
+        const std::string cost = std::to_string(u.cost);
+        const ImVec2 cs = TextSize(BoldFont(), S(14), cost);
+        Label(dl, BoldFont(), S(14), {at.x + (icon - cs.x) / 2, at.y + icon + S(2)},
+              Rgba(250, 205, 70), cost);
+      }
+      detail_icons_.push_back({&u, owned_upgrade, {at.x, at.y}, {at.x + icon, at.y + icon}});
+    };
+    // The starting attacks with the soul gem and Wow Pow beside them, the basic upgrades, the two
+    // paths side by side.
+    std::vector<std::pair<const FigureUpgradePath*, int>> paths, extras;
+    const FigureUpgradePath* start = nullptr;
+    const FigureUpgradePath* basic = nullptr;
+    for (const FigureUpgradePath& path : upgrades->paths) {
+      switch (path.kind) {
+        case FigureUpgradePath::Kind::kStart: start = &path; break;
+        case FigureUpgradePath::Kind::kBasic: basic = &path; break;
+        case FigureUpgradePath::Kind::kPath: paths.emplace_back(&path, path_index++); break;
+        default: extras.emplace_back(&path, 0); break;
+      }
+    }
+    auto row = [&](const FigureUpgradePath& path, const std::string& title, float x, float width) {
+      Label(dl, BoldFont(), S(17), {x, ry}, kGold, title, width);
+      float ix = x;
+      for (const FigureUpgrade& u : path.upgrades) {
+        add_icon(path, 0, u, {ix, ry + S(24)});
+        ix += icon + gap;
+      }
+      return ix;
+    };
+    if (start || !extras.empty()) {
+      float x = rx;
+      if (start) x = std::max(row(*start, T(Text::kStartingAttacks), x, S(300)), x + S(220)) + S(24);
+      for (const auto& [path, pi] : extras) {
+        x = std::max(row(*path, path->name, x, S(240)), x + S(200)) + S(24);
+      }
+      ry += S(24) + icon + S(22);
+    }
+    if (basic) {
+      row(*basic, basic->name, rx, rw);
+      ry += S(24) + icon + S(22);
+    }
+    if (!paths.empty()) {
+      const float col_w = (rw - S(16)) / float(paths.size());
+      const int chosen = stats ? portal::UpgradePath(*stats) : 0;
+      for (size_t i = 0; i < paths.size(); ++i) {
+        const auto& [path, pi] = paths[i];
+        const float x0 = rx + i * (col_w + S(16));
+        const bool is_chosen = chosen == pi + 1;
+        const ImVec2 box0{x0 - S(8), ry - S(6)}, box1{x0 + col_w - S(4), ry + S(28) + icon + S(24)};
+        dl->AddRectFilled(box0, box1, is_chosen ? Rgba(244, 196, 84, 38) : Rgba(255, 255, 255, 10),
+                          S(12));
+        if (is_chosen) dl->AddRect(box0, box1, Rgba(244, 196, 84, 170), S(12), 0, S(2));
+        Label(dl, BoldFont(), S(17), {x0, ry}, is_chosen || chosen == 0 ? kGold : kDim, path->name,
+              col_w - S(16));
+        float x = x0;
+        for (const FigureUpgrade& u : path->upgrades) {
+          add_icon(*path, pi, u, {x, ry + S(28)});
+          x += icon + gap;
+        }
+      }
+      ry += S(28) + icon + S(32);
+    }
+    // The upgrade under the cursor.
+    if (detail_icons_.empty()) return;
+    detail_focus_ = std::min(detail_focus_, detail_icons_.size() - 1);
+    const DetailIcon& focus = detail_icons_[detail_focus_];
+    const float box_top = std::max(ry, b.y - S(140));
+    dl->AddRectFilled({rx - S(6), box_top}, {b.x - S(24), b.y - S(22)}, Rgba(8, 10, 30, 170), S(12));
+    Label(dl, BoldFont(), S(21), {rx + S(8), box_top + S(10)}, kWhite, focus.upgrade->name);
+    char status[96];
+    if (focus.owned) {
+      std::snprintf(status, sizeof(status), "%s", focus.upgrade->bit < 0 ? "" : T(Text::kBought));
+    } else {
+      std::snprintf(status, sizeof(status), T(Text::kPrice), unsigned(focus.upgrade->cost));
+    }
+    const ImVec2 st = TextSize(BoldFont(), S(17), status);
+    Label(dl, BoldFont(), S(17), {b.x - S(40) - st.x, box_top + S(13)},
+          focus.owned ? Rgba(120, 220, 130) : Rgba(250, 205, 70), status);
+    Label(dl, BoldFont(), S(17), {rx + S(8), box_top + S(42)}, kDim, focus.upgrade->description,
+          b.x - S(48) - rx);
+  }
+
+  // Details view: the cursor moves to the nearest icon in that direction.
+  void MoveDetailFocus(int dx, int dy) {
+    if (detail_icons_.empty()) return;
+    const DetailIcon& from = detail_icons_[std::min(detail_focus_, detail_icons_.size() - 1)];
+    const ImVec2 c{(from.a.x + from.b.x) / 2, (from.a.y + from.b.y) / 2};
+    size_t best = detail_focus_;
+    float best_score = FLT_MAX;
+    for (size_t i = 0; i < detail_icons_.size(); ++i) {
+      const DetailIcon& to = detail_icons_[i];
+      const ImVec2 t{(to.a.x + to.b.x) / 2, (to.a.y + to.b.y) / 2};
+      const float ddx = t.x - c.x, ddy = t.y - c.y;
+      if (dx && (ddx * dx <= S(4) || std::abs(ddy) > S(40))) continue;
+      if (dy && ddy * dy <= S(4)) continue;
+      const float score = dx ? std::abs(ddx) + std::abs(ddy) * 4 : std::abs(ddy) + std::abs(ddx) * 0.6f;
+      if (score < best_score) {
+        best_score = score;
+        best = i;
+      }
+    }
+    detail_focus_ = best;
   }
 
   std::function<void()> on_done_;
@@ -2759,6 +3242,18 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   bool restore_ = false;
   bool item_change_ = false;
   std::optional<std::filesystem::path> item_path_;
+  const SkylanderInfo* current_sidekick_ = nullptr;  // the sidekick with this player
+  // Details view: the half shown, the icons drawn last frame and the one under the cursor.
+  struct DetailIcon {
+    const FigureUpgrade* upgrade = nullptr;
+    bool owned = false;
+    ImVec2 a, b;
+  };
+  size_t detail_half_ = 0;
+  size_t detail_focus_ = 0;
+  std::vector<DetailIcon> detail_icons_;
+  bool sidekick_change_ = false;
+  std::optional<std::filesystem::path> sidekick_path_;
   size_t tab_ = 0;
   size_t element_ = 0;  // row of the current tab
   size_t selected_ = 0;
@@ -2889,6 +3384,7 @@ void ShutdownPortalMenu() {
   g_menu.reset();
   g_toast.reset();
   g_textures.clear();
+  g_art_textures.clear();
   g_immediate_drawer = nullptr;
 }
 
@@ -2902,9 +3398,19 @@ void SetFigureNameProvider(FigureNameProvider provider) {
   g_name_provider = std::move(provider);
 }
 
-void SetHatNameProvider(HatNameProvider provider) {
+void SetArtImageProvider(ArtImageProvider provider) {
   std::lock_guard lock(g_provider_mutex);
-  g_hat_provider = std::move(provider);
+  g_art_provider = std::move(provider);
+}
+
+void SetFigureUpgradesProvider(FigureUpgradesProvider provider) {
+  std::lock_guard lock(g_provider_mutex);
+  g_upgrades_provider = std::move(provider);
+}
+
+void SetHatInfoProvider(HatInfoProvider provider) {
+  std::lock_guard lock(g_provider_mutex);
+  g_hat_info_provider = std::move(provider);
 }
 
 void SetGameBusyProvider(std::function<bool()> busy) {
