@@ -29,8 +29,15 @@ REXCVAR_DEFINE_STRING(portal_menu_open_buttons, "guide,back+start,hold_back", "P
                       "Controller buttons that open the portal menu, comma-separated: a button "
                       "(guide, back, start, a, b, x, y, lb, rb, ls, rs, up, down, left, right), a "
                       "chord joined with + (back+start), or hold_<button> to hold it");
+REXCVAR_DEFINE_STRING(portal_item_off_buttons, "back+y", "Portal",
+                      "Controller buttons that take the item (magic item, adventure pack) off the "
+                      "portal without opening the menu; same format as portal_menu_open_buttons, "
+                      "empty for none");
+REXCVAR_DEFINE_STRING(player_menu_buttons, "ls+rs", "Input",
+                      "Controller buttons that open the player menu (which controller plays as "
+                      "which player); same format as portal_menu_open_buttons, empty for none");
 REXCVAR_DEFINE_INT32(portal_menu_hold_ms, 600, "Portal",
-                     "How long a hold_<button> entry of portal_menu_open_buttons must be held")
+                     "How long a hold_<button> entry of the *_buttons settings must be held")
     .range(100, 5000);
 REXCVAR_DEFINE_INT32(portal_menu_chord_ms, 150, "Portal",
                      "How long the first button of an open chord is kept from the game while "
@@ -50,7 +57,10 @@ using rex::input::DeviceInfo;
 using rex::input::InputDriver;
 using rex::input::X_INPUT_GAMEPAD;
 using rex::input::X_INPUT_STATE;
+using skylanders::menu_input::ButtonAction;
 using Clock = std::chrono::steady_clock;
+
+constexpr size_t kActionCount = 3;
 
 class MenuInputDriver;
 
@@ -59,6 +69,7 @@ struct DeviceRecord {
   uint32_t ordinal = 0;
   bool synthetic = false;
   bool keyboard = false;  // the keyboard/mouse emulation, plays as keyboard_player
+  std::string name;
   std::optional<uint32_t> forced_user;  // set by SetDevicePlayer
   // Open-button tracking.
   uint16_t last_buttons = 0;
@@ -73,11 +84,14 @@ struct DeviceRecord {
   std::array<Clock::time_point, 16> pressed_at{};
   // After the menu closes, the device stays hidden until all its buttons are up.
   bool hidden_until_release = false;
+  // A press the menu makes on the game's behalf (TapButton).
+  uint16_t tap = 0;
+  Clock::time_point tap_from{}, tap_until{};
 };
 
 std::mutex g_mutex;
 std::unordered_map<uint64_t, DeviceRecord> g_devices;  // by DeviceId
-std::function<void(DeviceId, uint32_t)> g_open_handler;
+std::array<std::function<void(DeviceId, uint32_t)>, kActionCount> g_handlers;
 std::atomic<bool> g_menu_open{false};
 std::optional<DeviceId> g_keyboard;
 std::vector<DeviceId> g_connected;  // the devices the input system has now
@@ -85,6 +99,7 @@ std::vector<DeviceId> g_connected;  // the devices the input system has now
 struct OpenEntry {
   uint16_t buttons = 0;
   bool hold = false;
+  ButtonAction action = ButtonAction::kPortalMenu;
 };
 
 uint16_t ButtonBit(const std::string& name) {
@@ -113,15 +128,8 @@ uint16_t ButtonBit(const std::string& name) {
   return 0;
 }
 
-// Parses portal_menu_open_buttons. Unknown names are skipped with a warning once per value.
-std::vector<OpenEntry> OpenEntries() {
-  static std::string cached_value;
-  static std::vector<OpenEntry> cached;
-  const std::string value = REXCVAR_GET(portal_menu_open_buttons);
-  if (value == cached_value && !cached.empty()) {
-    return cached;
-  }
-  std::vector<OpenEntry> entries;
+// Parses one *_buttons setting into `entries`. Unknown names are skipped with a warning.
+void ParseEntries(const std::string& value, ButtonAction action, std::vector<OpenEntry>& entries) {
   std::stringstream list(value);
   std::string token;
   while (std::getline(list, token, ',')) {
@@ -132,6 +140,7 @@ std::vector<OpenEntry> OpenEntries() {
       continue;
     }
     OpenEntry entry;
+    entry.action = action;
     if (token.rfind("hold_", 0) == 0) {
       entry.hold = true;
       token = token.substr(5);
@@ -147,9 +156,27 @@ std::vector<OpenEntry> OpenEntries() {
     if (valid && entry.buttons) {
       entries.push_back(entry);
     } else {
-      REXLOG_WARN("Portal menu: ignoring unknown open button '{}'", token);
+      REXLOG_WARN("Portal menu: ignoring unknown button entry '{}'", token);
     }
   }
+}
+
+// Every button entry: portal_menu_open_buttons, portal_item_off_buttons, player_menu_buttons.
+// Parsed again only when one of them changes, so the warnings come once per value.
+std::vector<OpenEntry> OpenEntries() {
+  static std::optional<std::string> cached_value;
+  static std::vector<OpenEntry> cached;
+  const std::string open = REXCVAR_GET(portal_menu_open_buttons);
+  const std::string item_off = REXCVAR_GET(portal_item_off_buttons);
+  const std::string players = REXCVAR_GET(player_menu_buttons);
+  const std::string value = open + "|" + item_off + "|" + players;
+  if (value == cached_value) {
+    return cached;
+  }
+  std::vector<OpenEntry> entries;
+  ParseEntries(open, ButtonAction::kPortalMenu, entries);
+  ParseEntries(item_off, ButtonAction::kItemOff, entries);
+  ParseEntries(players, ButtonAction::kPlayerMenu, entries);
   cached_value = value;
   cached = entries;
   return entries;
@@ -159,11 +186,21 @@ bool AnyButtonDown(const X_INPUT_GAMEPAD& pad) {
   return uint16_t(pad.buttons) != 0 || pad.left_trigger > 30 || pad.right_trigger > 30;
 }
 
+// Buttons the game plays with (A, B, X, Y, the shoulders, the d-pad). They are never kept back,
+// so they never lag: a chord with one of them (back+y) fires when its other buttons are already
+// down, and the gameplay button is hidden from that moment.
+constexpr uint16_t kGameplayButtons =
+    rex::input::X_INPUT_GAMEPAD_A | rex::input::X_INPUT_GAMEPAD_B | rex::input::X_INPUT_GAMEPAD_X |
+    rex::input::X_INPUT_GAMEPAD_Y | rex::input::X_INPUT_GAMEPAD_LEFT_SHOULDER |
+    rex::input::X_INPUT_GAMEPAD_RIGHT_SHOULDER | rex::input::X_INPUT_GAMEPAD_DPAD_UP |
+    rex::input::X_INPUT_GAMEPAD_DPAD_DOWN | rex::input::X_INPUT_GAMEPAD_DPAD_LEFT |
+    rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT;
+
 // How long each button is kept from the game after it goes down, because it may be the start of
-// an open entry: a chord's buttons for portal_menu_chord_ms, a hold entry's for the hold time.
-// That way pressing Back to open the menu doesn't also open the game's pause menu. Released
-// sooner, the game gets a short tap instead; still down afterwards, it sees the button from then
-// on. Zero for buttons that start no such entry.
+// an entry: a chord's buttons for portal_menu_chord_ms, a hold entry's for the hold time. That way
+// pressing Back to open the menu doesn't also open the game's pause menu. Released sooner, the
+// game gets a short tap instead; still down afterwards, it sees the button from then on. Zero for
+// buttons that start no such entry and for gameplay buttons.
 std::array<Clock::duration, 16> GuardTimes() {
   std::array<Clock::duration, 16> times{};
   for (const OpenEntry& entry : OpenEntries()) {
@@ -174,7 +211,7 @@ std::array<Clock::duration, 16> GuardTimes() {
     const Clock::duration time = std::chrono::milliseconds(
         entry.hold ? REXCVAR_GET(portal_menu_hold_ms) : REXCVAR_GET(portal_menu_chord_ms));
     for (int bit = 0; bit < 16; ++bit) {
-      if (entry.buttons & (1u << bit)) {
+      if ((entry.buttons & (1u << bit)) && !(kGameplayButtons & (1u << bit))) {
         times[bit] = std::max(times[bit], time);
       }
     }
@@ -210,12 +247,13 @@ uint16_t VisibleButtonsLocked(DeviceRecord& record, uint16_t buttons, uint16_t p
   return uint16_t((buttons & ~record.withheld & ~record.swallowed) | record.replay);
 }
 
-// Updates the open-button state of one device from its latest raw state. Returns true when the
-// open button fired, with the entry's buttons in `fired_buttons`. Called with g_mutex held.
-bool ObserveLocked(DeviceRecord& record, const X_INPUT_GAMEPAD& pad, uint16_t* fired_buttons) {
+// Updates the button-entry state of one device from its latest raw state. Returns the action whose
+// entry fired, with the entry's buttons in `fired_buttons`. Called with g_mutex held.
+std::optional<ButtonAction> ObserveLocked(DeviceRecord& record, const X_INPUT_GAMEPAD& pad,
+                                          uint16_t* fired_buttons) {
   const uint16_t buttons = pad.buttons;
   const auto now = Clock::now();
-  bool fired = false;
+  std::optional<ButtonAction> fired;
   bool any_chord_down = false;
   for (const OpenEntry& entry : OpenEntries()) {
     const bool down = (buttons & entry.buttons) == entry.buttons;
@@ -239,8 +277,8 @@ bool ObserveLocked(DeviceRecord& record, const X_INPUT_GAMEPAD& pad, uint16_t* f
         entry_fired = true;
       }
     }
-    if (entry_fired) {
-      fired = true;
+    if (entry_fired && !fired) {
+      fired = entry.action;
       *fired_buttons |= entry.buttons;
     }
   }
@@ -316,6 +354,16 @@ class MenuInputDriver final : public InputDriver {
     if (hide) {
       std::memset(&state.gamepad, 0, sizeof(state.gamepad));
     }
+    if (!g_menu_open.load()) {
+      std::lock_guard lock(g_mutex);
+      DeviceRecord& record = g_devices[uint64_t(id)];
+      const auto now = Clock::now();
+      if (record.tap && now >= record.tap_until) {
+        record.tap = 0;
+      } else if (record.tap && now >= record.tap_from) {
+        state.gamepad.buttons = uint16_t(uint16_t(state.gamepad.buttons) | record.tap);
+      }
+    }
     if (out_state) {
       *out_state = state;
     }
@@ -340,9 +388,9 @@ class MenuInputDriver final : public InputDriver {
   }
 
  private:
-  // Updates the open-button state of a device; calls the open handler and returns true when it
-  // fired. `hide` is set while the device must stay hidden after the menu closed, `visible` to
-  // the buttons the game may see.
+  // Updates the button-entry state of a device; calls the action's handler and returns true when
+  // an entry fired. `hide` is set while the device must stay hidden after the menu closed,
+  // `visible` to the buttons the game may see.
   bool Observe(DeviceId id, const X_INPUT_GAMEPAD& pad, bool* hide, uint16_t* visible) {
     bool fire = false;
     uint32_t user = 0;
@@ -353,7 +401,8 @@ class MenuInputDriver final : public InputDriver {
       record.driver = this;
       const uint16_t previous = record.last_buttons;
       uint16_t fired_buttons = 0;
-      fire = ObserveLocked(record, pad, &fired_buttons) && !g_menu_open.load();
+      const std::optional<ButtonAction> action = ObserveLocked(record, pad, &fired_buttons);
+      fire = action && !g_menu_open.load();
       record.swallowed |= fired_buttons;
       record.withheld &= uint16_t(~fired_buttons);
       const uint16_t shown = VisibleButtonsLocked(record, pad.buttons, previous, Clock::now());
@@ -366,7 +415,7 @@ class MenuInputDriver final : public InputDriver {
         }
       }
       user = UserOfLocked(record);
-      if (fire) handler = g_open_handler;
+      if (fire) handler = g_handlers[size_t(*action)];
     }
     if (fire && handler) {
       handler(id, user);
@@ -433,6 +482,7 @@ class TrackingAssignment final : public rex::input::DeviceAssignment {
       DeviceRecord& record = g_devices[uint64_t(info.id)];
       record.ordinal = info.ordinal;
       record.synthetic = info.synthetic;
+      record.name = info.name;
       devices_.push_back(info.id);
       g_connected.push_back(info.id);
     }
@@ -498,9 +548,13 @@ std::unique_ptr<InputDriver> WrapForPortalMenu(std::unique_ptr<InputDriver> driv
 
 namespace menu_input {
 
-void SetOpenHandler(std::function<void(DeviceId, uint32_t)> handler) {
+void SetButtonHandler(ButtonAction action, std::function<void(DeviceId, uint32_t)> handler) {
   std::lock_guard lock(g_mutex);
-  g_open_handler = std::move(handler);
+  g_handlers[size_t(action)] = std::move(handler);
+}
+
+void SetOpenHandler(std::function<void(DeviceId, uint32_t)> handler) {
+  SetButtonHandler(ButtonAction::kPortalMenu, std::move(handler));
 }
 
 void SetMenuOpen(bool open) {
@@ -579,13 +633,54 @@ void SetDevicePlayer(DeviceId device, std::optional<uint32_t> user) {
   g_devices[uint64_t(device)].forced_user = user;
 }
 
-bool IsOpenChord(uint16_t buttons) {
+void TapButton(uint32_t user, uint16_t button) {
+  std::lock_guard lock(g_mutex);
+  const auto now = Clock::now();
+  for (DeviceId id : g_connected) {
+    auto it = g_devices.find(uint64_t(id));
+    if (it == g_devices.end() || UserOfLocked(it->second) != user) {
+      continue;
+    }
+    it->second.tap = button;
+    it->second.tap_from = now + std::chrono::milliseconds(100);
+    it->second.tap_until = now + std::chrono::milliseconds(260);
+  }
+}
+
+bool IsActionChord(ButtonAction action, uint16_t buttons) {
   for (const OpenEntry& entry : OpenEntries()) {
-    if ((buttons & entry.buttons) == entry.buttons) {
+    if (entry.action == action && (buttons & entry.buttons) == entry.buttons) {
       return true;
     }
   }
   return false;
+}
+
+bool IsOpenChord(uint16_t buttons) { return IsActionChord(ButtonAction::kPortalMenu, buttons); }
+
+std::vector<ConnectedDevice> ConnectedDevices() {
+  std::lock_guard lock(g_mutex);
+  std::vector<ConnectedDevice> devices;
+  for (DeviceId id : g_connected) {
+    auto it = g_devices.find(uint64_t(id));
+    if (it == g_devices.end() || !it->second.driver) {
+      continue;
+    }
+    const DeviceRecord& record = it->second;
+    DeviceRecord unmoved = record;
+    unmoved.forced_user.reset();
+    ConnectedDevice device;
+    device.id = id;
+    device.name = record.name;
+    device.slot = record.ordinal;
+    device.user = UserOfLocked(record);
+    device.natural_user = UserOfLocked(unmoved);
+    device.keyboard = record.keyboard;
+    device.pollable = !record.keyboard && record.driver->pollable();
+    device.reassigned = record.forced_user.has_value();
+    devices.push_back(std::move(device));
+  }
+  return devices;
 }
 
 }  // namespace menu_input

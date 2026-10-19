@@ -9,11 +9,15 @@
 // start an open entry (Back for back+start or hold_back) reach the game only once it's clear
 // they don't open the menu, so Back doesn't open the game's pause menu on the way.
 // keyboard_player picks which player the keyboard plays as.
+//
+// Besides the portal menu, the same kind of button entries take the item off the portal
+// (portal_item_off_buttons) and open the player menu (player_menu_buttons).
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <rex/cvar.h>
@@ -28,6 +32,8 @@ class IInputSystem;
 }  // namespace rex::system
 
 REXCVAR_DECLARE(std::string, portal_menu_open_buttons);
+REXCVAR_DECLARE(std::string, portal_item_off_buttons);
+REXCVAR_DECLARE(std::string, player_menu_buttons);
 
 namespace skylanders {
 
@@ -43,8 +49,18 @@ std::unique_ptr<rex::input::InputDriver> WrapForPortalMenu(
 
 namespace menu_input {
 
-// Called on a game input thread when a controller's open button fires while the menu is closed,
-// with the device and the player (guest user index) it belongs to.
+// What a button entry does.
+enum class ButtonAction {
+  kPortalMenu,  // portal_menu_open_buttons
+  kItemOff,     // portal_item_off_buttons
+  kPlayerMenu,  // player_menu_buttons
+};
+
+// Called on a game input thread when a controller's button entry for `action` fires while no menu
+// is open, with the device and the player (guest user index) it belongs to.
+void SetButtonHandler(ButtonAction action,
+                      std::function<void(rex::input::DeviceId device, uint32_t user)> handler);
+// Same as SetButtonHandler(ButtonAction::kPortalMenu, handler).
 void SetOpenHandler(std::function<void(rex::input::DeviceId device, uint32_t user)> handler);
 
 // While open, the game sees every wrapped device as a neutral controller. Closing keeps hiding a
@@ -78,9 +94,30 @@ std::vector<rex::input::DeviceId> PadsOfUser(uint32_t user);
 // second player.
 void SetDevicePlayer(rex::input::DeviceId device, std::optional<uint32_t> user);
 
+// Shows the game a short press of `button` (X_INPUT_GAMEPAD_*) on every device of `user`, a moment
+// from now and even while the device is still hidden after a menu: the menu presses the game's own
+// buttons with it (B "leave the game" on the portal screen).
+void TapButton(uint32_t user, uint16_t button);
+
 // True when this button set fires the open button (used by the menu to close again with the
 // same button). Edge detection is the caller's job.
 bool IsOpenChord(uint16_t buttons);
+// The same for any action's entries.
+bool IsActionChord(ButtonAction action, uint16_t buttons);
+
+// A device the input system has now, for the player menu.
+struct ConnectedDevice {
+  rex::input::DeviceId id;
+  std::string name;
+  uint32_t slot = 0;       // connection order
+  uint32_t user = 0;       // the player it plays as now
+  uint32_t natural_user = 0;  // the player it plays as when nobody moved it
+  bool keyboard = false;   // the keyboard/mouse emulation
+  bool pollable = false;   // ReadPad works for it
+  bool reassigned = false;  // moved with SetDevicePlayer
+};
+// Controllers, the keyboard and other wrapped devices (a test script), in connection order.
+std::vector<ConnectedDevice> ConnectedDevices();
 
 }  // namespace menu_input
 }  // namespace skylanders
