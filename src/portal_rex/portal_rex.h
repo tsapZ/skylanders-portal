@@ -1,6 +1,8 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
+#include <vector>
 #include <optional>
 #include <span>
 #include <string>
@@ -65,6 +67,15 @@ bool CreateAndPlaceVillainTrap(int slot, const portal::TrapVillain& villain);
 // The active software portal, for read-only status queries (HasFigure/Figure) from the overlay.
 // nullptr if portal_mode is not "software".
 portal::SoftwarePortal* GetSoftwarePortal();
+
+// portal_mode "hybrid": the UIDs of the figures standing on the real portal now (each has a copy
+// in the emulated portal), and whether an emulated slot holds such a copy. Empty / false in the
+// other modes. Any thread.
+std::vector<uint32_t> RealPortalUids();
+bool IsRealPortalCopy(int slot);
+// Called on the bridge's thread when a figure from the real portal arrived in an emulated slot,
+// e.g. so the portal menu can give it to a player.
+void SetRealFigureArrivedHandler(std::function<void(int slot)> handler);
 
 // The active USB portal, for read-only status queries (FigurePresent/DetectedIdVariant) from the
 // overlay. nullptr if portal_mode is not "usb" or no device was found.

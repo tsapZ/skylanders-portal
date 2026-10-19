@@ -36,6 +36,7 @@
 #include "portal/figure_file.h"
 #include "portal/figure_info.h"
 #include "portal/figure_stats.h"
+#include "portal/hybrid/real_portal_bridge.h"
 #include "portal/software/software_portal.h"
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
@@ -147,6 +148,10 @@ enum class Text {
   kCheckStays,
   kCheckContinue,
   kCheckToggle,
+  kCheckRealPortal,
+  kOnRealPortal,
+  kRealSidekick,
+  kRealItem,
   kCount,
 };
 
@@ -230,6 +235,10 @@ constexpr const char* kEnglish[] = {
     "Stays",
     "Continue",
     "Off / stays",
+    "on the real portal",
+    "This figure is on the real portal.",
+    "A sidekick is on the real portal: lift it off there first.",
+    "An item is on the real portal: lift it off there first.",
 };
 constexpr const char* kGerman[] = {
     "PORTAL OF POWER",
@@ -313,6 +322,10 @@ constexpr const char* kGerman[] = {
     "Bleibt",
     "Fortfahren",
     "Runter / bleibt",
+    "auf dem echten Portal",
+    "Diese Figur steht auf dem echten Portal.",
+    "Ein Sidekick steht auf dem echten Portal: Nimm ihn dort zuerst runter.",
+    "Ein Item steht auf dem echten Portal: Nimm es dort zuerst runter.",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -1369,6 +1382,27 @@ const SkylanderInfo* FigureIn(int slot) {
 
 bool IsItem(const SkylanderInfo* sky) { return sky && sky->category == "Items"; }
 
+// portal_mode "hybrid": whether this figure file is a figure standing on the real portal (the same
+// UID). Two copies of one figure would overwrite each other's progress, so the menu doesn't put
+// it on.
+bool OnRealPortal(const std::filesystem::path& path) {
+  const std::vector<uint32_t> uids = RealPortalUids();
+  if (uids.empty()) return false;
+  const std::optional<portal::FigureData> data = portal::LoadFigureFile(path);
+  return data && std::find(uids.begin(), uids.end(), portal::RealPortalBridge::UidOf(*data)) !=
+                     uids.end();
+}
+
+// Whether a figure like that (a sidekick, an item) stands on the real portal.
+bool RealPortalHas(bool (*is)(const SkylanderInfo*)) {
+  for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
+    if (IsRealPortalCopy(slot) && is(FigureIn(slot))) return true;
+  }
+  return false;
+}
+
+void ShowToast(std::string text);
+
 // The player whose figure is in a slot. Figures placed some other way (start-up figure, the
 // developer tools) belong to player 1.
 uint32_t OwnerOf(int slot) {
@@ -1819,6 +1853,17 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   uint32_t user() const { return user_; }
   bool auto_opened() const { return auto_opened_; }
+
+  // hybrid: the player put a figure on the real portal while the menu was open, so that one is
+  // theirs now; the menu closes without putting the lifted figure back.
+  void RealFigurePlaced() {
+    if (state_ == State::kWaiting || state_ == State::kDone) return;
+    pending_paths_.clear();
+    restore_ = false;
+    item_change_ = sidekick_change_ = false;
+    state_ = State::kWaiting;
+    REXLOG_INFO("Portal menu: player {} put a figure on the real portal", user_ + 1);
+  }
 
   // The game started zooming out to the portal: come up shortly before its portal screen.
   void RevealSoon() {
@@ -2405,6 +2450,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       item_path_.reset();
       REXLOG_INFO("Portal menu: player {} takes off {}", user_ + 1, item.name);
     } else {
+      if (RealPortalHas(IsItem)) {
+        ShowToast(T(Text::kRealItem));
+        return;
+      }
       std::optional<std::filesystem::path> path;
       if (const OwnedFigure* owned = library_.Owned(&item)) {
         path = owned->path;
@@ -2413,6 +2462,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       }
       if (!path) {
         REXLOG_WARN("Portal menu: could not create a figure file for {}", item.name);
+        return;
+      }
+      if (OnRealPortal(*path)) {
+        ShowToast(T(Text::kOnRealPortal));
         return;
       }
       item_path_ = path;
@@ -2429,6 +2482,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       sidekick_path_.reset();
       REXLOG_INFO("Portal menu: player {} takes off sidekick {}", user_ + 1, sidekick.name);
     } else {
+      if (RealPortalHas(IsSidekick)) {
+        ShowToast(T(Text::kRealSidekick));
+        return;
+      }
       std::optional<std::filesystem::path> path;
       if (const OwnedFigure* owned = library_.Owned(&sidekick)) {
         path = owned->path;
@@ -2437,6 +2494,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       }
       if (!path) {
         REXLOG_WARN("Portal menu: could not create a figure file for {}", sidekick.name);
+        return;
+      }
+      if (OnRealPortal(*path)) {
+        ShowToast(T(Text::kOnRealPortal));
         return;
       }
       sidekick_path_ = path;
@@ -2470,6 +2531,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   void ConfirmFiles(const std::vector<std::filesystem::path>& paths,
                     const std::vector<const SkylanderInfo*>& figures) {
     if (paths.empty()) return;
+    for (const auto& path : paths) {
+      if (OnRealPortal(path)) {
+        ShowToast(T(Text::kOnRealPortal));
+        return;
+      }
+    }
     AddRecent(user_, paths);
     pending_paths_ = paths;
     restore_ = false;
@@ -3579,14 +3646,23 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
 
   std::string KindOf(const PortalEntry& e) const {
     char text[64];
+    std::string kind;
     switch (e.kind) {
-      case PortalEntry::Kind::kItem: return T(Text::kCheckItem);
-      case PortalEntry::Kind::kSidekick: return T(Text::kCheckSidekick);
+      case PortalEntry::Kind::kItem: kind = T(Text::kCheckItem); break;
+      case PortalEntry::Kind::kSidekick: kind = T(Text::kCheckSidekick); break;
       default:
-        if (!e.player) return T(Text::kCheckStraySkylander);
-        std::snprintf(text, sizeof(text), T(Text::kCheckPlayerSkylander), *e.player + 1);
-        return text;
+        if (!e.player) {
+          kind = T(Text::kCheckStraySkylander);
+        } else {
+          std::snprintf(text, sizeof(text), T(Text::kCheckPlayerSkylander), *e.player + 1);
+          kind = text;
+        }
+        break;
     }
+    if (!e.slots.empty() && IsRealPortalCopy(e.slots[0])) {
+      kind += std::string(" \xC2\xB7 ") + T(Text::kCheckRealPortal);
+    }
+    return kind;
   }
 
   Actions ReadActions() {
@@ -3775,6 +3851,44 @@ void AutoOpenPortalMenu(uint32_t user) {
   });
 }
 
+namespace {
+
+// hybrid: a figure from the real portal arrived in `slot`. A Skylander belongs to the player whose
+// menu is open (the game waits for that player's figure, and the menu closes), else to the player
+// with the other half for a swapper half, else to the first player without a figure. Items and
+// sidekicks belong to no one, as from the menu.
+void RealFigureArrived(int slot) {
+  portal::SoftwarePortal* software = GetSoftwarePortal();
+  const SkylanderInfo* sky = FigureIn(slot);
+  if (!software || !sky || IsItem(sky) || IsSidekick(sky)) return;
+  auto has_figure = [&](uint32_t u) {
+    return std::any_of(g_player_slots[u].begin(), g_player_slots[u].end(),
+                       [&](int s) { return s != slot && software->HasFigure(s); });
+  };
+  std::optional<uint32_t> owner;
+  if (g_menu) {
+    owner = g_menu->user();
+    g_menu->RealFigurePlaced();
+  }
+  const SwapperHalf half = portal::GetSwapperHalf(*sky);
+  for (uint32_t u = 0; !owner && half != SwapperHalf::kNone && u < g_player_slots.size(); ++u) {
+    for (int s : g_player_slots[u]) {
+      const SkylanderInfo* other = s != slot && software->HasFigure(s) ? FigureIn(s) : nullptr;
+      const SwapperHalf other_half = other ? portal::GetSwapperHalf(*other) : SwapperHalf::kNone;
+      if (other_half != SwapperHalf::kNone && other_half != half) owner = u;
+    }
+  }
+  for (uint32_t u = 0; !owner && u < g_player_slots.size(); ++u) {
+    if (!has_figure(u)) owner = u;
+  }
+  for (auto& slots : g_player_slots) slots.erase(std::remove(slots.begin(), slots.end(), slot), slots.end());
+  if (!owner) return;
+  g_player_slots[*owner].push_back(slot);
+  REXLOG_INFO("Portal menu: {} from the real portal is player {}'s", sky->name, *owner + 1);
+}
+
+}  // namespace
+
 void ShowPortalCheck(uint32_t reason) {
   if (!g_app_context) return;
   g_app_context->CallInUIThread([reason] {
@@ -3869,6 +3983,9 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
   });
   menu_input::SetButtonHandler(menu_input::ButtonAction::kItemOff, [](DeviceId, uint32_t) {
     if (g_app_context) g_app_context->CallInUIThread(TakeItemOff);
+  });
+  SetRealFigureArrivedHandler([](int slot) {
+    if (g_app_context) g_app_context->CallInUIThread([slot] { RealFigureArrived(slot); });
   });
   rex::ui::RegisterBind("bind_portal_item_off", "F5",
                         "Take the item (magic item, adventure pack) off the portal", [] {

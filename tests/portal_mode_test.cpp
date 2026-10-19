@@ -11,6 +11,7 @@ int main() {
   CHECK(ParsePortalMode("NONE") == PortalMode::kNone);
 
   CHECK(ParsePortalMode("usb") == PortalMode::kUsb);
+  CHECK(ParsePortalMode("Hybrid") == PortalMode::kHybrid);
 
   // Unknown values are rejected.
   CHECK(!ParsePortalMode("").has_value());
