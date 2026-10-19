@@ -123,6 +123,11 @@ struct HatInfo {
 using HatInfoProvider = std::function<std::shared_ptr<const HatInfo>(uint16_t hat)>;
 void SetHatInfoProvider(HatInfoProvider provider);
 
+// How long a magic item's effect lasts in the game, in seconds, for the details view; nullopt
+// while unknown and for an item that acts at once. Same rules as the figure pictures.
+using ItemDurationProvider = std::function<std::optional<int>(uint16_t id)>;
+void SetItemDurationProvider(ItemDurationProvider provider);
+
 // True while the game is busy with a figure change (its "place your Skylander" sequence). Putting
 // an item on or taking it off waits until this is false, so the player's Skylander is back in
 // the game first. Called from a background thread. Without it, item changes wait 0.7 s.

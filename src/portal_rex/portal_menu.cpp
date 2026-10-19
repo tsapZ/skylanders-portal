@@ -129,6 +129,9 @@ enum class Text {
   kNoUpgrades,
   kTopLevelShort,
   kNoProgress,
+  kSidekickInfo,
+  kItemInfo,
+  kItemDuration,
   kCount,
 };
 
@@ -192,6 +195,10 @@ constexpr const char* kEnglish[] = {
     "No upgrades bought yet",
     "MAX",
     "No progress saved yet: the game writes it onto the figure once it has played with it.",
+    "A sidekick goes on the portal next to your Skylander and follows it around. It earns no "
+    "experience and saves nothing on the figure.",
+    "A magic item takes effect as soon as it goes on the portal.",
+    "Lasts %d seconds",
 };
 constexpr const char* kGerman[] = {
     "PORTAL OF POWER",
@@ -255,6 +262,10 @@ constexpr const char* kGerman[] = {
     "Noch keine Upgrades gekauft",
     "MAX",
     "Noch kein Spielstand: Das Spiel speichert ihn auf der Figur, sobald es mit ihr gespielt hat.",
+    "Ein Sidekick kommt neben deinem Skylander aufs Portal und l\xC3\xA4uft ihm hinterher. Er sammelt "
+    "keine Erfahrung und speichert nichts auf der Figur.",
+    "Ein magischer Gegenstand wirkt, sobald er aufs Portal kommt.",
+    "Wirkt %d Sekunden",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -1073,6 +1084,7 @@ FigureNameProvider g_name_provider;
 ArtImageProvider g_art_provider;
 FigureUpgradesProvider g_upgrades_provider;
 HatInfoProvider g_hat_info_provider;
+ItemDurationProvider g_item_duration_provider;
 rex::ui::ImmediateDrawer* g_immediate_drawer = nullptr;
 // Uploaded pictures by figure. UI thread only.
 std::unordered_map<uint32_t, std::unique_ptr<rex::ui::ImmediateTexture>> g_textures;
@@ -1153,6 +1165,15 @@ std::shared_ptr<const HatInfo> HatInfoFor(uint16_t hat) {
   return provider ? provider(hat) : nullptr;
 }
 
+std::optional<int> ItemDurationFor(const SkylanderInfo& sky) {
+  ItemDurationProvider provider;
+  {
+    std::lock_guard lock(g_provider_mutex);
+    provider = g_item_duration_provider;
+  }
+  return provider ? provider(sky.id) : std::nullopt;
+}
+
 std::shared_ptr<const FigureUpgrades> UpgradesFor(const SkylanderInfo& sky) {
   FigureUpgradesProvider provider;
   {
@@ -1220,7 +1241,7 @@ std::vector<std::string> StatsLines(const portal::FigureStats& s) {
   return lines;
 }
 
-// "+2 Rüstung", "+0.5 ..." for a hat stat.
+// "+2 Armor", "+0.5 ..." for a hat stat.
 std::string StatText(const HatStat& stat) {
   char text[160];
   if (stat.value == float(int(stat.value))) {
@@ -3046,11 +3067,16 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const SkylanderInfo* sky = figures[detail_half_];
     const OwnedFigure* owned = library_.Owned(sky);
     const portal::FigureStats* stats = owned && owned->stats && !IsItem(sky) ? &*owned->stats : nullptr;
-    const auto upgrades = !IsItem(sky) && !IsSidekick(sky) ? UpgradesFor(*sky) : nullptr;
+    // Items and sidekicks keep nothing on the figure: a smaller panel with what they do.
+    const bool simple = IsItem(sky) || IsSidekick(sky);
+    const auto upgrades = !simple ? UpgradesFor(*sky) : nullptr;
 
     const float avail_w = area1.x - area0.x - S(24), avail_h = area1.y - area0.y - S(24);
     ImVec2 a, b;
-    DrawOverlayPanel(dl, area0, area1, {std::min(S(1240), avail_w), std::min(S(800), avail_h)}, a, b);
+    DrawOverlayPanel(dl, area0, area1,
+                     simple ? ImVec2{std::min(S(860), avail_w), std::min(S(330), avail_h)}
+                            : ImVec2{std::min(S(1240), avail_w), std::min(S(800), avail_h)},
+                     a, b);
 
     // Header: picture, name, version / element / game, the halves.
     const Element element = portal::FigureElement(*sky);
@@ -3077,6 +3103,24 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const float top = a.y + S(126);
     dl->AddLine({a.x + S(24), top - S(8)}, {b.x - S(24), top - S(8)}, Rgba(255, 255, 255, 30),
                 S(1.5f));
+
+    if (simple) {
+      const float tx = a.x + S(28), tw = b.x - a.x - S(56);
+      float ty = top + S(10);
+      const char* info = T(IsItem(sky) ? Text::kItemInfo : Text::kSidekickInfo);
+      Label(dl, BoldFont(), S(20), {tx, ty}, kWhite, info, tw);
+      ty += TextSize(BoldFont(), S(20), info, tw).y + S(14);
+      if (const auto seconds = IsItem(sky) ? ItemDurationFor(*sky) : std::nullopt) {
+        char text[64];
+        std::snprintf(text, sizeof(text), T(Text::kItemDuration), *seconds);
+        Label(dl, BoldFont(), S(20), {tx, ty}, kGold, text, tw);
+      }
+      if (owned) {
+        Label(dl, BoldFont(), S(15), {tx, b.y - S(36)}, Rgba(160, 170, 205),
+              std::string(T(Text::kFile)) + ": " + PathUtf8(owned->path.filename()), tw);
+      }
+      return;
+    }
 
     // Left column.
     const float left_w = S(380);
@@ -3411,6 +3455,11 @@ void SetFigureUpgradesProvider(FigureUpgradesProvider provider) {
 void SetHatInfoProvider(HatInfoProvider provider) {
   std::lock_guard lock(g_provider_mutex);
   g_hat_info_provider = std::move(provider);
+}
+
+void SetItemDurationProvider(ItemDurationProvider provider) {
+  std::lock_guard lock(g_provider_mutex);
+  g_item_duration_provider = std::move(provider);
 }
 
 void SetGameBusyProvider(std::function<bool()> busy) {
