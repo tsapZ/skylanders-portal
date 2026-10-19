@@ -120,7 +120,6 @@ enum class Text {
   kHatNumber,
   kLastPlayed,
   kPlayedOn,
-  kWithYou,
   kBringAlong,
   kXp,
   kStartingAttacks,
@@ -132,6 +131,22 @@ enum class Text {
   kSidekickInfo,
   kItemInfo,
   kItemDuration,
+  kCheckTitleSkylanders,
+  kCheckTitleItems,
+  kCheckTitleOther,
+  kCheckHint,
+  kCheckSidekicks,
+  kCheckItems,
+  kCheckSkylanders,
+  kCheckPlayerSkylander,
+  kCheckStraySkylander,
+  kCheckItem,
+  kCheckSidekick,
+  kCheckTooMany,
+  kCheckOff,
+  kCheckStays,
+  kCheckContinue,
+  kCheckToggle,
   kCount,
 };
 
@@ -186,7 +201,6 @@ constexpr const char* kEnglish[] = {
     "hat no. %u",
     "Last played",
     "on",
-    "With you",
     "Bring along",
     "XP",
     "Starting attacks",
@@ -195,10 +209,27 @@ constexpr const char* kEnglish[] = {
     "No upgrades bought yet",
     "MAX",
     "No progress saved yet: the game writes it onto the figure once it has played with it.",
-    "A sidekick goes on the portal next to your Skylander and follows it around. It earns no "
-    "experience and saves nothing on the figure.",
+    "A sidekick goes on the portal next to the Skylanders and tags along. The game takes one "
+    "at a time: a new one replaces the one there. It earns no experience and saves nothing on "
+    "the figure.",
     "A magic item takes effect as soon as it goes on the portal.",
     "Lasts %d seconds",
+    "Too many Skylanders on the portal",
+    "Too many items or sidekicks on the portal",
+    "The game has a problem with the figures on the portal",
+    "Choose what to take off, then Continue. This is on the portal:",
+    "%u sidekicks: the game takes only one.",
+    "%u items: the game takes only one.",
+    "%u Skylanders: one per player.",
+    "Player %u's Skylander",
+    "Skylander without a player",
+    "Item",
+    "Sidekick",
+    "Too many",
+    "Off",
+    "Stays",
+    "Continue",
+    "Off / stays",
 };
 constexpr const char* kGerman[] = {
     "PORTAL OF POWER",
@@ -253,7 +284,6 @@ constexpr const char* kGerman[] = {
     "Hut Nr. %u",
     "Zuletzt gespielt",
     "auf",
-    "Dabei",
     "Mitnehmen",
     "EP",
     "Grundangriffe",
@@ -262,10 +292,27 @@ constexpr const char* kGerman[] = {
     "Noch keine Upgrades gekauft",
     "MAX",
     "Noch kein Spielstand: Das Spiel speichert ihn auf der Figur, sobald es mit ihr gespielt hat.",
-    "Ein Sidekick kommt neben deinem Skylander aufs Portal und l\xC3\xA4uft ihm hinterher. Er sammelt "
-    "keine Erfahrung und speichert nichts auf der Figur.",
+    "Ein Sidekick kommt neben die Skylander aufs Portal und l\xC3\xA4uft mit. Das Spiel nimmt "
+    "immer nur einen: ein neuer ersetzt den, der schon dort ist. Er sammelt keine Erfahrung "
+    "und speichert nichts auf der Figur.",
     "Ein magischer Gegenstand wirkt, sobald er aufs Portal kommt.",
     "Wirkt %d Sekunden",
+    "Zu viele Skylander auf dem Portal",
+    "Zu viele Items oder Sidekicks auf dem Portal",
+    "Das Spiel hat ein Problem mit den Figuren auf dem Portal",
+    "W\xC3\xA4hle aus, was runter soll, dann Fortfahren. Das ist auf dem Portal:",
+    "%u Sidekicks: Das Spiel nimmt nur einen.",
+    "%u Items: Das Spiel nimmt nur eins.",
+    "%u Skylander: einer pro Spieler.",
+    "Skylander von Spieler %u",
+    "Skylander ohne Spieler",
+    "Item",
+    "Sidekick",
+    "Zu viele",
+    "Runter",
+    "Bleibt",
+    "Fortfahren",
+    "Runter / bleibt",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -991,6 +1038,17 @@ class Library {
 
   const std::vector<Tab>& tabs() const { return tabs_; }
   const std::vector<Character>& characters() const { return characters_; }
+
+  // The index of the character (or item) a figure is a version of.
+  std::optional<size_t> CharacterIndex(const SkylanderInfo* sky) const {
+    if (!sky) return std::nullopt;
+    for (size_t i = 0; i < characters_.size(); ++i) {
+      for (const Version& v : characters_[i].versions) {
+        if (v.sky == sky || v.bottom == sky) return i;
+      }
+    }
+    return std::nullopt;
+  }
   const std::vector<RecentEntry>& recent() const { return recent_; }
 
   const OwnedFigure* Owned(const SkylanderInfo* sky) const {
@@ -1275,21 +1333,18 @@ std::array<std::vector<int>, rex::input::kMaxGuestUsers> g_player_slots;
 // by all players: any player can replace it or take it off, and it stays on the portal when a
 // player's figure is lifted.
 int g_item_slot = -1;
-// Each player's sidekick, or -1. In Giants and Swap Force a sidekick only tags along behind the
-// player's Skylander (it stores no data and isn't played), so like an item it goes on the portal
-// next to the Skylander and stays there when the Skylander is lifted.
-std::array<int, rex::input::kMaxGuestUsers> g_sidekick_slots = [] {
-  std::array<int, rex::input::kMaxGuestUsers> slots;
-  slots.fill(-1);
-  return slots;
-}();
+// The slot of the sidekick put on through the menu, or -1, and the player who brought it. In
+// Giants and Swap Force a sidekick only tags along behind a Skylander (it stores no data and isn't
+// played), so like an item it goes on the portal next to the Skylanders and stays there when one
+// is lifted. The game takes one at a time: with a second one it shows "too many Mini Skylanders on
+// the portal" until one goes off (two players, one sidekick each, 2026-10-19). So there is one,
+// shared like the item: any player can bring another (it replaces the first) or take it off.
+int g_sidekick_slot = -1;
+uint32_t g_sidekick_user = 0;
 
 bool IsItemSlot(int slot) { return slot >= 0 && slot == g_item_slot; }
 
-bool IsSidekickSlot(int slot) {
-  return slot >= 0 && std::find(g_sidekick_slots.begin(), g_sidekick_slots.end(), slot) !=
-                          g_sidekick_slots.end();
-}
+bool IsSidekickSlot(int slot) { return slot >= 0 && slot == g_sidekick_slot; }
 
 // A slot that belongs to no player's Skylander: the item or a sidekick.
 bool IsExtraSlot(int slot) { return IsItemSlot(slot) || IsSidekickSlot(slot); }
@@ -1435,11 +1490,10 @@ const SkylanderInfo* PortalItem() {
   return FigureIn(slot);
 }
 
-// A player's sidekick put on through the menu, if it's still there.
-const SkylanderInfo* PlayerSidekick(uint32_t user) {
+// The sidekick put on through the menu, if it's still there.
+const SkylanderInfo* PortalSidekick() {
   portal::SoftwarePortal* software = GetSoftwarePortal();
-  if (user >= g_sidekick_slots.size()) return nullptr;
-  int& slot = g_sidekick_slots[user];
+  int& slot = g_sidekick_slot;
   if (!software || slot < 0 || !software->HasFigure(slot)) {
     slot = -1;
     return nullptr;
@@ -1447,7 +1501,7 @@ const SkylanderInfo* PlayerSidekick(uint32_t user) {
   return FigureIn(slot);
 }
 
-// Puts an item (or a player's sidekick) on the portal in place of the previous one; no path just
+// Puts an item (or the sidekick) on the portal in place of the previous one; no path just
 // takes the previous one off. A different slot each time, so the game sees the old one leave.
 void SetExtraFigure(int& slot, uint32_t user, const std::optional<std::filesystem::path>& path) {
   portal::SoftwarePortal* software = GetSoftwarePortal();
@@ -1466,8 +1520,9 @@ void SetPortalItem(uint32_t user, const std::optional<std::filesystem::path>& pa
   SetExtraFigure(g_item_slot, user, path);
 }
 
-void SetPlayerSidekick(uint32_t user, const std::optional<std::filesystem::path>& path) {
-  if (user < g_sidekick_slots.size()) SetExtraFigure(g_sidekick_slots[user], user, path);
+void SetPortalSidekick(uint32_t user, const std::optional<std::filesystem::path>& path) {
+  SetExtraFigure(g_sidekick_slot, user, path);
+  g_sidekick_user = user;
 }
 
 // An item change waits until the player's Skylander is back in the game: putting the figure back
@@ -1479,7 +1534,7 @@ struct PendingItem {
   uint32_t user = 0;
   bool item = false;  // an item change is pending
   std::optional<std::filesystem::path> path;  // nullopt: take it off
-  bool sidekick = false;  // a sidekick change for sidekick_user is pending
+  bool sidekick = false;  // a sidekick change by sidekick_user is pending
   uint32_t sidekick_user = 0;
   std::optional<std::filesystem::path> sidekick_path;
   uint64_t serial = 0;
@@ -1521,7 +1576,7 @@ void ItemThread() {
       if (g_item_app_context) {
         g_item_app_context->CallInUIThread([item] {
           if (item.item) SetPortalItem(item.user, item.path);
-          if (item.sidekick) SetPlayerSidekick(item.sidekick_user, item.sidekick_path);
+          if (item.sidekick) SetPortalSidekick(item.sidekick_user, item.sidekick_path);
         });
       }
       break;
@@ -1696,6 +1751,20 @@ std::string ComboName(const std::vector<const SkylanderInfo*>& figures) {
   return FigureName(*figures[0]);
 }
 
+// A small rounded label; returns its width.
+float Pill(ImDrawList* dl, ImVec2 pos, std::string_view text, ImU32 bg, ImU32 fg,
+           float size = 14) {
+  const ImVec2 ts = TextSize(BoldFont(), S(size), text);
+  const ImVec2 end{pos.x + ts.x + S(14), pos.y + ts.y + S(4)};
+  dl->AddRectFilled(pos, end, bg, S(8));
+  Label(dl, BoldFont(), S(size), {pos.x + S(7), pos.y + S(2)}, fg, text);
+  return end.x - pos.x;
+}
+
+float PillWidth(std::string_view text, float size = 14) {
+  return TextSize(BoldFont(), S(size), text).x + S(14);
+}
+
 class PortalMenuDialog final : public rex::ui::ImGuiDialog {
  public:
   PortalMenuDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> on_done, DeviceId device,
@@ -1708,6 +1777,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         auto_opened_(auto_opened) {
     g_german = rex::cvar::GetFlagByName("language") == "german";
     menu_input::SetMenuOpen(true);
+    // The settings menu (F4, Back + RB) closes it like B: the lifted figure goes back.
+    menu_input::SetMenuCloser([this] { Cancel(); });
     // The keyboard steers the menu of the player it plays as.
     const std::optional<DeviceId> keyboard = menu_input::KeyboardDevice();
     keyboard_controls_ = keyboard_ || (keyboard && menu_input::UserOf(*keyboard) == user_);
@@ -1721,7 +1792,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         if (!name.empty()) taken_.emplace(name, owner);
       }
       current_item_ = PortalItem();
-      current_sidekick_ = PlayerSidekick(user_);
+      current_sidekick_ = PortalSidekick();
+      // Recent starts with what is on the portal besides the Skylanders, so A takes it off.
+      for (const SkylanderInfo* extra : {current_item_, current_sidekick_}) {
+        if (auto index = library_.CharacterIndex(extra)) extras_.push_back(*index);
+      }
       OpenFirstTab();
     }
     // Opened with a button, the figure was just lifted: the menu stays hidden while the game
@@ -1855,10 +1930,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     return busy && !busy();
   }
 
-  // Recent opens first; with nothing recent, the lifted figure's character.
+  // Recent opens first, on its first Skylander (the item and sidekick cards before it are there
+  // to take off, not to be picked by a quick A); with nothing in it, the lifted figure's character.
   void OpenFirstTab() {
     tab_ = element_ = selected_ = scroll_row_ = 0;
-    if (library_.recent().empty() && library_.tabs().size() > 1) {
+    if (!library_.recent().empty()) selected_ = extras_.size();
+    if (library_.recent().empty() && extras_.empty() && library_.tabs().size() > 1) {
       tab_ = 1;
       for (const LiftedFigure& figure : lifted_) {
         if (figure.sky && library_.Locate(figure.sky, tab_, element_, selected_)) break;
@@ -1914,20 +1991,23 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   size_t ItemCount() const {
     const Tab& tab = CurrentTab();
-    if (tab.recent) return library_.recent().size();
+    if (tab.recent) return extras_.size() + library_.recent().size();
     return tab.rows.empty() ? 0 : tab.rows[element_].size();
   }
 
   const Character* SelectedCharacter() const {
     const Tab& tab = CurrentTab();
+    if (tab.recent && selected_ < extras_.size()) return &library_.characters()[extras_[selected_]];
     if (tab.recent || tab.rows.empty() || tab.rows[element_].empty()) return nullptr;
     const auto& chars = tab.rows[element_];
     return &library_.characters()[chars[std::min(selected_, chars.size() - 1)]];
   }
 
   const RecentEntry* SelectedRecent() const {
-    if (!CurrentTab().recent || library_.recent().empty()) return nullptr;
-    return &library_.recent()[std::min(selected_, library_.recent().size() - 1)];
+    if (!CurrentTab().recent || library_.recent().empty() || selected_ < extras_.size()) {
+      return nullptr;
+    }
+    return &library_.recent()[std::min(selected_ - extras_.size(), library_.recent().size() - 1)];
   }
 
   // The player who has this character on the portal, if it's another one.
@@ -2254,8 +2334,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     pending_paths_.clear();
     restore_ = false;
     item_change_ = false;
-    // A player who leaves takes their sidekick along.
-    sidekick_change_ = current_sidekick_ != nullptr;
+    // A player who leaves takes the sidekick along if they brought it.
+    sidekick_change_ = current_sidekick_ != nullptr && g_sidekick_user == user_;
     sidekick_path_.reset();
     leave_ = true;
     state_ = State::kWaiting;
@@ -2342,8 +2422,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     StartCancel();
   }
 
-  // A sidekick goes on next to the player's Skylander, or off again if it is the one already with
-  // them; the Skylander stays.
+  // A sidekick goes on next to the Skylanders in place of the one there, or off again if it is
+  // that one; the player's Skylander stays.
   void ToggleSidekick(const SkylanderInfo& sidekick) {
     if (current_sidekick_ && current_sidekick_->id == sidekick.id) {
       sidekick_path_.reset();
@@ -2546,8 +2626,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
           Activate();
         }
       }
-      if (tab.recent) {
-        DrawRecentCard(dl, a, b, library_.recent()[i], i == selected_);
+      if (tab.recent && i < extras_.size()) {
+        DrawCharacterCard(dl, a, b, library_.characters()[extras_[i]], i == selected_);
+      } else if (tab.recent) {
+        DrawRecentCard(dl, a, b, library_.recent()[i - extras_.size()], i == selected_);
       } else {
         DrawCharacterCard(dl, a, b, library_.characters()[tab.rows[element_][i]],
                           i == selected_);
@@ -2625,20 +2707,6 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                 selected ? S(4) : S(1.5f));
   }
 
-  // A small rounded label; returns its width.
-  float Pill(ImDrawList* dl, ImVec2 pos, std::string_view text, ImU32 bg, ImU32 fg,
-             float size = 14) {
-    const ImVec2 ts = TextSize(BoldFont(), S(size), text);
-    const ImVec2 end{pos.x + ts.x + S(14), pos.y + ts.y + S(4)};
-    dl->AddRectFilled(pos, end, bg, S(8));
-    Label(dl, BoldFont(), S(size), {pos.x + S(7), pos.y + S(2)}, fg, text);
-    return end.x - pos.x;
-  }
-
-  float PillWidth(std::string_view text, float size = 14) {
-    return TextSize(BoldFont(), S(size), text).x + S(14);
-  }
-
   // A collection tile: the picture on top, the name below and, if given, the version badge (S2,
   // LightCore) under the name. Returns the picture's rectangle.
   std::pair<ImVec2, ImVec2> DrawTile(ImDrawList* dl, ImVec2 a, ImVec2 b, Element element,
@@ -2692,7 +2760,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     if (character.swapper) Pill(dl, {p0.x + S(6), p0.y + S(6)}, "SWAP", kGold, kInk);
     if (character.sidekick && current_sidekick_ && current_sidekick_->id == shown->id) {
-      Pill(dl, {p0.x + S(6), p0.y + S(6)}, T(Text::kWithYou), Rgba(60, 170, 80), kWhite, 15);
+      const float w = PillWidth(T(Text::kOnPortal), 15);
+      Pill(dl, {(p0.x + p1.x - w) / 2, p1.y - S(30)}, T(Text::kOnPortal), Rgba(60, 170, 80),
+           kWhite, 15);
     }
     DrawElementBadge(dl, {p0.x + S(19), p1.y - S(19)}, S(15), character.element);
     if (character.versions.size() > 1) {
@@ -3287,7 +3357,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   bool restore_ = false;
   bool item_change_ = false;
   std::optional<std::filesystem::path> item_path_;
-  const SkylanderInfo* current_sidekick_ = nullptr;  // the sidekick with this player
+  const SkylanderInfo* current_sidekick_ = nullptr;  // the sidekick on the portal
+  // Recent's first cards: the item and the sidekick on the portal (character indices).
+  std::vector<size_t> extras_;
   // Details view: the half shown, the icons drawn last frame and the one under the cursor.
   struct DetailIcon {
     const FigureUpgrade* upgrade = nullptr;
@@ -3372,6 +3444,303 @@ void OpenMenu(DeviceId device, uint32_t user, bool keyboard, bool auto_opened = 
 
 std::unique_ptr<Toast> g_toast;  // UI thread only
 
+// --- Portal check -------------------------------------------------------------------------------
+
+// The game's EMagicMomentReason values the check tells apart.
+constexpr uint32_t kReasonTooManyCharacters = 1;
+constexpr uint32_t kReasonTooManyItems = 2;
+
+// What is on the emulated portal: one entry per player's Skylander (both halves of a swapper),
+// then every other figure (the item, the sidekick, figures placed some other way).
+struct PortalEntry {
+  enum class Kind { kSkylander, kItem, kSidekick } kind = Kind::kSkylander;
+  std::vector<int> slots;
+  std::vector<const SkylanderInfo*> figures;  // null for a figure the catalog doesn't know
+  std::optional<uint32_t> player;              // whose Skylander
+  bool remove = false;
+};
+
+std::vector<PortalEntry> PortalEntries() {
+  std::vector<PortalEntry> entries;
+  portal::SoftwarePortal* software = GetSoftwarePortal();
+  if (!software) return entries;
+  std::vector<bool> seen(portal::kMaxFigures, false);
+  for (uint32_t u = 0; u < g_player_slots.size(); ++u) {
+    PortalEntry entry;
+    entry.player = u;
+    for (int slot : g_player_slots[u]) {
+      if (slot < 0 || slot >= portal::kMaxFigures || seen[slot] || !software->HasFigure(slot)) {
+        continue;
+      }
+      entry.slots.push_back(slot);
+      entry.figures.push_back(FigureIn(slot));
+      seen[slot] = true;
+    }
+    if (!entry.slots.empty()) entries.push_back(std::move(entry));
+  }
+  for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
+    if (seen[slot] || !software->HasFigure(slot)) continue;
+    PortalEntry entry;
+    const SkylanderInfo* sky = FigureIn(slot);
+    if (IsItem(sky) || IsItemSlot(slot)) {
+      entry.kind = PortalEntry::Kind::kItem;
+    } else if (IsSidekick(sky) || IsSidekickSlot(slot)) {
+      entry.kind = PortalEntry::Kind::kSidekick;
+    }
+    entry.slots.push_back(slot);
+    entry.figures.push_back(sky);
+    entries.push_back(std::move(entry));
+  }
+  return entries;
+}
+
+// Opens when the game shows its portal error and stays until the player continues or closes it:
+// everything on the portal, what there is too much of marked, A marks a figure to take off,
+// Continue takes the marked ones off.
+class PortalCheckDialog final : public rex::ui::ImGuiDialog {
+ public:
+  PortalCheckDialog(rex::ui::ImGuiDrawer* drawer, uint32_t reason, std::function<void()> on_done)
+      : ImGuiDialog(drawer), reason_(reason), on_done_(std::move(on_done)) {
+    g_german = rex::cvar::GetFlagByName("language") == "german";
+    menu_input::SetMenuOpen(true);
+    menu_input::SetMenuCloser([this] { Close(); });
+    entries_ = PortalEntries();
+    for (size_t i = 0; i < entries_.size(); ++i) {
+      if (TooMany(entries_[i])) {
+        cursor_ = i;
+        break;
+      }
+    }
+    std::string list;
+    for (const PortalEntry& e : entries_) list += (list.empty() ? "" : ", ") + NameOf(e);
+    REXLOG_INFO("Portal check: the game reports a problem with the figures (reason {}); on the "
+                "portal: {}",
+                reason_, list);
+  }
+
+  ~PortalCheckDialog() override {
+    if (!done_) menu_input::SetMenuOpen(false);
+  }
+
+  void Close() {
+    if (done_) return;
+    done_ = true;
+    menu_input::SetMenuOpen(false);
+    if (on_done_) on_done_();
+  }
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    if (done_) return;
+    SetScale(io.DisplaySize.y / 1080.0f);
+    HandleInput(ReadActions());
+    if (done_) return;
+    ImGui::SetNextWindowPos({0, 0});
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    if (first_frame_) {
+      ImGui::SetNextWindowFocus();
+      first_frame_ = false;
+    }
+    ImGui::Begin("##portal_check", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const int first_vertex = dl->VtxBuffer.Size;
+    Draw(dl, io.DisplaySize);
+    FadeVertices(dl, first_vertex,
+                 std::chrono::duration<float>(Clock::now() - open_time_).count() / 0.15f);
+    ImGui::End();
+  }
+
+ private:
+  size_t Count(PortalEntry::Kind kind) const {
+    return size_t(std::count_if(entries_.begin(), entries_.end(),
+                                [&](const PortalEntry& e) { return e.kind == kind; }));
+  }
+
+  // One sidekick and one item at a time; a Skylander nobody plays, and for "too many Skylanders"
+  // every one, is for the player to look at.
+  bool TooMany(const PortalEntry& e) const {
+    switch (e.kind) {
+      case PortalEntry::Kind::kItem: return Count(PortalEntry::Kind::kItem) > 1;
+      case PortalEntry::Kind::kSidekick: return Count(PortalEntry::Kind::kSidekick) > 1;
+      default: return !e.player || reason_ == kReasonTooManyCharacters;
+    }
+  }
+
+  static std::string NameOf(const PortalEntry& e) {
+    std::vector<const SkylanderInfo*> known;
+    for (const SkylanderInfo* sky : e.figures) {
+      if (sky) known.push_back(sky);
+    }
+    return known.empty() ? std::string("?") : ComboName(known);
+  }
+
+  std::string KindOf(const PortalEntry& e) const {
+    char text[64];
+    switch (e.kind) {
+      case PortalEntry::Kind::kItem: return T(Text::kCheckItem);
+      case PortalEntry::Kind::kSidekick: return T(Text::kCheckSidekick);
+      default:
+        if (!e.player) return T(Text::kCheckStraySkylander);
+        std::snprintf(text, sizeof(text), T(Text::kCheckPlayerSkylander), *e.player + 1);
+        return text;
+    }
+  }
+
+  Actions ReadActions() {
+    Actions actions;
+    bool released = true;
+    for (const menu_input::ConnectedDevice& device : menu_input::ConnectedDevices()) {
+      if (!device.pollable) continue;
+      const auto pad = menu_input::ReadPad(device.id);
+      if (!pad) continue;
+      PadReader& reader = pads_[uint64_t(device.id)];
+      released = released && reader.Released(*pad);
+      const Actions read = reader.Read(*pad);
+      if (!waiting_for_release_) Merge(actions, read);
+    }
+    if (waiting_for_release_) {
+      if (released) waiting_for_release_ = false;
+      return {};
+    }
+    Merge(actions, ReadKeyboard());
+    return actions;
+  }
+
+  void HandleInput(const Actions& a) {
+    const size_t rows = entries_.size() + 1;  // the figures, then Continue
+    if (a.up) cursor_ = (cursor_ + rows - 1) % rows;
+    if (a.down) cursor_ = (cursor_ + 1) % rows;
+    if (a.back) {
+      REXLOG_INFO("Portal check: closed without changes");
+      Close();
+      return;
+    }
+    if (a.accept) Choose(cursor_);
+  }
+
+  void Choose(size_t row) {
+    if (row < entries_.size()) {
+      entries_[row].remove = !entries_[row].remove;
+      return;
+    }
+    // Continue: the marked figures leave the portal, so the game sees them go.
+    for (const PortalEntry& e : entries_) {
+      if (!e.remove) continue;
+      for (int slot : e.slots) {
+        RemoveFigureFromSlot(slot);
+        if (slot == g_item_slot) g_item_slot = -1;
+        if (slot == g_sidekick_slot) g_sidekick_slot = -1;
+        for (auto& slots : g_player_slots) {
+          slots.erase(std::remove(slots.begin(), slots.end(), slot), slots.end());
+        }
+      }
+      REXLOG_INFO("Portal check: took off {}", NameOf(e));
+    }
+    Close();
+  }
+
+  void Draw(ImDrawList* dl, ImVec2 size) {
+    dl->AddRectFilled({0, 0}, size, Rgba(6, 10, 30, 150));
+    const float row_h = S(84), gap = S(10);
+    std::vector<std::string> notes;
+    char text[96];
+    if (Count(PortalEntry::Kind::kSidekick) > 1) {
+      std::snprintf(text, sizeof(text), T(Text::kCheckSidekicks),
+                    unsigned(Count(PortalEntry::Kind::kSidekick)));
+      notes.push_back(text);
+    }
+    if (Count(PortalEntry::Kind::kItem) > 1) {
+      std::snprintf(text, sizeof(text), T(Text::kCheckItems),
+                    unsigned(Count(PortalEntry::Kind::kItem)));
+      notes.push_back(text);
+    }
+    if (reason_ == kReasonTooManyCharacters) {
+      std::snprintf(text, sizeof(text), T(Text::kCheckSkylanders),
+                    unsigned(Count(PortalEntry::Kind::kSkylander)));
+      notes.push_back(text);
+    }
+    const float w = std::min(S(1000), size.x - S(80));
+    const float list_top = S(150) + float(notes.size()) * S(32);
+    const float h = std::min(size.y - S(60), list_top + float(entries_.size() + 1) * (row_h + gap) +
+                                                  S(96));
+    const ImVec2 a{(size.x - w) / 2, (size.y - h) / 2}, b{a.x + w, a.y + h};
+    DrawPanel(dl, a, b);
+    const char* title = reason_ == kReasonTooManyCharacters ? T(Text::kCheckTitleSkylanders)
+                        : reason_ == kReasonTooManyItems    ? T(Text::kCheckTitleItems)
+                                                            : T(Text::kCheckTitleOther);
+    OutlinedLabel(dl, TitleFont(), S(36), {a.x + S(36), a.y + S(26)}, kGold, title, S(2));
+    Label(dl, BoldFont(), S(21), {a.x + S(36), a.y + S(86)}, kDim, T(Text::kCheckHint), w - S(72));
+    float y = a.y + S(124);
+    for (const std::string& note : notes) {
+      Label(dl, BoldFont(), S(21), {a.x + S(36), y}, Rgba(255, 150, 70), note, w - S(72));
+      y += S(32);
+    }
+    y = a.y + list_top;
+    for (size_t i = 0; i <= entries_.size(); ++i) {
+      const ImVec2 r0{a.x + S(36), y}, r1{b.x - S(36), y + row_h};
+      if (r1.y > b.y - S(70)) break;
+      const bool active = i == cursor_;
+      if (ImGui::IsMouseHoveringRect(r0, r1)) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) cursor_ = i;
+        if (ImGui::IsMouseClicked(0)) {
+          Choose(i);
+          if (done_) return;
+        }
+      }
+      if (i == entries_.size()) {
+        // Continue.
+        dl->AddRectFilled(r0, r1, active ? kGold : Rgba(255, 255, 255, 26), S(16));
+        const char* go = T(Text::kCheckContinue);
+        const ImVec2 ts = TextSize(TitleFont(), S(28), go);
+        Label(dl, TitleFont(), S(28), {(r0.x + r1.x - ts.x) / 2, (r0.y + r1.y - ts.y) / 2},
+              active ? kInk : kWhite, go);
+        break;
+      }
+      const PortalEntry& e = entries_[i];
+      dl->AddRectFilled(r0, r1, active ? Rgba(255, 255, 255, 52) : Rgba(255, 255, 255, 14), S(14));
+      if (active) dl->AddRect(r0, r1, kGold, S(14), 0, S(3));
+      const float pic = row_h - S(16);
+      DrawFigurePicture(dl, {r0.x + S(10), r0.y + S(8)}, {r0.x + S(10) + pic, r0.y + S(8) + pic},
+                        e.figures.empty() ? nullptr : e.figures[0], S(10));
+      const float tx = r0.x + S(24) + pic;
+      Label(dl, BoldFont(), S(24), {tx, r0.y + S(12)}, kWhite, NameOf(e));
+      Label(dl, BoldFont(), S(18), {tx, r0.y + S(46)}, kDim, KindOf(e));
+      float px = r1.x - S(16);
+      const char* state = e.remove ? T(Text::kCheckOff) : T(Text::kCheckStays);
+      px -= PillWidth(state, 17);
+      Pill(dl, {px, r0.y + S(26)}, state, e.remove ? kBackRed : Rgba(255, 255, 255, 40), kWhite, 17);
+      if (TooMany(e)) {
+        const char* warn = T(Text::kCheckTooMany);
+        px -= PillWidth(warn, 17) + S(10);
+        Pill(dl, {px, r0.y + S(26)}, warn, Rgba(230, 120, 40), kWhite, 17);
+      }
+      y += row_h + gap;
+    }
+    float x = a.x + S(36);
+    const float fy = b.y - S(56);
+    const bool on_continue = cursor_ >= entries_.size();
+    x += Hint(dl, {x, fy}, "A", kAcceptGreen,
+              on_continue ? T(Text::kCheckContinue) : T(Text::kCheckToggle), true);
+    Hint(dl, {x, fy}, "B", kBackRed, T(Text::kClose), true);
+  }
+
+  uint32_t reason_;
+  std::function<void()> on_done_;
+  std::vector<PortalEntry> entries_;
+  size_t cursor_ = 0;
+  bool done_ = false;
+  bool first_frame_ = true;
+  bool waiting_for_release_ = true;
+  Clock::time_point open_time_ = Clock::now();
+  std::unordered_map<uint64_t, PadReader> pads_;  // by device
+};
+
+std::unique_ptr<PortalCheckDialog> g_check;  // UI thread only
+
 void ShowToast(std::string text) {
   if (!g_drawer || !g_app_context) return;
   g_toast = std::make_unique<Toast>(g_drawer, std::move(text), [] {
@@ -3406,6 +3775,23 @@ void AutoOpenPortalMenu(uint32_t user) {
   });
 }
 
+void ShowPortalCheck(uint32_t reason) {
+  if (!g_app_context) return;
+  g_app_context->CallInUIThread([reason] {
+    if (g_check || g_menu || !g_drawer || menu_input::MenuOpen() || !GetSoftwarePortal()) return;
+    g_check = std::make_unique<PortalCheckDialog>(g_drawer, reason, [] {
+      g_app_context->CallInUIThreadDeferred([] { g_check.reset(); });
+    });
+  });
+}
+
+void ClosePortalCheck() {
+  if (!g_app_context) return;
+  g_app_context->CallInUIThread([] {
+    if (g_check) g_check->Close();
+  });
+}
+
 void CloseAutoOpenedPortalMenu() {
   if (!g_app_context) return;
   g_app_context->CallInUIThread([] {
@@ -3427,6 +3813,7 @@ void PortalScreenComing(uint32_t user) {
 void ShutdownPortalMenu() {
   StopItemThread();
   g_menu.reset();
+  g_check.reset();
   g_toast.reset();
   g_textures.clear();
   g_art_textures.clear();

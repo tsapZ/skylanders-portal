@@ -41,7 +41,7 @@ const char* Tr(const char* en, const char* de) { return g_german ? de : en; }
 // What the menu does with one frame of input.
 struct Actions {
   bool up = false, down = false, left = false, right = false;
-  bool accept = false, back = false, prev_page = false, next_page = false;
+  bool accept = false, back = false, prev_page = false, next_page = false, save = false;
 };
 
 // Edges and key repeat for one controller.
@@ -52,6 +52,7 @@ class PadReader {
     const uint16_t buttons = pad.buttons;
     auto pressed = [&](uint16_t bit) { return (buttons & bit) && !(prev_ & bit); };
     a.accept = pressed(rex::input::X_INPUT_GAMEPAD_A);
+    a.save = pressed(rex::input::X_INPUT_GAMEPAD_Y);
     a.back = pressed(rex::input::X_INPUT_GAMEPAD_B) || pressed(rex::input::X_INPUT_GAMEPAD_START) ||
              (menu_input::IsActionChord(menu_input::ButtonAction::kSettingsMenu, buttons) &&
               !menu_input::IsActionChord(menu_input::ButtonAction::kSettingsMenu, prev_));
@@ -105,6 +106,7 @@ Actions ReadKeyboard() {
   a.right = key(ImGuiKey_RightArrow) || key(ImGuiKey_D);
   a.accept = once(ImGuiKey_Enter) || once(ImGuiKey_KeypadEnter) || once(ImGuiKey_Space);
   a.back = once(ImGuiKey_Escape) || once(ImGuiKey_Backspace);
+  a.save = once(ImGuiKey_Y);
   a.prev_page = once(ImGuiKey_Q) || once(ImGuiKey_1);
   a.next_page = once(ImGuiKey_E) || once(ImGuiKey_3);
   return a;
@@ -119,6 +121,7 @@ void Merge(Actions& into, const Actions& from) {
   into.back |= from.back;
   into.prev_page |= from.prev_page;
   into.next_page |= from.next_page;
+  into.save |= from.save;
 }
 
 // Shared by every menu instance: the pages and what was changed this session.
@@ -127,6 +130,9 @@ struct SettingsState {
   std::filesystem::path config_path;
   std::unordered_map<std::string, std::string> startup;  // cvar -> value at start-up
   std::unordered_map<std::string, std::string> stored;   // cvar -> value written this session
+  // The open menu's changes, applied but not saved yet, and each changed cvar's value before.
+  std::unordered_map<std::string, std::string> edits;
+  std::unordered_map<std::string, std::string> before;
 };
 SettingsState g_state;  // UI thread only
 
@@ -148,10 +154,29 @@ bool SameValue(const std::string& a, const std::string& b) {
   return !a.empty() && !b.empty() && *end_a == 0 && *end_b == 0 && x == y;
 }
 
+// The value as saved: written this session, else the running one.
+std::string SavedValue(const std::string& cvar) {
+  if (auto it = g_state.stored.find(cvar); it != g_state.stored.end()) return it->second;
+  return rex::cvar::GetFlagByName(cvar);
+}
+
+// The value the menu shows: an unsaved change first.
+std::string ValueOf(const std::string& cvar) {
+  if (auto it = g_state.edits.find(cvar); it != g_state.edits.end()) return it->second;
+  return SavedValue(cvar);
+}
+
 std::string CurrentValue(const Setting& s) {
   if (s.current) return s.current();
-  if (auto it = g_state.stored.find(s.cvar); it != g_state.stored.end()) return it->second;
-  return rex::cvar::GetFlagByName(s.cvar);
+  return ValueOf(s.cvar);
+}
+
+bool HasUnsaved() {
+  for (const auto& [cvar, value] : g_state.edits) {
+    auto before = g_state.before.find(cvar);
+    if (before == g_state.before.end() || !SameValue(value, before->second)) return true;
+  }
+  return false;
 }
 
 int IndexOf(const Setting& s) {
@@ -170,40 +195,52 @@ bool ApplyLater(const Setting& s) {
   return info && info->lifecycle != rex::cvar::Lifecycle::kHotReload;
 }
 
-// Changed this session and only applied at the next start.
+// Changed this session (saved or not) and only applied at the next start.
 bool Pending(const Setting& s) {
   if (!ApplyLater(s) || s.cvar.empty()) return false;
-  auto stored = g_state.stored.find(s.cvar);
   auto startup = g_state.startup.find(s.cvar);
-  return stored != g_state.stored.end() && startup != g_state.startup.end() &&
-         !SameValue(stored->second, startup->second);
+  return startup != g_state.startup.end() && !SameValue(ValueOf(s.cvar), startup->second);
 }
 
 class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
  public:
+  // `wait_for_menu`: another menu was asked to close (CloseOpenMenu); come up once it has.
   SettingsMenuDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> on_done,
-                     rex::ui::WindowedAppContext* app_context)
-      : ImGuiDialog(drawer), on_done_(std::move(on_done)), app_context_(app_context) {
+                     rex::ui::WindowedAppContext* app_context, bool wait_for_menu)
+      : ImGuiDialog(drawer),
+        on_done_(std::move(on_done)),
+        app_context_(app_context),
+        waiting_for_menu_(wait_for_menu) {
     g_german = rex::cvar::GetFlagByName("language") == "german";
-    menu_input::SetMenuOpen(true);
-    REXLOG_INFO("Settings menu: opened");
+    if (!waiting_for_menu_) Start();
   }
 
   ~SettingsMenuDialog() override {
-    if (!done_) menu_input::SetMenuOpen(false);
+    if (!done_ && !waiting_for_menu_) menu_input::SetMenuOpen(false);
   }
 
   void Close() {
     if (done_) return;
     done_ = true;
-    menu_input::SetMenuOpen(false);
-    REXLOG_INFO("Settings menu: closed");
+    if (!waiting_for_menu_) {
+      menu_input::SetMenuOpen(false);
+      REXLOG_INFO("Settings menu: closed");
+    }
     if (on_done_) on_done_();
   }
 
  protected:
   void OnDraw(ImGuiIO& io) override {
     if (done_) return;
+    if (waiting_for_menu_) {
+      // The portal menu takes a moment to put the figure back; give up if it doesn't close.
+      if (menu_input::MenuOpen()) {
+        if (Clock::now() - created_ > std::chrono::seconds(3)) Close();
+        return;
+      }
+      waiting_for_menu_ = false;
+      Start();
+    }
     SetScale(io.DisplaySize.y / 1080.0f);
     HandleInput(ReadActions());
     if (done_) return;
@@ -231,6 +268,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     DrawRows(dl, {p0.x + S(38), p0.y + S(168)}, {list_right, p1.y - S(86)});
     DrawInfo(dl, {list_right + S(30), p0.y + S(168)}, {p1.x - S(38), p1.y - S(86)});
     DrawFooter(dl, p0, p1);
+    if (confirm_) DrawConfirm(dl, p0, p1);
     FadeVertices(dl, first_vertex,
                  std::chrono::duration<float>(Clock::now() - open_time_).count() / 0.15f);
     ImGui::End();
@@ -268,9 +306,89 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     return actions;
   }
 
+  void Start() {
+    g_state.edits.clear();
+    g_state.before.clear();
+    menu_input::SetMenuOpen(true);
+    open_time_ = Clock::now();
+    REXLOG_INFO("Settings menu: opened");
+  }
+
+  // Back, F4, Start: leaves at once, or asks first when there are unsaved changes.
+  void RequestClose() {
+    if (HasUnsaved()) {
+      confirm_ = true;
+      confirm_choice_ = 0;
+      return;
+    }
+    Leave();
+  }
+
+  // Closes and then runs the action that was waiting for it, if any.
+  void Leave() {
+    confirm_ = false;
+    std::function<void()> action = std::move(pending_action_);
+    pending_action_ = nullptr;
+    Close();
+    if (action && app_context_) app_context_->CallInUIThreadDeferred(std::move(action));
+  }
+
+  // Writes the changes into the settings file.
+  void Save() {
+    bool wrote = false;
+    for (const auto& [cvar, value] : g_state.edits) {
+      auto before = g_state.before.find(cvar);
+      if (before != g_state.before.end() && SameValue(value, before->second)) continue;
+      if (StoreSetting(g_state.config_path, cvar, value)) {
+        g_state.stored[cvar] = value;
+        wrote = true;
+      }
+    }
+    g_state.edits.clear();
+    g_state.before.clear();
+    if (wrote) {
+      saved_at_ = Clock::now();
+      REXLOG_INFO("Settings menu: changes saved");
+    }
+  }
+
+  // Puts the values from before the changes back.
+  void Discard() {
+    for (const auto& [cvar, value] : g_state.before) StoreSetting({}, cvar, value);
+    g_state.edits.clear();
+    g_state.before.clear();
+    REXLOG_INFO("Settings menu: changes discarded");
+  }
+
+  // 0 save, 1 don't save, 2 back to the menu.
+  void ChooseConfirm(int choice) {
+    if (choice == 0) {
+      Save();
+      Leave();
+    } else if (choice == 1) {
+      Discard();
+      Leave();
+    } else {
+      confirm_ = false;
+      pending_action_ = nullptr;
+    }
+  }
+
   void HandleInput(const Actions& a) {
+    if (confirm_) {
+      if (a.up || a.left) confirm_choice_ = (confirm_choice_ + 2) % 3;
+      if (a.down || a.right) confirm_choice_ = (confirm_choice_ + 1) % 3;
+      if (a.back) ChooseConfirm(2);
+      else if (a.save) ChooseConfirm(0);
+      else if (a.accept) ChooseConfirm(confirm_choice_);
+      return;
+    }
+    if (a.save) {
+      Save();
+      return;
+    }
     if (a.back) {
-      Close();
+      RequestClose();
       return;
     }
     const size_t pages = g_state.pages.size();
@@ -300,20 +418,58 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     const int index = IndexOf(s);
     const int next = index < 0 ? 0 : (index + delta + n) % n;
     const std::string& value = options[size_t(next)].value;
+    // Applied now (where the setting allows it) but saved only with Y.
+    auto edit = [](const std::string& cvar, const std::string& v) {
+      if (!g_state.before.contains(cvar)) g_state.before[cvar] = SavedValue(cvar);
+      if (StoreSetting({}, cvar, v)) g_state.edits[cvar] = v;
+    };
     if (s.preset) {
-      for (const auto& [cvar, v] : s.preset(value)) {
-        if (StoreSetting(g_state.config_path, cvar, v)) g_state.stored[cvar] = v;
-      }
-    } else if (StoreSetting(g_state.config_path, s.cvar, value)) {
-      g_state.stored[s.cvar] = value;
+      for (const auto& [cvar, v] : s.preset(value)) edit(cvar, v);
+    } else {
+      edit(s.cvar, value);
     }
   }
 
-  // Actions run with the menu closed, after this frame (one may open another overlay).
+  // Actions run with the menu closed, after this frame (one may open another overlay); unsaved
+  // changes are asked about first.
   void RunAction(const Setting& s) {
-    std::function<void()> action = s.action;
-    Close();
-    if (app_context_) app_context_->CallInUIThreadDeferred(std::move(action));
+    pending_action_ = s.action;
+    RequestClose();
+  }
+
+  // Unsaved changes when leaving: save, don't save, or back to the menu.
+  void DrawConfirm(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
+    dl->AddRectFilled(p0, p1, Rgba(4, 6, 20, 170), S(28));
+    const float w = std::min(S(760), p1.x - p0.x - S(40)), h = S(420);
+    const ImVec2 c{(p0.x + p1.x) / 2, (p0.y + p1.y) / 2};
+    const ImVec2 a{c.x - w / 2, c.y - h / 2}, b{c.x + w / 2, c.y + h / 2};
+    DrawPanel(dl, a, b);
+    OutlinedLabel(dl, TitleFont(), S(36), {a.x + S(36), a.y + S(28)}, kGold,
+                  Tr("Save changes?", "\xC3\x84nderungen speichern?"), S(2));
+    Label(dl, BoldFont(), S(21), {a.x + S(36), a.y + S(88)}, kDim,
+          Tr("You changed settings that are not saved yet.",
+             "Du hast Einstellungen ge\xC3\xA4ndert, die noch nicht gespeichert sind."),
+          w - S(72));
+    const char* options[3] = {Tr("Save", "Speichern"), Tr("Don't save", "Nicht speichern"),
+                              Tr("Back to the settings", "Zur\xC3\xBC" "ck zu den Einstellungen")};
+    float y = a.y + S(150);
+    for (int i = 0; i < 3; ++i) {
+      const ImVec2 r0{a.x + S(36), y}, r1{b.x - S(36), y + S(60)};
+      if (ImGui::IsMouseHoveringRect(r0, r1)) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) confirm_choice_ = i;
+        if (ImGui::IsMouseClicked(0)) {
+          ChooseConfirm(i);
+          return;
+        }
+      }
+      const bool active = i == confirm_choice_;
+      dl->AddRectFilled(r0, r1, active ? Rgba(255, 255, 255, 52) : Rgba(255, 255, 255, 14), S(14));
+      if (active) dl->AddRect(r0, r1, kGold, S(14), 0, S(3));
+      Label(dl, BoldFont(), S(23), {r0.x + S(22), r0.y + S(15)}, active ? kGold : kWhite,
+            options[i]);
+      y += S(72);
+    }
   }
 
   void DrawTabs(ImDrawList* dl, ImVec2 a, float right) {
@@ -328,7 +484,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       dl->AddRectFilled(t0, t1, active ? kGold : Rgba(255, 255, 255, 26), S(23));
       if (active) dl->AddRect(t0, t1, Rgba(255, 240, 190), S(23), 0, S(2));
       Label(dl, BoldFont(), S(22), {t0.x + S(20), t0.y + S(10)}, active ? kInk : kDim, title);
-      if (ImGui::IsMouseHoveringRect(t0, t1) && ImGui::IsMouseClicked(0)) {
+      if (!confirm_ && ImGui::IsMouseHoveringRect(t0, t1) && ImGui::IsMouseClicked(0)) {
         page_ = i;
         row_ = scroll_ = 0;
       }
@@ -347,7 +503,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       const Setting& s = page->settings[i];
       const ImVec2 r0{a.x, a.y + (i - scroll_) * (row_h + gap)}, r1{b.x, r0.y + row_h};
       const bool active = i == row_;
-      if (ImGui::IsMouseHoveringRect(r0, r1) &&
+      if (!confirm_ && ImGui::IsMouseHoveringRect(r0, r1) &&
           (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f)) {
         row_ = i;
       }
@@ -363,7 +519,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
         const char* go = Tr("Open", "\xC3\x96" "ffnen");
         const ImVec2 ts = TextSize(BoldFont(), S(21), go);
         Label(dl, BoldFont(), S(21), {r1.x - S(24) - ts.x, r0.y + S(19)}, kGold, go);
-        if (ImGui::IsMouseHoveringRect(r0, r1) && ImGui::IsMouseClicked(0)) {
+        if (!confirm_ && ImGui::IsMouseHoveringRect(r0, r1) && ImGui::IsMouseClicked(0)) {
           RunAction(s);
           return;
         }
@@ -391,7 +547,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       const ImU32 arrow = active ? kGold : Rgba(255, 255, 255, 90);
       Label(dl, BoldFont(), S(24), {v0.x + S(12), v0.y + S(5)}, arrow, "<");
       Label(dl, BoldFont(), S(24), {v1.x - S(26), v0.y + S(5)}, arrow, ">");
-      if (ImGui::IsMouseHoveringRect(v0, v1) && ImGui::IsMouseClicked(0)) {
+      if (!confirm_ && ImGui::IsMouseHoveringRect(v0, v1) && ImGui::IsMouseClicked(0)) {
         row_ = i;
         Change(s, ImGui::GetIO().MousePos.x < (v0.x + v1.x) / 2 ? -1 : +1);
       }
@@ -456,6 +612,11 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   void DrawFooter(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
     float x = p0.x + S(38);
     const float y = p1.y - S(54);
+    if (confirm_) {
+      x += Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Choose", "Ausw\xC3\xA4hlen"), true);
+      Hint(dl, {x, y}, "B", kBackRed, Tr("Back", "Zur\xC3\xBC" "ck"), true);
+      return;
+    }
     const Setting* s = Selected();
     if (s && s->action) {
       x += Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Open", "\xC3\x96" "ffnen"), true);
@@ -463,12 +624,26 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       x += Hint(dl, {x, y}, "< / >", kHintGrey, Tr("Change", "\xC3\x84ndern"), false);
     }
     x += Hint(dl, {x, y}, "LB / RB", kHintGrey, Tr("Page", "Seite"), false);
+    x += Hint(dl, {x, y}, "Y", kYellow, Tr("Save", "Speichern"), true);
     x += Hint(dl, {x, y}, "B", kBackRed, Tr("Close", "Schlie\xC3\x9F" "en"), true);
     bool pending = false;
     for (const SettingsPage& page : g_state.pages) {
       for (const Setting& setting : page.settings) pending = pending || Pending(setting);
     }
-    if (pending) {
+    // What happened to the changes, else what still applies later.
+    const char* status = nullptr;
+    ImU32 status_col = kGold;
+    if (Clock::now() - saved_at_ < std::chrono::milliseconds(2500)) {
+      status = Tr("Saved", "Gespeichert");
+      status_col = Rgba(120, 220, 130);
+    } else if (HasUnsaved()) {
+      status = Tr("Not saved yet: Y saves", "Noch nicht gespeichert: Y speichert");
+    }
+    if (status) {
+      const ImVec2 ts = TextSize(BoldFont(), S(19), status);
+      Label(dl, BoldFont(), S(19), {std::max(x, p1.x - S(38) - ts.x), y + S(4)}, status_col,
+            status);
+    } else if (pending) {
       const char* note = Tr("Changes marked with a dot apply at the next start",
                             "Mit Punkt markierte \xC3\x84nderungen gelten ab dem n\xC3\xA4"
                             "chsten Start");
@@ -482,6 +657,12 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   bool done_ = false;
   bool first_frame_ = true;
   bool waiting_for_release_ = true;
+  bool waiting_for_menu_ = false;  // another menu is still closing
+  bool confirm_ = false;           // asking about unsaved changes
+  int confirm_choice_ = 0;
+  std::function<void()> pending_action_;  // an action row waiting for the menu to close
+  Clock::time_point created_ = Clock::now();
+  Clock::time_point saved_at_{};
   size_t page_ = 0;
   size_t row_ = 0;
   size_t scroll_ = 0;
@@ -495,14 +676,21 @@ rex::ui::ImGuiDrawer* g_drawer = nullptr;
 rex::ui::WindowedAppContext* g_app_context = nullptr;
 
 void OpenSettingsMenu() {
-  if (g_menu || !g_drawer || menu_input::MenuOpen()) return;
+  if (g_menu || !g_drawer) return;
+  // Over the portal or the player menu: that one closes like with B (the portal menu puts the
+  // figure back), and the settings come up once it is gone.
+  bool wait = false;
+  if (menu_input::MenuOpen()) {
+    if (!menu_input::CloseOpenMenu()) return;
+    wait = true;
+  }
   g_menu = std::make_unique<SettingsMenuDialog>(
       g_drawer,
       [] {
         // The dialog closes inside its own OnDraw; destroy it afterwards.
         g_app_context->CallInUIThreadDeferred([] { g_menu.reset(); });
       },
-      g_app_context);
+      g_app_context, wait);
 }
 
 }  // namespace
@@ -521,12 +709,9 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
   menu_input::SetButtonHandler(menu_input::ButtonAction::kSettingsMenu, [](DeviceId, uint32_t) {
     if (g_app_context) g_app_context->CallInUIThread(OpenSettingsMenu);
   });
+  // With the menu open, F4 is read by the menu itself (like B, so unsaved changes are asked about).
   rex::ui::RegisterBind("bind_settings_menu", "F4", "Open or close the settings menu", [] {
-    if (g_menu) {
-      g_menu->Close();
-    } else {
-      OpenSettingsMenu();
-    }
+    if (!g_menu) OpenSettingsMenu();
   });
 }
 

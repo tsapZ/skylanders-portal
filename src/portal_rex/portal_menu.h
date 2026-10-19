@@ -139,6 +139,15 @@ void SetGameBusyProvider(std::function<bool()> busy);
 // the emulated one. Callable from any thread.
 void AutoOpenPortalMenu(uint32_t user);
 
+// For a game integration that knows when the game shows its portal error screen ("too many
+// Skylanders / items on the portal", a figure it can't read; `reason` is the game's own reason
+// code, see magic_moment_watch.cpp): opens the portal check. It lists everything on the emulated
+// portal, marks what there is too much of, and takes off what the player picks, so a stuck error
+// screen can always be left. Only with the emulated portal and while no other menu is open.
+void ShowPortalCheck(uint32_t reason);
+// The game left its error screen: closes the portal check if it is still open.
+void ClosePortalCheck();
+
 // The game stopped waiting: closes the menu again if AutoOpenPortalMenu opened it and nothing was
 // chosen yet. Callable from any thread.
 void CloseAutoOpenedPortalMenu();

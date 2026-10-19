@@ -96,6 +96,8 @@ std::mutex g_mutex;
 std::unordered_map<uint64_t, DeviceRecord> g_devices;  // by DeviceId
 std::array<std::function<void(DeviceId, uint32_t)>, kActionCount> g_handlers;
 std::atomic<bool> g_menu_open{false};
+std::function<void()> g_menu_closer;  // UI thread only
+std::atomic<bool> g_menu_closable{false};
 std::optional<DeviceId> g_keyboard;
 std::vector<DeviceId> g_connected;  // the devices the input system has now
 
@@ -408,7 +410,10 @@ class MenuInputDriver final : public InputDriver {
       const uint16_t previous = record.last_buttons;
       uint16_t fired_buttons = 0;
       const std::optional<ButtonAction> action = ObserveLocked(record, pad, &fired_buttons);
-      fire = action && !g_menu_open.load();
+      // With a menu open only the settings menu's entry fires, and only over a menu that can
+      // make way for it (SetMenuCloser).
+      fire = action && (!g_menu_open.load() ||
+                        (*action == ButtonAction::kSettingsMenu && g_menu_closable.load()));
       record.swallowed |= fired_buttons;
       record.withheld &= uint16_t(~fired_buttons);
       const uint16_t shown = VisibleButtonsLocked(record, pad.buttons, previous, Clock::now());
@@ -571,11 +576,25 @@ void SetMenuOpen(bool open) {
       // The closing press must not count as a new open press.
       record.chord_fired = true;
     }
+    g_menu_closer = nullptr;
+    g_menu_closable.store(false);
   }
   g_menu_open.store(open);
 }
 
 bool MenuOpen() { return g_menu_open.load(); }
+
+void SetMenuCloser(std::function<void()> closer) {
+  g_menu_closer = std::move(closer);
+  g_menu_closable.store(bool(g_menu_closer));
+}
+
+bool CloseOpenMenu() {
+  if (!g_menu_open.load() || !g_menu_closer) return false;
+  const std::function<void()> closer = g_menu_closer;
+  closer();
+  return true;
+}
 
 std::optional<X_INPUT_GAMEPAD> ReadPad(DeviceId device) {
   MenuInputDriver* driver = nullptr;

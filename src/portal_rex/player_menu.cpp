@@ -119,6 +119,7 @@ class PlayerMenuDialog final : public rex::ui::ImGuiDialog {
       : ImGuiDialog(drawer), on_done_(std::move(on_done)) {
     g_german = rex::cvar::GetFlagByName("language") == "german";
     menu_input::SetMenuOpen(true);
+    menu_input::SetMenuCloser([this] { Close(); });  // the settings menu takes over
     REXLOG_INFO("Player menu: opened");
   }
 

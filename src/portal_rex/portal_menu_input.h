@@ -71,6 +71,14 @@ void SetOpenHandler(std::function<void(rex::input::DeviceId device, uint32_t use
 void SetMenuOpen(bool open);
 bool MenuOpen();
 
+// The open menu (the portal or the player menu) can be asked to close like with its Back button,
+// so that the settings menu can come up instead. Set right after SetMenuOpen(true); SetMenuOpen
+// (false) clears it. While one is set, the settings menu's button entry fires even though a menu
+// is open. UI thread.
+void SetMenuCloser(std::function<void()> closer);
+// Asks the open menu to close; false if no menu is open or it can't be closed this way.
+bool CloseOpenMenu();
+
 // The device's current state, read now from the UI thread; nullopt for devices that can't be
 // polled there (keyboard/mouse emulation) or that are gone.
 std::optional<rex::input::X_INPUT_GAMEPAD> ReadPad(rex::input::DeviceId device);

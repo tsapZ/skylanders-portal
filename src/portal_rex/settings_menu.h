@@ -3,9 +3,11 @@
 // The settings menu in the portal menu's look, for controller and keyboard: pages of settings the
 // app describes (SettingsPage), switched with LB / RB or LT / RT, each setting changed with left /
 // right. Opens with settings_menu_buttons (default Back + RB) on any controller or
-// bind_settings_menu (F4). Every change is written into the settings file at once, line by line
-// (settings_file.h); settings that only apply at start-up are marked and the menu says so. The game
-// sees no input while it is open.
+// bind_settings_menu (F4), also over the portal or the player menu (which then closes like with
+// B). A change applies at once where it can, so it can be seen; Y saves the changes into the
+// settings file, line by line (settings_file.h), and leaving with unsaved changes asks whether to
+// save them (not saving puts the old values back). Settings that only apply at start-up are marked
+// and the menu says so. The game sees no input while it is open.
 
 #include <filesystem>
 #include <functional>
