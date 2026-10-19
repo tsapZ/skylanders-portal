@@ -3844,6 +3844,8 @@ void TakeItemOff() {
 
 }  // namespace
 
+ImTextureID menu_draw::GameArtTexture(const std::string& key) { return ArtTexture(key); }
+
 void AutoOpenPortalMenu(uint32_t user) {
   if (!g_app_context || user >= rex::input::kMaxGuestUsers) return;
   g_app_context->CallInUIThread([user] {

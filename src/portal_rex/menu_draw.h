@@ -5,6 +5,7 @@
 // draws straight into an ImDrawList; UI thread only.
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 #include <imgui.h>
@@ -55,6 +56,10 @@ void DrawPanel(ImDrawList* dl, ImVec2 p0, ImVec2 p1);
 float Hint(ImDrawList* dl, ImVec2 pos, std::string_view glyph, ImU32 glyph_col,
            std::string_view label, bool round);
 float HintWidth(std::string_view glyph, std::string_view label, bool round);
+
+// The game's picture for an art key (portal_menu.h SetArtImageProvider) as a texture, kept once
+// made; a null id while there is none (yet). Lives in portal_menu.cpp, which owns the textures.
+ImTextureID GameArtTexture(const std::string& key);
 
 // Multiplies the alpha of every vertex drawn into `dl` since `first_vertex` (a fade-in).
 void FadeVertices(ImDrawList* dl, int first_vertex, float alpha);

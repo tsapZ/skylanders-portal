@@ -1,7 +1,9 @@
 #include "portal_rex/settings_menu.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <optional>
@@ -135,13 +137,79 @@ struct SettingsState {
   std::unordered_map<std::string, std::string> before;
 };
 SettingsState g_state;  // UI thread only
+ControllerPicture g_picture;  // UI thread only
+
+// One button entry of a *_buttons value: "back+start" or "hold_back".
+struct ButtonEntry {
+  std::vector<std::string> buttons;
+  bool hold = false;
+};
+
+std::vector<ButtonEntry> ParseButtonEntries(const std::string& value) {
+  std::vector<ButtonEntry> out;
+  size_t start = 0;
+  while (start <= value.size()) {
+    const size_t comma = std::min(value.find(',', start), value.size());
+    std::string token;
+    for (char c : value.substr(start, comma - start)) {
+      if (c != ' ') token.push_back(char(std::tolower(static_cast<unsigned char>(c))));
+    }
+    start = comma + 1;
+    if (token.empty()) continue;
+    ButtonEntry entry;
+    if (token.rfind("hold_", 0) == 0) {
+      entry.hold = true;
+      token.erase(0, 5);
+    }
+    size_t from = 0;
+    while (from <= token.size()) {
+      const size_t plus = std::min(token.find('+', from), token.size());
+      if (plus > from) entry.buttons.push_back(token.substr(from, plus - from));
+      from = plus + 1;
+    }
+    if (!entry.buttons.empty()) out.push_back(std::move(entry));
+  }
+  return out;
+}
+
+std::string ButtonName(const std::string& button) {
+  if (button == "guide") return Tr("Xbox button", "Xbox-Taste");
+  if (button == "back") return "Back";
+  if (button == "start") return "Start";
+  if (button == "lb") return "LB";
+  if (button == "rb") return "RB";
+  if (button == "ls") return "L3";
+  if (button == "rs") return "R3";
+  if (button == "up") return Tr("D-pad up", "Steuerkreuz hoch");
+  if (button == "down") return Tr("D-pad down", "Steuerkreuz runter");
+  if (button == "left") return Tr("D-pad left", "Steuerkreuz links");
+  if (button == "right") return Tr("D-pad right", "Steuerkreuz rechts");
+  std::string upper = button;
+  for (char& c : upper) c = char(std::toupper(static_cast<unsigned char>(c)));
+  return upper;
+}
+
+// "Back + Start", "hold Back" / "Back halten".
+std::string EntryName(const ButtonEntry& entry) {
+  std::string names;
+  for (const std::string& button : entry.buttons) {
+    names += (names.empty() ? "" : " + ") + ButtonName(button);
+  }
+  if (!entry.hold) return names;
+  return g_german ? names + " halten" : "hold " + names;
+}
 
 const std::vector<SettingOption>& BoolOptions() {
   static const std::vector<SettingOption> options = {{"false", "Off", "Aus"}, {"true", "On", "An"}};
   return options;
 }
 
+// A button row without a setting of its own: shows the page's button settings together.
+bool IsOverview(const Setting& s) { return s.buttons && s.cvar.empty() && !s.action; }
+
 const std::vector<SettingOption>& OptionsOf(const Setting& s) {
+  static const std::vector<SettingOption> kNone;
+  if (IsOverview(s)) return kNone;
   return s.options.empty() && !s.action ? BoolOptions() : s.options;
 }
 
@@ -525,6 +593,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
         }
         continue;
       }
+      if (IsOverview(s)) continue;
       // The value between arrows, right-aligned.
       const auto& options = OptionsOf(s);
       const int index = IndexOf(s);
@@ -578,7 +647,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       y += TextSize(BoldFont(), S(21), help, wrap).y + S(22);
     }
     // Every choice, the current one in gold.
-    if (!s->action) {
+    if (!s->action && !IsOverview(*s)) {
       const auto& options = OptionsOf(*s);
       const int index = IndexOf(*s);
       float x = a.x + S(24);
@@ -606,6 +675,88 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       dl->AddRectFilled({a.x + S(24), y}, {a.x + S(48) + ts.x, y + S(32)},
                         Pending(*s) ? kGold : Rgba(255, 255, 255, 40), S(16));
       Label(dl, BoldFont(), S(18), {a.x + S(36), y + S(5)}, Pending(*s) ? kInk : kWhite, text);
+      y += S(48);
+    }
+    if (s->buttons) DrawButtons(dl, *s, {a.x + S(24), y}, {b.x - S(24), b.y - S(20)});
+  }
+
+  // Rings on the controller picture and a line per colour under it. A button setting shows its
+  // current choice, one colour per entry; an overview row every button setting of its page, one
+  // colour per setting.
+  void DrawButtons(ImDrawList* dl, const Setting& s, ImVec2 a, ImVec2 b) {
+    static const ImU32 kColours[] = {kGold, Rgba(90, 200, 255), Rgba(120, 220, 130),
+                                     Rgba(240, 120, 200)};
+    struct Group {
+      std::vector<ButtonEntry> entries;
+      std::string label;
+    };
+    std::vector<Group> groups;
+    if (IsOverview(s)) {
+      for (const Setting& other : Page()->settings) {
+        if (!other.buttons || other.cvar.empty()) continue;
+        Group group{ParseButtonEntries(ValueOf(other.cvar)), Tr(other.en, other.de) + ": "};
+        for (size_t i = 0; i < group.entries.size(); ++i) {
+          group.label += (i ? " / " : "") + EntryName(group.entries[i]);
+        }
+        if (group.entries.empty()) group.label += Tr("off", "aus");
+        groups.push_back(std::move(group));
+      }
+    } else {
+      const auto& options = OptionsOf(s);
+      const int index = IndexOf(s);
+      const std::string value = index >= 0 ? options[size_t(index)].value : CurrentValue(s);
+      for (ButtonEntry& entry : ParseButtonEntries(value)) {
+        std::string label = EntryName(entry);
+        groups.push_back({{std::move(entry)}, std::move(label)});
+      }
+    }
+    const float line_h = S(34);
+    const float lines_top = b.y - line_h * float(std::max<size_t>(1, groups.size()));
+    const ImTextureID texture =
+        g_picture.art_key.empty() ? ImTextureID{} : GameArtTexture(g_picture.art_key);
+    if (texture && g_picture.width > 0 && g_picture.height > 0) {
+      const float scale = std::min((b.x - a.x) / g_picture.width,
+                                   (lines_top - S(12) - a.y) / g_picture.height);
+      if (scale > 0.15f) {
+        const ImVec2 p0{(a.x + b.x - g_picture.width * scale) / 2, a.y};
+        const ImVec2 p1{p0.x + g_picture.width * scale, p0.y + g_picture.height * scale};
+        dl->AddImage(texture, p0, p1);
+        const float pulse = 0.5f + 0.5f * std::sin(float(ImGui::GetTime()) * 4.0f);
+        // A button in several entries gets one ring around the other.
+        std::unordered_map<std::string, int> rings;
+        for (size_t i = 0; i < groups.size(); ++i) {
+          const ImU32 colour = kColours[i % std::size(kColours)];
+          for (const ButtonEntry& entry : groups[i].entries) {
+            for (const std::string& button : entry.buttons) {
+              const int outer = rings[button]++;
+              for (const ControllerSpot& spot : g_picture.spots) {
+                if (spot.button != button) continue;
+                const ImVec2 c{p0.x + spot.x * scale, p0.y + spot.y * scale};
+                const float r = spot.radius * scale + S(5) + S(7) * float(outer);
+                if (!outer) {
+                  dl->AddCircleFilled(c, r,
+                                      (colour & 0x00FFFFFF) | (ImU32(50 + 50 * pulse) << 24));
+                }
+                dl->AddCircle(c, r, colour, 0, S(3.5f));
+              }
+            }
+          }
+        }
+      }
+    }
+    float y = lines_top;
+    if (groups.empty()) {
+      Label(dl, BoldFont(), S(20), {a.x, y + S(4)}, kDim,
+            Tr("Off: no controller button", "Aus: keine Controller-Taste"));
+    }
+    for (size_t i = 0; i < groups.size(); ++i, y += line_h) {
+      dl->AddCircleFilled({a.x + S(10), y + S(16)}, S(9), kColours[i % std::size(kColours)]);
+      // Long lines get a smaller font so they fit.
+      float size = S(20);
+      while (TextSize(BoldFont(), size, groups[i].label).x > b.x - a.x - S(30) && size > S(14)) {
+        size -= S(1);
+      }
+      Label(dl, BoldFont(), size, {a.x + S(30), y + S(4)}, kWhite, groups[i].label);
     }
   }
 
@@ -620,7 +771,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     const Setting* s = Selected();
     if (s && s->action) {
       x += Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Open", "\xC3\x96" "ffnen"), true);
-    } else {
+    } else if (!s || !IsOverview(*s)) {
       x += Hint(dl, {x, y}, "< / >", kHintGrey, Tr("Change", "\xC3\x84ndern"), false);
     }
     x += Hint(dl, {x, y}, "LB / RB", kHintGrey, Tr("Page", "Seite"), false);
@@ -714,6 +865,8 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
     if (!g_menu) OpenSettingsMenu();
   });
 }
+
+void SetControllerPicture(ControllerPicture picture) { g_picture = std::move(picture); }
 
 void ShutdownSettingsMenu() { g_menu.reset(); }
 

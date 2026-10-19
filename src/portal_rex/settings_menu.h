@@ -43,12 +43,31 @@ struct Setting {
       preset;
   // An action row: A runs it (with the menu closed).
   std::function<void()> action;
+  // The options are controller button entries in the *_buttons settings' format
+  // ("guide,back+start,hold_back"); the info panel shows them on the controller picture
+  // (SetControllerPicture), each entry in its own colour. Without a cvar (and no action) the row is
+  // an overview: every button setting of its page on the picture, one colour each.
+  bool buttons = false;
 };
 
 struct SettingsPage {
   std::string en, de;
   std::vector<Setting> settings;
 };
+
+// A controller picture for the button settings: an art image (portal_menu.h SetArtImageProvider)
+// and where each button sits in it, in the image's pixels. Without one, button settings show their
+// buttons as text only.
+struct ControllerSpot {
+  std::string button;  // as the *_buttons settings name it: "a", "guide", "back", "lb", "ls", "up"
+  float x = 0, y = 0, radius = 0;
+};
+struct ControllerPicture {
+  std::string art_key;
+  float width = 0, height = 0;  // the image's size
+  std::vector<ControllerSpot> spots;
+};
+void SetControllerPicture(ControllerPicture picture);
 
 // `config_path`: the settings file changes go to. Call from ReXApp::OnCreateDialogs.
 void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext* app_context,
