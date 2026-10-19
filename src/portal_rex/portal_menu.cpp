@@ -69,6 +69,13 @@ using rex::input::DeviceId;
 using Clock = std::chrono::steady_clock;
 
 // --- Text -------------------------------------------------------------------------------------
+//
+// The game's own words where it has them (#52), from its text files (loosefiles.pak
+// data\systemdata_en.mua / _de.mua, permanent_xenon.pak strings\xenonplatformstrings_*.igx):
+// "PORTAL OF POWER" / "MAGISCHES PORTAL", "Player %d" / "Spieler %d", "Magic Item(s)" /
+// "Magische(s) Objekt(e)", "Sidekick" / "Mini-Skylander", "Upgrades" / "Verbesserungen", the
+// element names (_elementNames: "Undead Skylanders" / "Gespenster-Skylander"). The game has no
+// word for the menu's own ideas ("Recent", "Place").
 
 enum class Text {
   kTitle,
@@ -174,7 +181,7 @@ constexpr const char* kEnglish[] = {
     "versions",
     "Nickname",
     "File",
-    "Items",
+    "Magic Items",
     "Build your Swapper",
     "Top / Bottom",
     "Taken \xC2\xB7 P%u",
@@ -192,7 +199,7 @@ constexpr const char* kEnglish[] = {
     "Toggle",
     "Close",
     "No figures of your own here. Start: options",
-    "Item taken off the portal",
+    "Magic item taken off the portal",
     "Level %u \xC2\xB7 %u XP \xC2\xB7 %u more to level %u",
     "Level %u \xC2\xB7 %u XP \xC2\xB7 top level",
     "Play time",
@@ -220,15 +227,15 @@ constexpr const char* kEnglish[] = {
     "A magic item takes effect as soon as it goes on the portal.",
     "Lasts %d seconds",
     "Too many Skylanders on the portal",
-    "Too many items or sidekicks on the portal",
+    "Too many magic items or sidekicks on the portal",
     "The game has a problem with the figures on the portal",
     "Choose what to take off, then Continue. This is on the portal:",
     "%u sidekicks: the game takes only one.",
-    "%u items: the game takes only one.",
+    "%u magic items: the game takes only one.",
     "%u Skylanders: one per player.",
     "Player %u's Skylander",
     "Skylander without a player",
-    "Item",
+    "Magic item",
     "Sidekick",
     "Too many",
     "Off",
@@ -238,10 +245,10 @@ constexpr const char* kEnglish[] = {
     "on the real portal",
     "This figure is on the real portal.",
     "A sidekick is on the real portal: lift it off there first.",
-    "An item is on the real portal: lift it off there first.",
+    "A magic item is on the real portal: lift it off there first.",
 };
 constexpr const char* kGerman[] = {
-    "PORTAL OF POWER",
+    "MAGISCHES PORTAL",
     "Spieler %u",
     "Zuletzt",
     "Auflegen",
@@ -260,14 +267,14 @@ constexpr const char* kGerman[] = {
     "Varianten",
     "Spitzname",
     "Datei",
-    "Items",
+    "Magische Objekte",
     "Swapper zusammenbauen",
     "Oben / Unten",
     "Belegt \xC2\xB7 SP%u",
     "Auf dem Portal",
     "Runternehmen",
     "Kategorie",
-    "Item runternehmen",
+    "Objekt runternehmen",
     "Optionen",
     "Spiel verlassen",
     "Spieler %u nimmt seinen Skylander runter und verl\xC3\xA4sst das Spiel",
@@ -279,14 +286,14 @@ constexpr const char* kGerman[] = {
     "Schlie\xC3\x9F"
     "en",
     "Hier gibt es keine eigenen Figuren. Start: Optionen",
-    "Item vom Portal genommen",
+    "Magisches Objekt vom Portal genommen",
     "Level %u \xC2\xB7 %u EP \xC2\xB7 noch %u bis Level %u",
     "Level %u \xC2\xB7 %u EP \xC2\xB7 h\xC3\xB6" "chstes Level",
     "Spielzeit",
     "%u Std. %02u Min.",
     "%u Min.",
     "Heldenpunkte",
-    "Upgrades",
+    "Verbesserungen",
     "noch kein Pfad",
     "Pfad %d",
     "Hut",
@@ -298,25 +305,25 @@ constexpr const char* kGerman[] = {
     "Grundangriffe",
     "Gekauft",
     "Preis: %u Gold",
-    "Noch keine Upgrades gekauft",
+    "Noch keine Verbesserungen gekauft",
     "MAX",
     "Noch kein Spielstand: Das Spiel speichert ihn auf der Figur, sobald es mit ihr gespielt hat.",
-    "Ein Sidekick kommt neben die Skylander aufs Portal und l\xC3\xA4uft mit. Das Spiel nimmt "
+    "Ein Mini-Skylander kommt neben die Skylander aufs Portal und l\xC3\xA4uft mit. Das Spiel nimmt "
     "immer nur einen: ein neuer ersetzt den, der schon dort ist. Er sammelt keine Erfahrung "
     "und speichert nichts auf der Figur.",
-    "Ein magischer Gegenstand wirkt, sobald er aufs Portal kommt.",
+    "Ein magisches Objekt wirkt, sobald es aufs Portal kommt.",
     "Wirkt %d Sekunden",
     "Zu viele Skylander auf dem Portal",
-    "Zu viele Items oder Sidekicks auf dem Portal",
+    "Zu viele magische Objekte oder Mini-Skylander auf dem Portal",
     "Das Spiel hat ein Problem mit den Figuren auf dem Portal",
     "W\xC3\xA4hle aus, was runter soll, dann Fortfahren. Das ist auf dem Portal:",
-    "%u Sidekicks: Das Spiel nimmt nur einen.",
-    "%u Items: Das Spiel nimmt nur eins.",
+    "%u Mini-Skylander: Das Spiel nimmt nur einen.",
+    "%u magische Objekte: Das Spiel nimmt nur eins.",
     "%u Skylander: einer pro Spieler.",
     "Skylander von Spieler %u",
     "Skylander ohne Spieler",
-    "Item",
-    "Sidekick",
+    "Magisches Objekt",
+    "Mini-Skylander",
     "Zu viele",
     "Runter",
     "Bleibt",
@@ -324,8 +331,8 @@ constexpr const char* kGerman[] = {
     "Runter / bleibt",
     "auf dem echten Portal",
     "Diese Figur steht auf dem echten Portal.",
-    "Ein Sidekick steht auf dem echten Portal: Nimm ihn dort zuerst runter.",
-    "Ein Item steht auf dem echten Portal: Nimm es dort zuerst runter.",
+    "Ein Mini-Skylander steht auf dem echten Portal: Nimm ihn dort zuerst runter.",
+    "Ein magisches Objekt steht auf dem echten Portal: Nimm es dort zuerst runter.",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -334,7 +341,8 @@ bool g_german = false;
 
 const char* T(Text text) { return (g_german ? kGerman : kEnglish)[size_t(text)]; }
 
-// Element names as the German game shows them.
+// Element names as the German game shows them (systemdata_de.mua _elementNames: "Technologie-",
+// "Gespenster-Skylander"). Light and Dark are not in Swap Force.
 std::string_view ElementLabel(Element element) {
   if (g_german) {
     switch (element) {
@@ -347,9 +355,9 @@ std::string_view ElementLabel(Element element) {
       case Element::kFire:
         return "Feuer";
       case Element::kTech:
-        return "Tech";
+        return "Technologie";
       case Element::kUndead:
-        return "Untot";
+        return "Gespenster";
       case Element::kLife:
         return "Leben";
       case Element::kAir:
