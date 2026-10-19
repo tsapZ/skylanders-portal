@@ -37,6 +37,7 @@
 #include "portal/figure_info.h"
 #include "portal/figure_stats.h"
 #include "portal/software/software_portal.h"
+#include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/portal_rex.h"
 
@@ -45,10 +46,20 @@ REXCVAR_DEFINE_STRING(portal_menu_games, "", "Portal",
                       "all games)");
 REXCVAR_DEFINE_BOOL(portal_menu_auto_open, true, "Portal",
                     "Open the portal menu by itself when the game asks a player for a Skylander");
+REXCVAR_DEFINE_STRING(portal_menu_hidden_games, "", "Portal",
+                      "Games of portal_menu_games the portal menu hides, separated by ';' (set "
+                      "with Start in the menu)");
+REXCVAR_DEFINE_BOOL(portal_menu_owned_only, false, "Portal",
+                    "The portal menu lists only figures that have a figure file");
+REXCVAR_DEFINE_INT32(portal_menu_open_delay_ms, 2500, "Portal",
+                     "After the open button lifts the figure, the menu waits for the game's own "
+                     "portal screen to come up, at most this long")
+    .range(0, 10000);
 
 namespace skylanders {
 namespace {
 
+using namespace menu_draw;
 using portal::Element;
 using portal::SkylanderInfo;
 using portal::SwapperHalf;
@@ -84,6 +95,17 @@ enum class Text {
   kTakeOff,
   kCategory,
   kTakeOffItem,
+  kOptions,
+  kLeave,
+  kLeaveInfo,
+  kShowGames,
+  kOwnedOnly,
+  kOn,
+  kOff,
+  kToggle,
+  kClose,
+  kNothingOwned,
+  kItemTakenOff,
   kCount,
 };
 
@@ -114,6 +136,17 @@ constexpr const char* kEnglish[] = {
     "Take off",
     "Category",
     "Take item off",
+    "Options",
+    "Leave the game",
+    "Player %u takes their Skylander off and leaves the game",
+    "Show games",
+    "Only my figures",
+    "On",
+    "Off",
+    "Toggle",
+    "Close",
+    "No figures of your own here. Start: options",
+    "Item taken off the portal",
 };
 constexpr const char* kGerman[] = {
     "PORTAL OF POWER",
@@ -143,6 +176,18 @@ constexpr const char* kGerman[] = {
     "Runternehmen",
     "Kategorie",
     "Item runternehmen",
+    "Optionen",
+    "Spiel verlassen",
+    "Spieler %u nimmt seinen Skylander runter und verl\xC3\xA4sst das Spiel",
+    "Spiele anzeigen",
+    "Nur eigene Figuren",
+    "An",
+    "Aus",
+    "Umschalten",
+    "Schlie\xC3\x9F"
+    "en",
+    "Hier gibt es keine eigenen Figuren. Start: Optionen",
+    "Item vom Portal genommen",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -192,6 +237,16 @@ std::string BadgeLabel(const std::string& badge) {
   return badge;
 }
 
+// The version badge as a card shows it under the name: "S2" for Series 2, else the badge.
+// Swappers have none (their card says SWAP), and neither have items.
+std::string ShortBadge(const SkylanderInfo& sky) {
+  if (sky.category == "Items") return {};
+  const std::string badge = portal::VersionBadge(sky);
+  if (badge.rfind("Series ", 0) == 0) return "S" + badge.substr(7);
+  if (badge == "Swapper") return {};
+  return BadgeLabel(badge);
+}
+
 // The order elements are listed in, as on the game's own element screens.
 constexpr Element kElementOrder[] = {Element::kMagic,  Element::kEarth, Element::kWater,
                                      Element::kFire,   Element::kTech,  Element::kUndead,
@@ -205,18 +260,7 @@ int ElementRank(Element element) {
   return int(std::size(kElementOrder));
 }
 
-// --- Fonts and colours ------------------------------------------------------------------------
-
-ImFont* g_font_title = nullptr;
-ImFont* g_font_bold = nullptr;
-// Baked large so they stay sharp when drawn smaller on 1080p and 1440p.
-constexpr float kTitleBakeSize = 72.0f;
-constexpr float kBoldBakeSize = 44.0f;
-
-ImFont* TitleFont() { return g_font_title ? g_font_title : ImGui::GetFont(); }
-ImFont* BoldFont() { return g_font_bold ? g_font_bold : ImGui::GetFont(); }
-
-ImU32 Rgba(int r, int g, int b, int a = 255) { return IM_COL32(r, g, b, a); }
+// --- Colours ----------------------------------------------------------------------------------
 
 ImVec4 ElementRgb(Element element) {
   switch (element) {
@@ -254,25 +298,6 @@ ImU32 ElementColor(Element element, float brightness = 1.0f, int alpha = 255) {
                   int(std::min(1.0f, c.z * brightness) * 255), alpha);
 }
 
-ImU32 PlayerColor(uint32_t user) {
-  switch (user) {
-    case 1:
-      return Rgba(235, 77, 77);
-    case 2:
-      return Rgba(61, 200, 120);
-    case 3:
-      return Rgba(240, 190, 50);
-    default:
-      return Rgba(61, 139, 255);
-  }
-}
-
-const ImU32 kGold = Rgba(244, 196, 84);
-const ImU32 kGoldDark = Rgba(150, 104, 30);
-const ImU32 kWhite = Rgba(255, 255, 255);
-const ImU32 kDim = Rgba(205, 214, 238);
-const ImU32 kInk = Rgba(22, 20, 32);
-
 std::string_view GameShortName(std::string_view game) {
   if (game == "Spyro's Adventure") return "SSA";
   if (game == "Swap Force") return "SWAP Force";
@@ -280,42 +305,6 @@ std::string_view GameShortName(std::string_view game) {
 }
 
 // --- Drawing helpers ----------------------------------------------------------------------------
-
-float g_s = 1.0f;  // pixels per 1080p unit
-float S(float v) { return v * g_s; }
-
-void Label(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 col, std::string_view text,
-           float wrap = 0.0f) {
-  dl->AddText(font, size, pos, col, text.data(), text.data() + text.size(), wrap);
-}
-
-// Text with a dark outline, for titles over busy backgrounds.
-void OutlinedLabel(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 col,
-                   std::string_view text, float outline) {
-  const ImU32 shadow = Rgba(10, 8, 24, 220);
-  for (int dx = -1; dx <= 1; ++dx) {
-    for (int dy = -1; dy <= 1; ++dy) {
-      if (dx || dy) Label(dl, font, size, {pos.x + dx * outline, pos.y + dy * outline}, shadow, text);
-    }
-  }
-  Label(dl, font, size, {pos.x, pos.y + outline * 1.5f}, shadow, text);
-  Label(dl, font, size, pos, col, text);
-}
-
-// A rounded rectangle with a vertical gradient; ImGui's multi-colour rectangles have square
-// corners, so the rounded shape is drawn in white and its vertices recoloured.
-void GradientRect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom, float rounding,
-                  ImDrawFlags flags = 0) {
-  const int first = dl->VtxBuffer.Size;
-  dl->AddRectFilled(a, b, IM_COL32(255, 255, 255, (top >> IM_COL32_A_SHIFT) & 0xFF), rounding,
-                    flags);
-  ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, first, dl->VtxBuffer.Size, a, {a.x, b.y}, top,
-                                                bottom);
-}
-
-ImVec2 TextSize(ImFont* font, float size, std::string_view text, float wrap = 0.0f) {
-  return font->CalcTextSizeA(size, FLT_MAX, wrap, text.data(), text.data() + text.size());
-}
 
 // Self-drawn element symbols (the official ones can't be used): star with sparkles, mountains,
 // drop with a wave, flame, gear, skull, leaf, tornado, sun, crescent. `fill` is the symbol,
@@ -535,23 +524,6 @@ void DrawElementBadge(ImDrawList* dl, ImVec2 c, float r, Element element, int al
   DrawElementIcon(dl, c, r * 0.56f, element, IM_COL32(255, 255, 255, alpha), true);
 }
 
-// A controller button or key hint: a coloured round glyph for face buttons, a pill otherwise.
-float Hint(ImDrawList* dl, ImVec2 pos, std::string_view glyph, ImU32 glyph_col,
-           std::string_view label, bool round) {
-  const float h = S(30);
-  const float glyph_w = round ? h : std::max(h, TextSize(BoldFont(), S(18), glyph).x + S(16));
-  if (round) {
-    dl->AddCircleFilled({pos.x + h / 2, pos.y + h / 2}, h / 2, glyph_col);
-  } else {
-    dl->AddRectFilled(pos, {pos.x + glyph_w, pos.y + h}, glyph_col, S(8));
-  }
-  ImVec2 gs = TextSize(BoldFont(), S(18), glyph);
-  Label(dl, BoldFont(), S(18), {pos.x + (glyph_w - gs.x) / 2, pos.y + (h - gs.y) / 2}, kWhite,
-        glyph);
-  Label(dl, BoldFont(), S(20), {pos.x + glyph_w + S(8), pos.y + S(3)}, kDim, label);
-  return glyph_w + S(8) + TextSize(BoldFont(), S(20), label).x + S(28);
-}
-
 // A Portal of Power for the preview figure to stand on: a dark round base, a silver rim and a
 // glowing top, with light rising from it. `c` is the middle of the top, `w` the width. Returns
 // the lowest point drawn.
@@ -621,7 +593,14 @@ struct Character {
   std::string debut_game;
   bool swapper = false;
   bool item = false;
-  std::vector<Version> versions;
+  std::vector<Version> versions;  // catalog (release) order
+
+  bool HasVersionFrom(std::string_view game) const {
+    for (const Version& v : versions) {
+      if (v.sky->game == game) return true;
+    }
+    return false;
+  }
 };
 
 // A recently placed combination of figure files (two for a swapper).
@@ -633,6 +612,7 @@ struct RecentEntry {
 // A game tab has one row per element; the items tab one row per game.
 struct Tab {
   std::string title;
+  std::string game;  // game tabs: every character with a version from this game
   bool recent = false;
   bool items = false;
   std::vector<Element> elements;         // game tabs: the element of each row
@@ -657,8 +637,113 @@ std::vector<std::string> AllowedGames() {
   return games;
 }
 
+bool Contains(const std::vector<std::string>& list, std::string_view value) {
+  return std::find(list.begin(), list.end(), value) != list.end();
+}
+
+std::vector<std::string> SplitList(const std::string& value) {
+  std::vector<std::string> items;
+  std::stringstream list(value);
+  std::string item;
+  while (std::getline(list, item, ';')) {
+    if (!item.empty()) items.push_back(item);
+  }
+  return items;
+}
+
+// The games of AllowedGames() the menu shows: without portal_menu_hidden_games, and all of them if
+// that would leave none.
+std::vector<std::string> ShownGames(const std::vector<std::string>& games) {
+  const std::vector<std::string> hidden = SplitList(REXCVAR_GET(portal_menu_hidden_games));
+  std::vector<std::string> shown;
+  for (const std::string& game : games) {
+    if (!Contains(hidden, game)) shown.push_back(game);
+  }
+  return shown.empty() ? games : shown;
+}
+
 bool IsPlayableCategory(std::string_view category) {
   return category != "Items" && category != "Unreleased";
+}
+
+// Where the menu saves its options (portal_menu_hidden_games, portal_menu_owned_only); empty: not
+// saved. UI thread only.
+std::filesystem::path g_config_path;
+
+// Writes one setting into the settings file and leaves everything else in it as it is (comments,
+// other settings). rex::cvar::SaveConfig would rewrite the whole file from every changed setting,
+// including command-line ones. `value` is already a TOML value ("true", "\"text\"").
+void WriteSetting(const std::filesystem::path& path, std::string_view category,
+                  std::string_view name, const std::string& value) {
+  std::vector<std::string> lines;
+  {
+    std::ifstream in(path, std::ios::binary);
+    std::string line;
+    while (std::getline(in, line)) lines.push_back(line);
+  }
+  const bool crlf = !lines.empty() && !lines[0].empty() && lines[0].back() == '\r';
+  for (std::string& line : lines) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+  }
+  const std::string entry = std::string(name) + " = " + value;
+  auto key_of = [](const std::string& line) {
+    const size_t start = line.find_first_not_of(" \t");
+    if (start == std::string::npos || line[start] == '#' || line[start] == '[') return std::string();
+    const size_t eq = line.find('=', start);
+    if (eq == std::string::npos) return std::string();
+    std::string key = line.substr(start, eq - start);
+    key.erase(key.find_last_not_of(" \t") + 1);
+    return key;
+  };
+  bool done = false;
+  for (std::string& line : lines) {
+    if (key_of(line) == name) {
+      line = entry;
+      done = true;
+      break;
+    }
+  }
+  if (!done) {
+    const std::string quoted = "[\"" + std::string(category) + "\"]";
+    const std::string bare = "[" + std::string(category) + "]";
+    for (size_t i = 0; i < lines.size() && !done; ++i) {
+      std::string header = lines[i];
+      header.erase(header.find_last_not_of(" \t") + 1);
+      if (header == quoted || header == bare) {
+        lines.insert(lines.begin() + ptrdiff_t(i) + 1, entry);
+        done = true;
+      }
+    }
+  }
+  if (!done) {
+    if (!lines.empty() && !lines.back().empty()) lines.emplace_back();
+    lines.push_back("[\"" + std::string(category) + "\"]");
+    lines.push_back(entry);
+  }
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    REXLOG_WARN("Portal menu: cannot write {}", PathUtf8(path));
+    return;
+  }
+  for (const std::string& line : lines) out << line << (crlf ? "\r\n" : "\n");
+}
+
+void SetOption(std::string_view name, const std::string& value, bool quoted) {
+  if (!rex::cvar::SetFlagByName(name, value)) {
+    REXLOG_WARN("Portal menu: could not set {}", name);
+    return;
+  }
+  if (g_config_path.empty()) return;
+  std::string toml = value;
+  if (quoted) {
+    toml.clear();
+    for (char c : value) {
+      if (c == '"' || c == '\\') toml += '\\';
+      toml += c;
+    }
+    toml = "\"" + toml + "\"";
+  }
+  WriteSetting(g_config_path, "Portal", name, toml);
 }
 
 // Each player's recent list, kept across sessions, one line per placement with the figure files
@@ -717,17 +802,27 @@ class Library {
     recent_.clear();
     ScanOwned();
     const std::vector<std::string> games = AllowedGames();
+    const std::vector<std::string> shown = ShownGames(games);
+    const bool owned_only = REXCVAR_GET(portal_menu_owned_only);
+    // A version is listed unless its game is hidden or, with "only my figures", neither of its
+    // figures has a file.
+    auto listed = [&](const SkylanderInfo* sky, const SkylanderInfo* bottom) {
+      if (Contains(games, sky->game) && !Contains(shown, sky->game)) return false;
+      return !owned_only || Owned(sky) || (bottom && Owned(bottom));
+    };
 
-    // Characters, each under the game it debuted in (catalog order is release order). Figures
-    // from later games count too when they carry the id of a character this game knows: the game
-    // goes by the id, so "Eon's Elite Chop Chop" (id 30) plays as Chop Chop in Swap Force, while
-    // a SuperChargers driver (own id) or a character new in a later game is unknown to it.
+    // Characters with all their versions (catalog order is release order). Figures from later
+    // games count too when they carry the id of a character this game knows: the game goes by the
+    // id, so "Eon's Elite Chop Chop" (id 30) plays as Chop Chop in Swap Force, while a
+    // SuperChargers driver (own id) or a character new in a later game is unknown to it.
     std::unordered_map<std::string, size_t> index;
+    std::unordered_map<std::string, std::string> debut;  // character -> first game, unfiltered
     known_ids_.clear();
     std::vector<size_t> items;
     for (const SkylanderInfo& sky : portal::AllSkylanders()) {
       const bool game_allowed = std::find(games.begin(), games.end(), sky.game) != games.end();
       if (sky.category == "Items" && game_allowed) {
+        if (!listed(&sky, nullptr)) continue;
         Character item;
         item.name = portal::DisplayName(sky.name);
         item.debut_game = sky.game;
@@ -759,23 +854,27 @@ class Library {
       } else {
         continue;
       }
+      debut.emplace(name, sky.game);
+      Version version{&sky, nullptr};
+      if (portal::GetSwapperHalf(sky) == SwapperHalf::kTop) {
+        version.bottom = portal::SwapperPartner(sky);
+      }
+      if (!listed(version.sky, version.bottom)) continue;
       auto [it, inserted] = index.emplace(name, characters_.size());
       if (inserted) {
         Character character;
         character.name = name;
         character.element = portal::FigureElement(sky);
-        character.debut_game = sky.game;
+        character.debut_game = debut[name];
         character.swapper = portal::GetSwapperHalf(sky) == SwapperHalf::kTop;
         characters_.push_back(std::move(character));
-      }
-      Version version{&sky, nullptr};
-      if (portal::GetSwapperHalf(sky) == SwapperHalf::kTop) {
-        version.bottom = portal::SwapperPartner(sky);
       }
       characters_[it->second].versions.push_back(version);
     }
 
-    // Recent first, then one tab per game, its characters grouped by element.
+    // Recent first, then one tab per game with every character that has a version from that game
+    // (Drobot is in Spyro's Adventure with Series 1 and in Giants with Series 2 and LightCore),
+    // grouped by element.
     Tab recent;
     recent.title = T(Text::kRecent);
     recent.recent = true;
@@ -792,11 +891,11 @@ class Library {
         recent_.push_back(std::move(entry));
       }
     }
-    for (const std::string& game : games) {
+    for (const std::string& game : shown) {
       Tab tab;
       tab.title = game;
       for (size_t i = 0; i < characters_.size(); ++i) {
-        if (characters_[i].debut_game != game || characters_[i].item) continue;
+        if (characters_[i].item || !characters_[i].HasVersionFrom(game)) continue;
         auto e = std::find(tab.elements.begin(), tab.elements.end(), characters_[i].element);
         if (e == tab.elements.end()) {
           tab.elements.push_back(characters_[i].element);
@@ -805,7 +904,8 @@ class Library {
         }
         tab.rows[size_t(e - tab.elements.begin())].push_back(i);
       }
-      // Elements in the game's order; within one, characters with an owned version first.
+      // Elements in the game's order; within one, characters with an owned version from this
+      // game first, then the ones new in this game, then the returning ones.
       std::vector<size_t> order(tab.elements.size());
       for (size_t i = 0; i < order.size(); ++i) order[i] = i;
       std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
@@ -813,12 +913,16 @@ class Library {
       });
       Tab sorted;
       sorted.title = tab.title;
+      sorted.game = game;
       for (size_t i : order) {
         sorted.elements.push_back(tab.elements[i]);
         std::vector<size_t> chars = tab.rows[i];
-        std::stable_sort(chars.begin(), chars.end(), [&](size_t a, size_t b) {
-          return (BestOwned(characters_[a]) != nullptr) > (BestOwned(characters_[b]) != nullptr);
-        });
+        auto rank = [&](size_t c) {
+          const Character& character = characters_[c];
+          return (BestOwned(character, game) ? 0 : 2) + (character.debut_game == game ? 0 : 1);
+        };
+        std::stable_sort(chars.begin(), chars.end(),
+                         [&](size_t a, size_t b) { return rank(a) < rank(b); });
         sorted.rows.push_back(std::move(chars));
       }
       if (!sorted.elements.empty()) tabs_.push_back(std::move(sorted));
@@ -828,7 +932,7 @@ class Library {
     Tab item_tab;
     item_tab.title = T(Text::kItems);
     item_tab.items = true;
-    for (const std::string& game : games) {
+    for (const std::string& game : shown) {
       std::vector<size_t> row;
       for (size_t i : items) {
         if (characters_[i].debut_game == game) row.push_back(i);
@@ -862,10 +966,11 @@ class Library {
     return it == by_path_.end() ? nullptr : it->second;
   }
 
-  // The version played last, if any version is owned.
-  const OwnedFigure* BestOwned(const Character& character) const {
+  // The version played last, if any version (from `game`, if given) is owned.
+  const OwnedFigure* BestOwned(const Character& character, std::string_view game = {}) const {
     const OwnedFigure* best = nullptr;
     for (const Version& v : character.versions) {
+      if (!game.empty() && v.sky->game != game) continue;
       for (const SkylanderInfo* sky : {v.sky, v.bottom}) {
         const OwnedFigure* owned = Owned(sky);
         if (owned && (!best || owned->mtime > best->mtime)) best = owned;
@@ -874,9 +979,15 @@ class Library {
     return best;
   }
 
-  // Finds the tab, element and position of the character a figure belongs to.
+  // Finds the tab, element and position of the character a figure belongs to, in the tab of the
+  // figure's own game if it is listed there.
   bool Locate(const SkylanderInfo* sky, size_t& tab, size_t& element, size_t& position) const {
+    std::vector<size_t> order;
     for (size_t t = 0; t < tabs_.size(); ++t) {
+      if (tabs_[t].game == sky->game) order.insert(order.begin(), t);
+      else order.push_back(t);
+    }
+    for (size_t t : order) {
       for (size_t e = 0; e < tabs_[t].rows.size(); ++e) {
         const auto& chars = tabs_[t].rows[e];
         for (size_t p = 0; p < chars.size(); ++p) {
@@ -1231,6 +1342,7 @@ struct Actions {
   bool accept = false, back = false, details = false, lb = false, rb = false, lt = false,
        rt = false;
   bool take_off = false;  // Y: take the item off the portal
+  bool options = false;   // Start: options (shown games, only my figures, leave the portal)
 };
 
 // Edge and key-repeat detection for one controller.
@@ -1244,6 +1356,7 @@ class PadReader {
     a.back = pressed(rex::input::X_INPUT_GAMEPAD_B);
     a.details = pressed(rex::input::X_INPUT_GAMEPAD_X);
     a.take_off = pressed(rex::input::X_INPUT_GAMEPAD_Y);
+    a.options = pressed(rex::input::X_INPUT_GAMEPAD_START);
     a.lb = pressed(rex::input::X_INPUT_GAMEPAD_LEFT_SHOULDER);
     a.rb = pressed(rex::input::X_INPUT_GAMEPAD_RIGHT_SHOULDER);
     const bool lt = pad.left_trigger > 128, rt = pad.right_trigger > 128;
@@ -1303,6 +1416,7 @@ Actions ReadKeyboard() {
   a.back = once(ImGuiKey_Escape) || once(ImGuiKey_Backspace);
   a.details = once(ImGuiKey_L) || once(ImGuiKey_Tab);
   a.take_off = once(ImGuiKey_P);
+  a.options = once(ImGuiKey_O);
   a.lb = once(ImGuiKey_1);
   a.rb = once(ImGuiKey_3);
   a.lt = once(ImGuiKey_Q);
@@ -1323,6 +1437,7 @@ void Merge(Actions& into, const Actions& from) {
   into.lt |= from.lt;
   into.rt |= from.rt;
   into.take_off |= from.take_off;
+  into.options |= from.options;
 }
 
 // --- The dialog ---------------------------------------------------------------------------------
@@ -1378,15 +1493,13 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         if (!name.empty()) taken_.emplace(name, owner);
       }
       current_item_ = PortalItem();
-      // Recent opens first; with nothing recent, the lifted figure's character.
-      tab_ = 0;
-      if (library_.recent().empty() && library_.tabs().size() > 1) {
-        tab_ = 1;
-        for (const LiftedFigure& figure : lifted_) {
-          if (figure.sky && library_.Locate(figure.sky, tab_, element_, selected_)) break;
-        }
-      }
+      OpenFirstTab();
     }
+    // Opened with a button, the figure was just lifted: the menu stays hidden while the game
+    // reacts (the camera zooms out to the portal) and comes up with the game's own portal screen.
+    // Without a lifted figure there is nothing to wait for.
+    revealed_ = auto_opened_ || !software_ || lifted_.empty();
+    if (revealed_) reveal_time_ = Clock::now();
     REXLOG_INFO("Portal menu: opened for player {}{}", user_ + 1,
                 auto_opened_ ? " (the game asks for a Skylander)" : "");
   }
@@ -1403,9 +1516,24 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   uint32_t user() const { return user_; }
   bool auto_opened() const { return auto_opened_; }
 
+  // The game started zooming out to the portal: come up shortly before its portal screen.
+  void RevealSoon() {
+    if (!revealed_) reveal_at_ = Clock::now() + std::chrono::milliseconds(600);
+  }
+
+  // The game shows its portal screen for this player: come up now if still waiting for it.
+  void Reveal() {
+    if (revealed_ || state_ == State::kWaiting || state_ == State::kDone) return;
+    revealed_ = true;
+    reveal_time_ = Clock::now();
+    REXLOG_INFO("Portal menu: shown {} ms after the open button",
+                std::chrono::duration_cast<std::chrono::milliseconds>(reveal_time_ - lift_time_)
+                    .count());
+  }
+
  protected:
   void OnDraw(ImGuiIO& io) override {
-    g_s = io.DisplaySize.y / 1080.0f;
+    SetScale(io.DisplaySize.y / 1080.0f);
     TrackMouse(io);
     if (state_ == State::kWaiting) {
       if (Clock::now() - lift_time_ >= std::chrono::milliseconds(350)) {
@@ -1417,6 +1545,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
           PlaceForPlayer(user_, pending_paths_, preferred);
         }
         if (item_change_) ScheduleItemChange(user_, item_path_);
+        // The game's own way out: B "leave the game" on its portal screen for this player.
+        if (leave_) menu_input::TapButton(user_, rex::input::X_INPUT_GAMEPAD_B);
         Finish();
       }
       return;
@@ -1424,6 +1554,16 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (state_ == State::kDone) return;
 
     Actions actions = ReadActions();
+    if (!revealed_) {
+      // B or the open button again: never mind, the figure goes back.
+      if (actions.back) {
+        StartCancel();
+        return;
+      }
+      if (!ShouldReveal()) return;
+      Reveal();
+      actions = {};
+    }
     if (!software_) state_ = State::kMessage;
 
     ImGui::SetNextWindowPos({0, 0});
@@ -1437,6 +1577,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                      ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse);
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    const int first_vertex = dl->VtxBuffer.Size;
     const float W = io.DisplaySize.x, H = io.DisplaySize.y;
     // The game stays visible, dimmed, around and slightly through the panel.
     dl->AddRectFilled({0, 0}, {W, H}, Rgba(6, 10, 30, 120));
@@ -1450,11 +1591,50 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       DrawBody(dl, p0, p1);
     }
     DrawFooter(dl, p0, p1);
+    // Fades in over 0.2 s.
+    FadeVertices(dl, first_vertex,
+                 std::chrono::duration<float>(Clock::now() - reveal_time_).count() / 0.2f);
     ImGui::End();
   }
 
  private:
-  enum class State { kBrowsing, kChoosing, kBuilding, kDetails, kMessage, kWaiting, kDone };
+  enum class State {
+    kBrowsing,
+    kChoosing,
+    kBuilding,
+    kDetails,
+    kOptions,
+    kMessage,
+    kWaiting,
+    kDone
+  };
+
+  // Hidden after the open button, the menu comes up with the game's own portal screen (Reveal from
+  // AutoOpenPortalMenu); if the game doesn't show one (a second player just drops out), once it
+  // is clearly not busy with the figure; at the latest after portal_menu_open_delay_ms.
+  bool ShouldReveal() const {
+    if (reveal_at_ && Clock::now() >= *reveal_at_) return true;
+    const auto waited = Clock::now() - lift_time_;
+    if (waited >= std::chrono::milliseconds(REXCVAR_GET(portal_menu_open_delay_ms))) return true;
+    if (waited < std::chrono::milliseconds(700)) return false;
+    std::function<bool()> busy;
+    {
+      std::lock_guard lock(g_provider_mutex);
+      busy = g_game_busy;
+    }
+    return busy && !busy();
+  }
+
+  // Recent opens first; with nothing recent, the lifted figure's character.
+  void OpenFirstTab() {
+    tab_ = element_ = selected_ = scroll_row_ = 0;
+    if (library_.recent().empty() && library_.tabs().size() > 1) {
+      tab_ = 1;
+      for (const LiftedFigure& figure : lifted_) {
+        if (figure.sky && library_.Locate(figure.sky, tab_, element_, selected_)) break;
+      }
+    }
+  }
 
   // --- input ---
 
@@ -1539,12 +1719,41 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     return std::nullopt;
   }
 
+  // The current tab's versions first (Series 2 and LightCore in the Giants tab), then the rest.
   std::vector<Choice> ChoicesFor(const Character& character) const {
     std::vector<Choice> choices;
-    for (const Version& v : character.versions) {
-      choices.push_back({FigureName(*v.sky), portal::VersionBadge(*v.sky), {v.sky}});
+    const std::string& game = CurrentTab().game;
+    for (int pass = 0; pass < 2; ++pass) {
+      for (const Version& v : character.versions) {
+        if (!game.empty() && (v.sky->game == game) != (pass == 0)) continue;
+        if (game.empty() && pass == 1) continue;
+        choices.push_back({FigureName(*v.sky), portal::VersionBadge(*v.sky), {v.sky}});
+      }
     }
     return choices;
+  }
+
+  // The version a character's card stands for in the current tab: its version from the tab's game
+  // played last, else the tab's first version from that game (Series 2 Drobot in Giants). Outside
+  // a game tab, the version played last, else the first.
+  const Version& ShownVersion(const Character& character) const {
+    const std::string& game = CurrentTab().game;
+    const Version* first = nullptr;
+    const Version* best = nullptr;
+    const OwnedFigure* best_owned = nullptr;
+    for (const Version& v : character.versions) {
+      if (!game.empty() && v.sky->game != game) continue;
+      if (!first) first = &v;
+      for (const SkylanderInfo* sky : {v.sky, v.bottom}) {
+        const OwnedFigure* owned = library_.Owned(sky);
+        if (owned && (!best_owned || owned->mtime > best_owned->mtime)) {
+          best_owned = owned;
+          best = &v;
+        }
+      }
+    }
+    if (best) return *best;
+    return first ? *first : character.versions.front();
   }
 
   // What the preview shows: the swapper being built, the highlighted choice or recent entry, or
@@ -1560,14 +1769,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     if (const RecentEntry* entry = SelectedRecent()) return entry->figures;
     if (const Character* character = SelectedCharacter()) {
-      const OwnedFigure* best = library_.BestOwned(*character);
-      for (const Version& v : character->versions) {
-        if (best && (best->sky == v.sky || best->sky == v.bottom)) {
-          return v.bottom ? std::vector<const SkylanderInfo*>{v.sky, v.bottom}
-                          : std::vector<const SkylanderInfo*>{v.sky};
-        }
-      }
-      const Version& v = character->versions.front();
+      const Version& v = ShownVersion(*character);
       return v.bottom ? std::vector<const SkylanderInfo*>{v.sky, v.bottom}
                       : std::vector<const SkylanderInfo*>{v.sky};
     }
@@ -1602,6 +1804,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       if (a.back || a.details) state_ = previous_state_;
       return;
     }
+    if (state_ == State::kOptions) {
+      HandleOptions(a);
+      return;
+    }
     if (a.details) {
       previous_state_ = state_;
       state_ = State::kDetails;
@@ -1628,6 +1834,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     if (a.take_off && current_item_) {
       ToggleItem(*current_item_);
+      return;
+    }
+    if (a.options) {
+      OpenOptions();
       return;
     }
     if (a.lt) SwitchTab(-1);
@@ -1691,12 +1901,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       }
     }
     if (tops_.empty()) return;
-    // Start with the character's version played last, whole.
-    const OwnedFigure* best = library_.BestOwned(character);
-    const Version* start = &character.versions.front();
-    for (const Version& v : character.versions) {
-      if (best && (best->sky == v.sky || best->sky == v.bottom)) start = &v;
-    }
+    // Start with the version the card shows, whole.
+    const Version* start = &ShownVersion(character);
     build_top_ = size_t(std::find(tops_.begin(), tops_.end(), start->sky) - tops_.begin()) %
                  tops_.size();
     build_bottom_ =
@@ -1721,6 +1927,150 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       const SkylanderInfo* top = tops_[build_top_];
       const SkylanderInfo* bottom = bottoms_[build_bottom_];
       if (!TakenBy(top) && !TakenBy(bottom)) Confirm({top, bottom});
+    }
+  }
+
+  // --- options ---
+
+  struct OptionRow {
+    enum class Kind { kLeave, kGame, kOwnedOnly } kind;
+    std::string game;
+  };
+
+  std::vector<OptionRow> OptionRows() const {
+    std::vector<OptionRow> rows;
+    // Leaving only means something for a second player: player 1 alone would just be asked for a
+    // Skylander again.
+    if (user_ > 0) rows.push_back({OptionRow::Kind::kLeave, {}});
+    for (const std::string& game : AllowedGames()) rows.push_back({OptionRow::Kind::kGame, game});
+    rows.push_back({OptionRow::Kind::kOwnedOnly, {}});
+    return rows;
+  }
+
+  bool GameShown(const std::string& game) const {
+    return Contains(ShownGames(AllowedGames()), game);
+  }
+
+  void OpenOptions() {
+    option_ = 0;
+    state_ = State::kOptions;
+  }
+
+  void HandleOptions(const Actions& a) {
+    const std::vector<OptionRow> rows = OptionRows();
+    if (a.back || a.options) {
+      state_ = State::kBrowsing;
+      return;
+    }
+    if (rows.empty()) return;
+    if (a.up) option_ = (option_ + rows.size() - 1) % rows.size();
+    if (a.down) option_ = (option_ + 1) % rows.size();
+    if (!a.accept) return;
+    const OptionRow& row = rows[std::min(option_, rows.size() - 1)];
+    switch (row.kind) {
+      case OptionRow::Kind::kLeave:
+        Leave();
+        return;
+      case OptionRow::Kind::kGame: {
+        const std::vector<std::string> games = AllowedGames();
+        std::vector<std::string> hidden = SplitList(REXCVAR_GET(portal_menu_hidden_games));
+        if (GameShown(row.game)) {
+          // The last shown game stays.
+          if (ShownGames(games).size() <= 1) return;
+          hidden.push_back(row.game);
+        } else {
+          hidden.erase(std::remove(hidden.begin(), hidden.end(), row.game), hidden.end());
+        }
+        std::string value;
+        for (const std::string& game : hidden) value += (value.empty() ? "" : ";") + game;
+        SetOption("portal_menu_hidden_games", value, true);
+        break;
+      }
+      case OptionRow::Kind::kOwnedOnly:
+        SetOption("portal_menu_owned_only", REXCVAR_GET(portal_menu_owned_only) ? "false" : "true",
+                  false);
+        break;
+    }
+    RebuildLibrary();
+  }
+
+  // After an option changed: the lists again, on the same tab if it is still there.
+  void RebuildLibrary() {
+    const std::string title = CurrentTab().title;
+    library_.Build(user_);
+    tops_.clear();
+    bottoms_.clear();
+    tab_ = element_ = selected_ = scroll_row_ = 0;
+    for (size_t t = 0; t < library_.tabs().size(); ++t) {
+      if (library_.tabs()[t].title == title) tab_ = t;
+    }
+  }
+
+  // A second player takes their Skylander off and leaves the game: with the figure gone the game
+  // shows its portal screen for that player, and the menu presses that screen's B ("leave the
+  // game") as it closes.
+  void Leave() {
+    pending_paths_.clear();
+    restore_ = false;
+    item_change_ = false;
+    leave_ = true;
+    state_ = State::kWaiting;
+    REXLOG_INFO("Portal menu: player {} leaves the game", user_ + 1);
+  }
+
+  void DrawOptions(ImDrawList* dl, ImVec2 area0, ImVec2 area1) {
+    const std::vector<OptionRow> rows = OptionRows();
+    const float row_h = S(62);
+    ImVec2 a, b;
+    DrawOverlayPanel(dl, area0, area1, {S(660), S(96) + rows.size() * (row_h + S(8))}, a, b);
+    Label(dl, BoldFont(), S(28), {a.x + S(28), a.y + S(22)}, kGold, T(Text::kOptions));
+    for (size_t i = 0; i < rows.size(); ++i) {
+      const OptionRow& row = rows[i];
+      const ImVec2 r0{a.x + S(24), a.y + S(78) + i * (row_h + S(8))};
+      const ImVec2 r1{b.x - S(24), r0.y + row_h};
+      const bool active = i == option_;
+      if (state_ == State::kOptions) {
+        if (MouseSelects(r0, r1)) option_ = i;
+        if (ImGui::IsMouseHoveringRect(r0, r1) && ImGui::IsMouseClicked(0)) {
+          option_ = i;
+          Actions click;
+          click.accept = true;
+          HandleOptions(click);
+          return;
+        }
+      }
+      dl->AddRectFilled(r0, r1, active ? Rgba(255, 255, 255, 52) : Rgba(255, 255, 255, 14), S(14));
+      if (active) dl->AddRect(r0, r1, kGold, S(14), 0, S(3));
+      std::string label;
+      std::optional<bool> on;
+      switch (row.kind) {
+        case OptionRow::Kind::kLeave: {
+          char text[96];
+          std::snprintf(text, sizeof(text), T(Text::kLeaveInfo), user_ + 1);
+          Label(dl, BoldFont(), S(23), {r0.x + S(20), r0.y + S(6)}, PlayerColor(user_),
+                T(Text::kLeave));
+          Label(dl, BoldFont(), S(16), {r0.x + S(20), r0.y + S(36)}, kDim, text);
+          continue;
+        }
+        case OptionRow::Kind::kGame:
+          label = std::string(T(Text::kShowGames)) + ": " + row.game;
+          on = GameShown(row.game);
+          break;
+        case OptionRow::Kind::kOwnedOnly:
+          label = T(Text::kOwnedOnly);
+          on = REXCVAR_GET(portal_menu_owned_only);
+          break;
+      }
+      Label(dl, BoldFont(), S(23), {r0.x + S(20), r0.y + S(16)}, kWhite, label);
+      // A switch on the right: green and to the right when on.
+      const float sw = S(74), sh = S(34);
+      const ImVec2 s0{r1.x - sw - S(18), r0.y + (row_h - sh) / 2}, s1{s0.x + sw, s0.y + sh};
+      dl->AddRectFilled(s0, s1, *on ? Rgba(60, 170, 80) : Rgba(70, 76, 110), sh / 2);
+      const float knob = sh / 2 - S(4);
+      dl->AddCircleFilled({*on ? s1.x - sh / 2 : s0.x + sh / 2, (s0.y + s1.y) / 2}, knob, kWhite);
+      const char* state = *on ? T(Text::kOn) : T(Text::kOff);
+      const ImVec2 ts = TextSize(BoldFont(), S(18), state);
+      Label(dl, BoldFont(), S(18), {s0.x - ts.x - S(12), r0.y + S(20)}, kDim, state);
     }
   }
 
@@ -1793,23 +2143,6 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   // --- drawing ---
 
-  void DrawPanel(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
-    const float r = S(26);
-    dl->AddRectFilled({p0.x + S(8), p0.y + S(10)}, {p1.x + S(8), p1.y + S(10)}, Rgba(0, 0, 0, 80),
-                      r);
-    // Slightly see-through, with a magic glow from the top.
-    dl->AddRectFilled(p0, p1, Rgba(16, 22, 60, 205), r);
-    const ImVec2 glow{(p0.x + p1.x) / 2, p0.y + S(40)};
-    for (int i = 6; i >= 1; --i) {
-      const float k = float(i) / 6.0f;
-      dl->AddEllipseFilled(glow, {(p1.x - p0.x) * 0.45f * k, S(220) * k},
-                           IM_COL32(90, 70, 200, int(16 * (1.0f - k) + 4)));
-    }
-    dl->AddRect(p0, p1, kGold, r, 0, S(4));
-    dl->AddRect({p0.x + S(9), p0.y + S(9)}, {p1.x - S(9), p1.y - S(9)}, kGoldDark, r - S(8), 0,
-                S(1.5f));
-  }
-
   void DrawHeader(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
     OutlinedLabel(dl, TitleFont(), S(46), {p0.x + S(38), p0.y + S(20)}, kGold, T(Text::kTitle),
                   S(2.5f));
@@ -1840,6 +2173,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       Hint(dl, {x, y}, kb ? "Esc" : "B", Rgba(232, 73, 43), T(Text::kBack), !kb);
       return;
     }
+    if (state_ == State::kOptions) {
+      x += Hint(dl, {x, y}, kb ? "Enter" : "A", Rgba(76, 175, 80), T(Text::kToggle), !kb);
+      Hint(dl, {x, y}, kb ? "Esc" : "B", Rgba(232, 73, 43), T(Text::kClose), !kb);
+      return;
+    }
     const Character* character = SelectedCharacter();
     const bool item = state_ == State::kBrowsing && character && character->item;
     const char* accept = item && current_item_ == character->versions.front().sky
@@ -1857,8 +2195,15 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                   CurrentTab().items ? T(Text::kGame) : T(Text::kElement), false);
       }
       if (current_item_) {
-        Hint(dl, {x, y}, kb ? "P" : "Y", Rgba(230, 180, 40), T(Text::kTakeOffItem), !kb);
+        x += Hint(dl, {x, y}, kb ? "P" : "Y", Rgba(230, 180, 40), T(Text::kTakeOffItem), !kb);
       }
+      // Options last, at the right edge when there is room.
+      const std::string options = user_ > 0
+                                      ? std::string(T(Text::kOptions)) + " / " + T(Text::kLeave)
+                                      : std::string(T(Text::kOptions));
+      const char* glyph = kb ? "O" : "Start";
+      const float w = HintWidth(glyph, options, false);
+      Hint(dl, {std::max(x, p1.x - S(38) - w + S(28)), y}, glyph, grey, options, false);
     }
   }
 
@@ -1899,12 +2244,15 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
     const size_t count = ItemCount();
     if (!count) {
-      Label(dl, BoldFont(), S(26), {area0.x, area0.y + S(10)}, kDim, T(Text::kNothingRecent));
+      const bool filtered = REXCVAR_GET(portal_menu_owned_only) && !tab.recent;
+      Label(dl, BoldFont(), S(26), {area0.x, area0.y + S(10)}, kDim,
+            filtered ? T(Text::kNothingOwned) : T(Text::kNothingRecent));
       columns_ = 1;
+      if (state_ == State::kOptions) DrawOptions(dl, area0, grid1);
       return;
     }
     const float gap = S(16);
-    const float card_w = S(172), card_h = S(214);
+    const float card_w = S(172), card_h = S(236);
     columns_ = std::max<size_t>(1, size_t((grid1.x - area0.x + gap) / (card_w + gap)));
     const size_t rows_visible =
         std::max<size_t>(1, size_t((grid1.y - area0.y + gap) / (card_h + gap)));
@@ -1947,6 +2295,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (overlay == State::kChoosing) DrawChoices(dl, area0, grid1);
     if (overlay == State::kBuilding) DrawBuilder(dl, area0, grid1);
     if (state_ == State::kDetails) DrawDetails(dl, area0, grid1);
+    if (state_ == State::kOptions) DrawOptions(dl, area0, grid1);
   }
 
   // The rows of a tab: elements (medallion + name) or, for items, games. When the names don't
@@ -2017,10 +2366,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     return TextSize(BoldFont(), S(size), text).x + S(14);
   }
 
-  // A collection tile: the picture on top, the name below. Returns the picture's rectangle.
+  // A collection tile: the picture on top, the name below and, if given, the version badge (S2,
+  // LightCore) under the name. Returns the picture's rectangle.
   std::pair<ImVec2, ImVec2> DrawTile(ImDrawList* dl, ImVec2 a, ImVec2 b, Element element,
                                      bool selected, const SkylanderInfo* picture,
-                                     const std::string& name) {
+                                     const std::string& name, const std::string& badge = {}) {
     DrawCardFrame(dl, a, b, element, selected);
     const float pad = S(9);
     const ImVec2 p0{a.x + pad, a.y + pad};
@@ -2030,18 +2380,13 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const ImVec2 ts = TextSize(BoldFont(), size, name, wrap);
     const float x = ts.x < wrap ? (a.x + b.x - ts.x) / 2 : a.x + S(7);
     dl->PushClipRect(a, b, true);
-    Label(dl, BoldFont(), size, {x, p1.y + S(6)}, kWhite, name, wrap);
+    Label(dl, BoldFont(), size, {x, p1.y + S(5)}, kWhite, name, wrap);
+    if (!badge.empty()) {
+      const ImVec2 bs = TextSize(BoldFont(), S(15), badge);
+      Label(dl, BoldFont(), S(15), {(a.x + b.x - bs.x) / 2, p1.y + S(8) + ts.y}, kGold, badge);
+    }
     dl->PopClipRect();
     return {p0, p1};
-  }
-
-  // The version a character's card shows: the one played last, else the first.
-  const SkylanderInfo* ShownVersion(const Character& character) const {
-    const OwnedFigure* best = library_.BestOwned(character);
-    for (const Version& v : character.versions) {
-      if (best && (best->sky == v.sky || best->sky == v.bottom)) return v.sky;
-    }
-    return character.versions.front().sky;
   }
 
   // Darkens a card another player's figure is using and says whose it is.
@@ -2059,9 +2404,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   void DrawCharacterCard(ImDrawList* dl, ImVec2 a, ImVec2 b, const Character& character,
                          bool selected) {
-    const SkylanderInfo* shown = ShownVersion(character);
+    const Version& version = ShownVersion(character);
+    const SkylanderInfo* shown = version.sky;
     const std::string name = character.item ? FigureName(*shown) : character.name;
-    const auto [p0, p1] = DrawTile(dl, a, b, character.element, selected, shown, name);
+    const auto [p0, p1] =
+        DrawTile(dl, a, b, character.element, selected, shown, name, ShortBadge(*shown));
     if (character.item) {
       if (current_item_ == character.versions.front().sky) {
         const float w = PillWidth(T(Text::kOnPortal), 15);
@@ -2076,7 +2423,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
            std::to_string(character.versions.size()) + " " + T(Text::kVersions),
            Rgba(10, 12, 30, 200), kWhite);
     }
-    if (const OwnedFigure* owned = library_.BestOwned(character); owned && owned->stats) {
+    const OwnedFigure* owned = library_.Owned(version.sky);
+    if (!owned && version.bottom) owned = library_.Owned(version.bottom);
+    if (owned && owned->stats) {
       const std::string lv = "Lv " + std::to_string(owned->stats->level);
       Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
     }
@@ -2346,6 +2695,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   bool auto_opened_;
   bool keyboard_controls_ = false;
   bool software_ = false;
+  bool revealed_ = true;
+  std::optional<Clock::time_point> reveal_at_;  // RevealSoon
+  Clock::time_point reveal_time_ = Clock::now();
+  bool leave_ = false;
+  size_t option_ = 0;
   bool first_frame_ = true;
   bool waiting_for_release_ = true;
   std::optional<ImVec2> mouse_start_;
@@ -2381,6 +2735,46 @@ std::unique_ptr<PortalMenuDialog> g_menu;
 rex::ui::ImGuiDrawer* g_drawer = nullptr;
 rex::ui::WindowedAppContext* g_app_context = nullptr;
 
+// A short message at the top of the screen, fading out after two seconds.
+class Toast final : public rex::ui::ImGuiDialog {
+ public:
+  Toast(rex::ui::ImGuiDrawer* drawer, std::string text, std::function<void()> on_done)
+      : ImGuiDialog(drawer), text_(std::move(text)), on_done_(std::move(on_done)) {}
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    const float t = std::chrono::duration<float>(Clock::now() - start_).count();
+    if (t > 2.4f) {
+      if (on_done_) on_done_();
+      on_done_ = nullptr;
+      return;
+    }
+    SetScale(io.DisplaySize.y / 1080.0f);
+    ImGui::SetNextWindowPos({0, 0});
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("##portal_toast", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoFocusOnAppearing);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const int first = dl->VtxBuffer.Size;
+    const ImVec2 ts = TextSize(BoldFont(), S(26), text_);
+    const ImVec2 a{(io.DisplaySize.x - ts.x) / 2 - S(30), S(60)};
+    const ImVec2 b{a.x + ts.x + S(60), a.y + ts.y + S(24)};
+    dl->AddRectFilled(a, b, Rgba(16, 22, 60, 230), S(22));
+    dl->AddRect(a, b, kGold, S(22), 0, S(3));
+    Label(dl, BoldFont(), S(26), {a.x + S(30), a.y + S(12)}, kWhite, text_);
+    FadeVertices(dl, first, std::min(t / 0.15f, (2.4f - t) / 0.4f));
+    ImGui::End();
+  }
+
+ private:
+  std::string text_;
+  std::function<void()> on_done_;
+  Clock::time_point start_ = Clock::now();
+};
+
 void OpenMenu(DeviceId device, uint32_t user, bool keyboard, bool auto_opened = false) {
   if (g_menu || !g_drawer) return;
   g_menu = std::make_unique<PortalMenuDialog>(
@@ -2392,12 +2786,36 @@ void OpenMenu(DeviceId device, uint32_t user, bool keyboard, bool auto_opened = 
       device, user, keyboard, auto_opened);
 }
 
+std::unique_ptr<Toast> g_toast;  // UI thread only
+
+void ShowToast(std::string text) {
+  if (!g_drawer || !g_app_context) return;
+  g_toast = std::make_unique<Toast>(g_drawer, std::move(text), [] {
+    g_app_context->CallInUIThreadDeferred([] { g_toast.reset(); });
+  });
+}
+
+// portal_item_off_buttons / bind_portal_item_off: takes the item off without opening the menu and
+// without lifting anyone's Skylander. With the menu open, its own Y does that.
+void TakeItemOff() {
+  if (g_menu || !PortalItem()) return;
+  g_german = rex::cvar::GetFlagByName("language") == "german";
+  REXLOG_INFO("Portal menu: item taken off with the item button");
+  SetPortalItem(0, std::nullopt);
+  ShowToast(T(Text::kItemTakenOff));
+}
+
 }  // namespace
 
 void AutoOpenPortalMenu(uint32_t user) {
   if (!g_app_context || user >= rex::input::kMaxGuestUsers) return;
   g_app_context->CallInUIThread([user] {
-    if (!REXCVAR_GET(portal_menu_auto_open) || g_menu || !GetSoftwarePortal()) return;
+    // Opened with the button for this player and waiting for the game's portal screen: here it is.
+    if (g_menu) {
+      if (g_menu->user() == user) g_menu->Reveal();
+      return;
+    }
+    if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal()) return;
     // The player's controller steers it; without one, the keyboard.
     const auto device = menu_input::DeviceForUser(user);
     OpenMenu(device ? device->id : DeviceId::kInvalid, user, !device || device->keyboard, true);
@@ -2411,9 +2829,21 @@ void CloseAutoOpenedPortalMenu() {
   });
 }
 
+void SetPortalMenuConfigPath(std::filesystem::path config_path) {
+  g_config_path = std::move(config_path);
+}
+
+void PortalScreenComing(uint32_t user) {
+  if (!g_app_context) return;
+  g_app_context->CallInUIThread([user] {
+    if (g_menu && g_menu->user() == user) g_menu->RevealSoon();
+  });
+}
+
 void ShutdownPortalMenu() {
   StopItemThread();
   g_menu.reset();
+  g_toast.reset();
   g_textures.clear();
   g_immediate_drawer = nullptr;
 }
@@ -2433,14 +2863,7 @@ void SetGameBusyProvider(std::function<bool()> busy) {
   g_game_busy = std::move(busy);
 }
 
-void AddPortalMenuFonts(ImFontAtlas* atlas) {
-#ifdef _WIN32
-  g_font_title = atlas->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguibl.ttf", kTitleBakeSize);
-  g_font_bold = atlas->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", kBoldBakeSize);
-#else
-  (void)atlas;
-#endif
-}
+void AddPortalMenuFonts(ImFontAtlas* atlas) { menu_draw::AddFonts(atlas); }
 
 void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext* app_context,
                         rex::ui::ImmediateDrawer* immediate_drawer) {
@@ -2452,10 +2875,19 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
     if (!g_app_context) return;
     g_app_context->CallInUIThread([device, user] { OpenMenu(device, user, false); });
   });
+  menu_input::SetButtonHandler(menu_input::ButtonAction::kItemOff, [](DeviceId, uint32_t) {
+    if (g_app_context) g_app_context->CallInUIThread(TakeItemOff);
+  });
+  rex::ui::RegisterBind("bind_portal_item_off", "F5",
+                        "Take the item (magic item, adventure pack) off the portal", [] {
+                          if (!menu_input::MenuOpen()) TakeItemOff();
+                        });
   rex::ui::RegisterBind("bind_portal_menu", "F6",
                         "Open or close the portal menu for the keyboard's player", [] {
                           if (g_menu) {
                             g_menu->Cancel();
+                          } else if (menu_input::MenuOpen()) {
+                            // Another menu (the player menu) is open.
                           } else if (auto keyboard = menu_input::KeyboardDevice()) {
                             OpenMenu(*keyboard, menu_input::UserOf(*keyboard), true);
                           } else {

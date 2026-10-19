@@ -9,10 +9,16 @@
 //   alone it pauses and asks for a Skylander, in co-op only that player drops out. Each player
 //   can only change their own figure.
 // - Choosing places the new figure (both halves for a swapper); closing puts the old one back.
+// - Opened with a button, the menu waits for the game's own portal screen (the camera zooming out
+//   to the portal) before it fades in; opened by the game's prompt, it comes up at once.
+// - Start: options (which games are listed, only my figures) and, for a second player, leaving
+//   the portal.
+// - portal_item_off_buttons / bind_portal_item_off (F5) take the item off without the menu.
 //
 // Needs the input system from CreatePortalMenuInputSystem and the emulated (software) portal.
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -30,6 +36,9 @@ class WindowedAppContext;
 
 REXCVAR_DECLARE(std::string, portal_menu_games);
 REXCVAR_DECLARE(bool, portal_menu_auto_open);
+REXCVAR_DECLARE(std::string, portal_menu_hidden_games);
+REXCVAR_DECLARE(bool, portal_menu_owned_only);
+REXCVAR_DECLARE(int32_t, portal_menu_open_delay_ms);
 
 namespace skylanders {
 
@@ -41,6 +50,10 @@ void AddPortalMenuFonts(ImFontAtlas* atlas);
 // the menu can show figure pictures (SetFigureImageProvider).
 void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext* app_context,
                         rex::ui::ImmediateDrawer* immediate_drawer = nullptr);
+
+// The settings file the menu writes its options to (ReXApp's config path). Without it the options
+// last for this session only.
+void SetPortalMenuConfigPath(std::filesystem::path config_path);
 
 // Frees the menu's textures; call before the immediate drawer goes away (ReXApp::OnShutdown).
 void ShutdownPortalMenu();
@@ -78,5 +91,10 @@ void AutoOpenPortalMenu(uint32_t user);
 // The game stopped waiting: closes the menu again if AutoOpenPortalMenu opened it and nothing was
 // chosen yet. Callable from any thread.
 void CloseAutoOpenedPortalMenu();
+
+// The game started its portal sequence for this player (the camera zooms out to the portal): a
+// menu opened with the button and waiting for the portal screen comes up 0.6 s later, just before
+// the game's "place your Skylander" text. Callable from any thread.
+void PortalScreenComing(uint32_t user);
 
 }  // namespace skylanders
