@@ -107,6 +107,19 @@ enum class Text {
   kClose,
   kNothingOwned,
   kItemTakenOff,
+  kXpToNext,
+  kXpTop,
+  kPlayTime,
+  kHours,
+  kMinutes,
+  kHeroPoints,
+  kUpgrades,
+  kNoPath,
+  kPath,
+  kHat,
+  kHatNumber,
+  kLastPlayed,
+  kPlayedOn,
   kCount,
 };
 
@@ -148,6 +161,19 @@ constexpr const char* kEnglish[] = {
     "Close",
     "No figures of your own here. Start: options",
     "Item taken off the portal",
+    "Level %u \xC2\xB7 %u XP \xC2\xB7 %u more to level %u",
+    "Level %u \xC2\xB7 %u XP \xC2\xB7 top level",
+    "Play time",
+    "%u h %02u min",
+    "%u min",
+    "Hero points",
+    "Upgrades",
+    "no path chosen yet",
+    "path %d",
+    "Hat",
+    "hat no. %u",
+    "Last played",
+    "on",
 };
 constexpr const char* kGerman[] = {
     "PORTAL OF POWER",
@@ -189,6 +215,19 @@ constexpr const char* kGerman[] = {
     "en",
     "Hier gibt es keine eigenen Figuren. Start: Optionen",
     "Item vom Portal genommen",
+    "Level %u \xC2\xB7 %u EP \xC2\xB7 noch %u bis Level %u",
+    "Level %u \xC2\xB7 %u EP \xC2\xB7 h\xC3\xB6" "chstes Level",
+    "Spielzeit",
+    "%u Std. %02u Min.",
+    "%u Min.",
+    "Heldenpunkte",
+    "Upgrades",
+    "noch kein Pfad",
+    "Pfad %d",
+    "Hut",
+    "Hut Nr. %u",
+    "Zuletzt gespielt",
+    "auf",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -972,6 +1011,7 @@ class Library {
 std::mutex g_provider_mutex;
 FigureImageProvider g_image_provider;
 FigureNameProvider g_name_provider;
+HatNameProvider g_hat_provider;
 rex::ui::ImmediateDrawer* g_immediate_drawer = nullptr;
 // Uploaded pictures by figure. UI thread only.
 std::unordered_map<uint32_t, std::unique_ptr<rex::ui::ImmediateTexture>> g_textures;
@@ -1014,6 +1054,77 @@ std::string FigureName(const SkylanderInfo& sky) {
     if (auto name = provider(sky.id, sky.variant)) return *name;
   }
   return portal::DisplayName(sky.name);
+}
+
+// The hat's name in the game's language, else its number.
+std::string HatName(uint16_t hat) {
+  HatNameProvider provider;
+  {
+    std::lock_guard lock(g_provider_mutex);
+    provider = g_hat_provider;
+  }
+  if (provider) {
+    if (auto name = provider(hat)) return *name;
+  }
+  char text[64];
+  std::snprintf(text, sizeof(text), T(Text::kHatNumber), unsigned(hat));
+  return text;
+}
+
+// The lines the details view shows for a figure's progress.
+std::vector<std::string> StatsLines(const portal::FigureStats& s) {
+  const std::string dot = " \xC2\xB7 ";
+  std::vector<std::string> lines;
+  char text[256];
+  if (s.next_xp) {
+    std::snprintf(text, sizeof(text), T(Text::kXpToNext), unsigned(s.level), unsigned(s.xp),
+                  unsigned(s.next_xp - s.xp), unsigned(s.level + 1));
+  } else {
+    std::snprintf(text, sizeof(text), T(Text::kXpTop), unsigned(s.level), unsigned(s.xp));
+  }
+  lines.emplace_back(text);
+
+  char time[64];
+  const unsigned minutes = s.play_seconds / 60;
+  if (minutes >= 60) {
+    std::snprintf(time, sizeof(time), T(Text::kHours), minutes / 60, minutes % 60);
+  } else {
+    std::snprintf(time, sizeof(time), T(Text::kMinutes), minutes);
+  }
+  std::string line = std::to_string(s.gold) + " Gold" + dot + T(Text::kPlayTime) + " " + time;
+  if (s.hero_points) line += dot + T(Text::kHeroPoints) + " " + std::to_string(s.hero_points);
+  lines.push_back(line);
+
+  line = std::string(T(Text::kUpgrades)) + ": " + std::to_string(portal::UpgradeCount(s)) + dot;
+  if (const int path = portal::UpgradePath(s)) {
+    std::snprintf(text, sizeof(text), T(Text::kPath), path);
+    line += text;
+  } else {
+    line += T(Text::kNoPath);
+  }
+  if (s.hat) line += dot + T(Text::kHat) + ": " + HatName(s.hat);
+  lines.push_back(line);
+
+  if (s.last_played) {
+    const portal::FigureDate& d = *s.last_played;
+    if (g_german) {
+      std::snprintf(text, sizeof(text), "%02u.%02u.%04u %02u:%02u", unsigned(d.day),
+                    unsigned(d.month), unsigned(d.year), unsigned(d.hour), unsigned(d.minute));
+    } else {
+      std::snprintf(text, sizeof(text), "%04u-%02u-%02u %02u:%02u", unsigned(d.year),
+                    unsigned(d.month), unsigned(d.day), unsigned(d.hour), unsigned(d.minute));
+    }
+    line = std::string(T(Text::kLastPlayed)) + ": " + text;
+    std::string platforms;
+    static const char* const kPlatforms[] = {"Wii", "Xbox 360", "PS3"};
+    for (int i = 0; i < 3; ++i) {
+      if (s.platforms & (1 << i)) platforms += (platforms.empty() ? "" : ", ") + std::string(kPlatforms[i]);
+    }
+    if (!platforms.empty()) line += " " + std::string(T(Text::kPlayedOn)) + " " + platforms;
+    lines.push_back(line);
+  }
+  if (!s.nickname.empty()) lines.push_back(std::string(T(Text::kNickname)) + ": " + s.nickname);
+  return lines;
 }
 
 // The picture in a rounded square, or the element symbol when there is no picture.
@@ -2582,11 +2693,20 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   void DrawDetails(ImDrawList* dl, ImVec2 area0, ImVec2 area1) {
     const auto figures = PreviewFigures();
+    // The progress lines first, to size the panel.
+    std::vector<std::vector<std::string>> stats(figures.size());
+    float height = S(140);
+    for (size_t i = 0; i < figures.size(); ++i) {
+      const OwnedFigure* owned = library_.Owned(figures[i]);
+      if (owned && owned->stats && !IsItem(figures[i])) stats[i] = StatsLines(*owned->stats);
+      height += S(190) + stats[i].size() * S(30) - (stats[i].empty() ? 0 : S(32));
+    }
     ImVec2 a, b;
-    DrawOverlayPanel(dl, area0, area1, {S(720), S(140) + figures.size() * S(190)}, a, b);
+    DrawOverlayPanel(dl, area0, area1, {S(860), height}, a, b);
     Label(dl, BoldFont(), S(28), {a.x + S(28), a.y + S(22)}, kGold, T(Text::kDetails));
     float y = a.y + S(76);
-    for (const SkylanderInfo* sky : figures) {
+    for (size_t index = 0; index < figures.size(); ++index) {
+      const SkylanderInfo* sky = figures[index];
       const Element element = portal::FigureElement(*sky);
       DrawFigurePicture(dl, {a.x + S(22), y}, {a.x + S(78), y + S(56)}, sky, S(10));
       Label(dl, BoldFont(), S(26), {a.x + S(88), y + S(6)}, kWhite, portal::DisplayName(sky->name));
@@ -2598,14 +2718,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       Label(dl, BoldFont(), S(19), {a.x + S(88), y}, kDim, line);
       y += S(32);
       if (const OwnedFigure* owned = library_.Owned(sky)) {
-        if (owned->stats && !IsItem(sky)) {
-          std::string stats = "Level " + std::to_string(owned->stats->level) + "   " +
-                              std::to_string(owned->stats->gold) + " Gold";
-          if (!owned->stats->nickname.empty()) {
-            stats += "   " + std::string(T(Text::kNickname)) + ": " + owned->stats->nickname;
-          }
-          Label(dl, BoldFont(), S(21), {a.x + S(88), y}, kWhite, stats);
-          y += S(32);
+        for (size_t i = 0; i < stats[index].size(); ++i) {
+          Label(dl, BoldFont(), i == 0 ? S(21) : S(19), {a.x + S(88), y}, i == 0 ? kWhite : kDim,
+                stats[index][i]);
+          y += S(30);
         }
         Label(dl, BoldFont(), S(17), {a.x + S(88), y}, Rgba(180, 190, 220),
               std::string(T(Text::kFile)) + ": " + PathUtf8(owned->path.filename()));
@@ -2784,6 +2900,11 @@ void SetFigureImageProvider(FigureImageProvider provider) {
 void SetFigureNameProvider(FigureNameProvider provider) {
   std::lock_guard lock(g_provider_mutex);
   g_name_provider = std::move(provider);
+}
+
+void SetHatNameProvider(HatNameProvider provider) {
+  std::lock_guard lock(g_provider_mutex);
+  g_hat_provider = std::move(provider);
 }
 
 void SetGameBusyProvider(std::function<bool()> busy) {

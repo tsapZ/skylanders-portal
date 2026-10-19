@@ -77,6 +77,11 @@ void SetFigureImageProvider(FigureImageProvider provider);
 using FigureNameProvider = std::function<std::optional<std::string>(uint16_t id, uint16_t variant)>;
 void SetFigureNameProvider(FigureNameProvider provider);
 
+// The name the game shows for a hat (its kTfbSpyroTag_Hat_* number, as a figure stores it), for
+// the details view. Same rules as above; without it the view shows the number.
+using HatNameProvider = std::function<std::optional<std::string>(uint16_t hat)>;
+void SetHatNameProvider(HatNameProvider provider);
+
 // True while the game is busy with a figure change (its "place your Skylander" sequence). Putting
 // an item on or taking it off waits until this is false, so the player's Skylander is back in
 // the game first. Called from a background thread. Without it, item changes wait 0.7 s.
