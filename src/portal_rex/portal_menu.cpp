@@ -379,6 +379,7 @@ std::string BadgeLabel(const std::string& badge) {
     if (badge == "Variant") return "Variante";
     if (badge == "Chase") return "Chase-Variante";
     if (badge == "Giant") return "Gigant";
+    if (badge == "Sidekick") return "Mini-Skylander";
   }
   return badge;
 }
