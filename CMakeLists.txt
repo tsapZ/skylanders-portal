@@ -63,6 +63,8 @@ if(TARGET rex::runtime)
         src/portal_rex/portal_menu_input.cpp
         src/portal_rex/menu_draw.cpp
         src/portal_rex/player_menu.cpp
+        src/portal_rex/settings_file.cpp
+        src/portal_rex/settings_menu.cpp
         src/portal/usb/usb_portal.cpp
         src/portal_rex/sdl_audio_sink.cpp
     )

@@ -36,6 +36,9 @@ REXCVAR_DEFINE_STRING(portal_item_off_buttons, "back+y", "Portal",
 REXCVAR_DEFINE_STRING(player_menu_buttons, "ls+rs", "Input",
                       "Controller buttons that open the player menu (which controller plays as "
                       "which player); same format as portal_menu_open_buttons, empty for none");
+REXCVAR_DEFINE_STRING(settings_menu_buttons, "back+rb", "Input",
+                      "Controller buttons that open the settings menu; same format as "
+                      "portal_menu_open_buttons, empty for none");
 REXCVAR_DEFINE_INT32(portal_menu_hold_ms, 600, "Portal",
                      "How long a hold_<button> entry of the *_buttons settings must be held")
     .range(100, 5000);
@@ -60,7 +63,7 @@ using rex::input::X_INPUT_STATE;
 using skylanders::menu_input::ButtonAction;
 using Clock = std::chrono::steady_clock;
 
-constexpr size_t kActionCount = 3;
+constexpr size_t kActionCount = 4;
 
 class MenuInputDriver;
 
@@ -161,15 +164,17 @@ void ParseEntries(const std::string& value, ButtonAction action, std::vector<Ope
   }
 }
 
-// Every button entry: portal_menu_open_buttons, portal_item_off_buttons, player_menu_buttons.
-// Parsed again only when one of them changes, so the warnings come once per value.
+// Every button entry: portal_menu_open_buttons, portal_item_off_buttons, player_menu_buttons,
+// settings_menu_buttons. Parsed again only when one of them changes, so the warnings come once
+// per value.
 std::vector<OpenEntry> OpenEntries() {
   static std::optional<std::string> cached_value;
   static std::vector<OpenEntry> cached;
   const std::string open = REXCVAR_GET(portal_menu_open_buttons);
   const std::string item_off = REXCVAR_GET(portal_item_off_buttons);
   const std::string players = REXCVAR_GET(player_menu_buttons);
-  const std::string value = open + "|" + item_off + "|" + players;
+  const std::string settings = REXCVAR_GET(settings_menu_buttons);
+  const std::string value = open + "|" + item_off + "|" + players + "|" + settings;
   if (value == cached_value) {
     return cached;
   }
@@ -177,6 +182,7 @@ std::vector<OpenEntry> OpenEntries() {
   ParseEntries(open, ButtonAction::kPortalMenu, entries);
   ParseEntries(item_off, ButtonAction::kItemOff, entries);
   ParseEntries(players, ButtonAction::kPlayerMenu, entries);
+  ParseEntries(settings, ButtonAction::kSettingsMenu, entries);
   cached_value = value;
   cached = entries;
   return entries;

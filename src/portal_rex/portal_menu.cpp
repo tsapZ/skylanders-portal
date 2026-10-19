@@ -40,6 +40,7 @@
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/portal_rex.h"
+#include "portal_rex/settings_file.h"
 
 REXCVAR_DEFINE_STRING(portal_menu_games, "", "Portal",
                       "Games whose Skylanders the portal menu offers, separated by ';' (empty: "
@@ -670,80 +671,8 @@ bool IsPlayableCategory(std::string_view category) {
 // saved. UI thread only.
 std::filesystem::path g_config_path;
 
-// Writes one setting into the settings file and leaves everything else in it as it is (comments,
-// other settings). rex::cvar::SaveConfig would rewrite the whole file from every changed setting,
-// including command-line ones. `value` is already a TOML value ("true", "\"text\"").
-void WriteSetting(const std::filesystem::path& path, std::string_view category,
-                  std::string_view name, const std::string& value) {
-  std::vector<std::string> lines;
-  {
-    std::ifstream in(path, std::ios::binary);
-    std::string line;
-    while (std::getline(in, line)) lines.push_back(line);
-  }
-  const bool crlf = !lines.empty() && !lines[0].empty() && lines[0].back() == '\r';
-  for (std::string& line : lines) {
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-  }
-  const std::string entry = std::string(name) + " = " + value;
-  auto key_of = [](const std::string& line) {
-    const size_t start = line.find_first_not_of(" \t");
-    if (start == std::string::npos || line[start] == '#' || line[start] == '[') return std::string();
-    const size_t eq = line.find('=', start);
-    if (eq == std::string::npos) return std::string();
-    std::string key = line.substr(start, eq - start);
-    key.erase(key.find_last_not_of(" \t") + 1);
-    return key;
-  };
-  bool done = false;
-  for (std::string& line : lines) {
-    if (key_of(line) == name) {
-      line = entry;
-      done = true;
-      break;
-    }
-  }
-  if (!done) {
-    const std::string quoted = "[\"" + std::string(category) + "\"]";
-    const std::string bare = "[" + std::string(category) + "]";
-    for (size_t i = 0; i < lines.size() && !done; ++i) {
-      std::string header = lines[i];
-      header.erase(header.find_last_not_of(" \t") + 1);
-      if (header == quoted || header == bare) {
-        lines.insert(lines.begin() + ptrdiff_t(i) + 1, entry);
-        done = true;
-      }
-    }
-  }
-  if (!done) {
-    if (!lines.empty() && !lines.back().empty()) lines.emplace_back();
-    lines.push_back("[\"" + std::string(category) + "\"]");
-    lines.push_back(entry);
-  }
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
-  if (!out) {
-    REXLOG_WARN("Portal menu: cannot write {}", PathUtf8(path));
-    return;
-  }
-  for (const std::string& line : lines) out << line << (crlf ? "\r\n" : "\n");
-}
-
-void SetOption(std::string_view name, const std::string& value, bool quoted) {
-  if (!rex::cvar::SetFlagByName(name, value)) {
-    REXLOG_WARN("Portal menu: could not set {}", name);
-    return;
-  }
-  if (g_config_path.empty()) return;
-  std::string toml = value;
-  if (quoted) {
-    toml.clear();
-    for (char c : value) {
-      if (c == '"' || c == '\\') toml += '\\';
-      toml += c;
-    }
-    toml = "\"" + toml + "\"";
-  }
-  WriteSetting(g_config_path, "Portal", name, toml);
+void SetOption(std::string_view name, const std::string& value) {
+  StoreSetting(g_config_path, name, value);
 }
 
 // Each player's recent list, kept across sessions, one line per placement with the figure files
@@ -1983,12 +1912,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         }
         std::string value;
         for (const std::string& game : hidden) value += (value.empty() ? "" : ";") + game;
-        SetOption("portal_menu_hidden_games", value, true);
+        SetOption("portal_menu_hidden_games", value);
         break;
       }
       case OptionRow::Kind::kOwnedOnly:
-        SetOption("portal_menu_owned_only", REXCVAR_GET(portal_menu_owned_only) ? "false" : "true",
-                  false);
+        SetOption("portal_menu_owned_only", REXCVAR_GET(portal_menu_owned_only) ? "false" : "true");
         break;
     }
     RebuildLibrary();

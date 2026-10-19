@@ -11,7 +11,8 @@
 // keyboard_player picks which player the keyboard plays as.
 //
 // Besides the portal menu, the same kind of button entries take the item off the portal
-// (portal_item_off_buttons) and open the player menu (player_menu_buttons).
+// (portal_item_off_buttons), open the player menu (player_menu_buttons) and the settings menu
+// (settings_menu_buttons).
 
 #include <cstdint>
 #include <functional>
@@ -34,6 +35,7 @@ class IInputSystem;
 REXCVAR_DECLARE(std::string, portal_menu_open_buttons);
 REXCVAR_DECLARE(std::string, portal_item_off_buttons);
 REXCVAR_DECLARE(std::string, player_menu_buttons);
+REXCVAR_DECLARE(std::string, settings_menu_buttons);
 
 namespace skylanders {
 
@@ -54,6 +56,7 @@ enum class ButtonAction {
   kPortalMenu,  // portal_menu_open_buttons
   kItemOff,     // portal_item_off_buttons
   kPlayerMenu,  // player_menu_buttons
+  kSettingsMenu,  // settings_menu_buttons
 };
 
 // Called on a game input thread when a controller's button entry for `action` fires while no menu
