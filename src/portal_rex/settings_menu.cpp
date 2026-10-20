@@ -22,6 +22,7 @@
 #include <rex/ui/keybinds.h>
 #include <rex/ui/windowed_app_context.h>
 
+#include "portal_rex/input_pictures.h"
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/settings_file.h"
@@ -114,6 +115,11 @@ Actions ReadKeyboard() {
   return a;
 }
 
+bool Any(const Actions& a) {
+  return a.up || a.down || a.left || a.right || a.accept || a.back || a.prev_page || a.next_page ||
+         a.save;
+}
+
 void Merge(Actions& into, const Actions& from) {
   into.up |= from.up;
   into.down |= from.down;
@@ -139,6 +145,13 @@ struct SettingsState {
 SettingsState g_state;  // UI thread only
 ControllerPicture g_picture;  // UI thread only
 
+// What the menu was opened with: the keyboard (F4) or a controller's buttons. UI thread only.
+bool g_opened_by_keyboard = false;
+std::optional<DeviceId> g_opened_by_device;
+
+// The kind of controller the controls page draws and names buttons for (the one last used in
+// the menu). UI thread only.
+input_pictures::PadKind g_pad_kind = input_pictures::PadKind::kXbox;
 // One button entry of a *_buttons value: "back+start" or "hold_back".
 struct ButtonEntry {
   std::vector<std::string> buttons;
@@ -173,13 +186,16 @@ std::vector<ButtonEntry> ParseButtonEntries(const std::string& value) {
 }
 
 std::string ButtonName(const std::string& button) {
-  if (button == "guide") return Tr("Xbox button", "Xbox-Taste");
-  if (button == "back") return "Back";
-  if (button == "start") return "Start";
-  if (button == "lb") return "LB";
-  if (button == "rb") return "RB";
-  if (button == "ls") return "L3";
-  if (button == "rs") return "R3";
+  using input_pictures::PadKind;
+  if (button == "guide") {
+    switch (g_pad_kind) {
+      case PadKind::kXbox: return Tr("Xbox button", "Xbox-Taste");
+      case PadKind::kPlayStation: return Tr("PS button", "PS-Taste");
+      case PadKind::kNintendo: return Tr("Home button", "Home-Taste");
+      case PadKind::kGeneric: return Tr("Guide button", "Guide-Taste");
+    }
+  }
+  if (const char* name = input_pictures::PadButtonName(g_pad_kind, button, g_german)) return name;
   if (button == "up") return Tr("D-pad up", "Steuerkreuz hoch");
   if (button == "down") return Tr("D-pad down", "Steuerkreuz runter");
   if (button == "left") return Tr("D-pad left", "Steuerkreuz links");
@@ -197,6 +213,76 @@ std::string EntryName(const ButtonEntry& entry) {
   }
   if (!entry.hold) return names;
   return g_german ? names + " halten" : "hold " + names;
+}
+
+// The keyboard bind that does the same as a *_buttons setting (they are registered next to it).
+const char* KeyboardBindOf(const std::string& cvar) {
+  if (cvar == "portal_menu_open_buttons") return "bind_portal_menu";
+  if (cvar == "portal_item_off_buttons") return "bind_portal_item_off";
+  if (cvar == "player_menu_buttons") return "bind_player_menu";
+  if (cvar == "settings_menu_buttons") return "bind_settings_menu";
+  return nullptr;
+}
+
+// "Semicolon,Space" -> {"Semicolon", "Space"}.
+std::vector<std::string> SplitKeys(const std::string& value) {
+  std::vector<std::string> keys;
+  size_t start = 0;
+  while (start <= value.size()) {
+    const size_t comma = std::min(value.find(',', start), value.size());
+    std::string key;
+    for (char c : value.substr(start, comma - start)) {
+      if (c != ' ') key.push_back(c);
+    }
+    if (!key.empty()) keys.push_back(std::move(key));
+    start = comma + 1;
+  }
+  return keys;
+}
+
+// The keyboard's controller emulation (the SDK's keybind_* settings, mnk_mode) and the button
+// each one stands for, as printed on the key.
+struct GameKey {
+  const char* cvar;
+  const char* en;
+  const char* de;
+};
+constexpr GameKey kGameKeys[] = {
+    {"keybind_a", "A", "A"},
+    {"keybind_b", "B", "B"},
+    {"keybind_x", "X", "X"},
+    {"keybind_y", "Y", "Y"},
+    {"keybind_left_trigger", "LT", "LT"},
+    {"keybind_right_trigger", "RT", "RT"},
+    {"keybind_left_shoulder", "LB", "LB"},
+    {"keybind_right_shoulder", "RB", "RB"},
+    {"keybind_lstick_up", "Move", "Laufen"},
+    {"keybind_lstick_down", "Move", "Laufen"},
+    {"keybind_lstick_left", "Move", "Laufen"},
+    {"keybind_lstick_right", "Move", "Laufen"},
+    {"keybind_lstick_press", "L3", "L3"},
+    {"keybind_rstick_up", "Camera", "Kamera"},
+    {"keybind_rstick_down", "Camera", "Kamera"},
+    {"keybind_rstick_left", "Camera", "Kamera"},
+    {"keybind_rstick_right", "Camera", "Kamera"},
+    {"keybind_rstick_press", "R3", "R3"},
+    {"keybind_dpad_up", "D-pad", "Kreuz"},
+    {"keybind_dpad_down", "D-pad", "Kreuz"},
+    {"keybind_dpad_left", "D-pad", "Kreuz"},
+    {"keybind_dpad_right", "D-pad", "Kreuz"},
+    {"keybind_back", "Back", "Back"},
+    {"keybind_start", "Start", "Start"},
+    {"keybind_guide", "Guide", "Guide"},
+};
+constexpr ImU32 kGameKeyColour = IM_COL32(178, 188, 224, 255);
+
+// One colour per button setting (or entry) on the controls page's pictures.
+constexpr ImU32 kColours[] = {IM_COL32(244, 196, 84, 255), IM_COL32(90, 200, 255, 255),
+                              IM_COL32(120, 220, 130, 255), IM_COL32(240, 120, 200, 255)};
+
+bool CvarOn(const char* name) {
+  const std::string v = rex::cvar::GetFlagByName(name);
+  return v == "true" || v == "1";
 }
 
 const std::vector<SettingOption>& BoolOptions() {
@@ -363,20 +449,36 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       if (!pad) continue;
       released = released && PadReader::Released(*pad);
       const Actions read = pads_[uint64_t(device.id)].Read(*pad);
-      if (!waiting_for_release_) Merge(actions, read);
+      if (waiting_for_release_) continue;
+      Merge(actions, read);
+      // The controls page shows the device that was used last.
+      if (Any(read)) UseDevice(device);
     }
     if (waiting_for_release_) {
       if (released && !ImGui::IsKeyDown(ImGuiKey_F4)) waiting_for_release_ = false;
       return {};
     }
-    Merge(actions, ReadKeyboard());
+    const Actions keys = ReadKeyboard();
+    if (Any(keys)) keyboard_view_ = true;
+    Merge(actions, keys);
     if (ImGui::IsKeyPressed(ImGuiKey_F4, false)) actions.back = true;
     return actions;
+  }
+
+  void UseDevice(const menu_input::ConnectedDevice& device) {
+    keyboard_view_ = device.keyboard;
+    if (!device.keyboard) g_pad_kind = input_pictures::PadKindOf(device.name);
   }
 
   void Start() {
     g_state.edits.clear();
     g_state.before.clear();
+    // Start with the picture of what opened the menu.
+    keyboard_view_ = g_opened_by_keyboard;
+    g_pad_kind = input_pictures::PadKind::kXbox;
+    for (const menu_input::ConnectedDevice& device : menu_input::ConnectedDevices()) {
+      if (g_opened_by_device && device.id == *g_opened_by_device) UseDevice(device);
+    }
     menu_input::SetMenuOpen(true);
     open_time_ = Clock::now();
     REXLOG_INFO("Settings menu: opened");
@@ -641,7 +743,18 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     const std::string& title = Tr(s->en, s->de);
     OutlinedLabel(dl, TitleFont(), S(34), {a.x + S(24), y}, kWhite, title, S(2));
     y += TextSize(TitleFont(), S(34), title).y + S(16);
-    const std::string& help = Tr(s->help_en, s->help_de);
+    // The overview's text is about the controller; with the keyboard in use it says what the
+    // keyboard picture shows instead.
+    static const std::string kKeyboardHelpEn =
+        "Every menu key on the keyboard, and the keys you play with: each shows the controller "
+        "button it stands for (settings keybind_* in the settings file).";
+    static const std::string kKeyboardHelpDe =
+        "Alle Men\xC3\xBC-Tasten auf der Tastatur und die Tasten, mit denen du spielst: Auf jeder "
+        "steht die Controller-Taste, f\xC3\xBCr die sie steht (Einstellungen keybind_* in der "
+        "Einstellungsdatei).";
+    const bool keyboard_help = keyboard_view_ && IsOverview(*s);
+    const std::string& help = keyboard_help ? Tr(kKeyboardHelpEn, kKeyboardHelpDe)
+                                            : Tr(s->help_en, s->help_de);
     if (!help.empty()) {
       Label(dl, BoldFont(), S(21), {a.x + S(24), y}, kDim, help, wrap);
       y += TextSize(BoldFont(), S(21), help, wrap).y + S(22);
@@ -683,9 +796,66 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   // Rings on the controller picture and a line per colour under it. A button setting shows its
   // current choice, one colour per entry; an overview row every button setting of its page, one
   // colour per setting.
+  // The keyboard instead of the controller (the menu is used with the keyboard): a button setting
+  // marks its keyboard key; the overview marks every menu key of the page, one colour each, and
+  // the keys of the keyboard's controller emulation with the button they stand for.
+  void DrawKeys(ImDrawList* dl, const Setting& s, ImVec2 a, ImVec2 b) {
+    std::vector<input_pictures::KeyMark> marks;
+    std::vector<std::pair<ImU32, std::string>> lines;
+    auto add_menu_key = [&](const Setting& setting) {
+      const char* bind = KeyboardBindOf(setting.cvar);
+      if (!bind) return;
+      const ImU32 colour = kColours[lines.size() % std::size(kColours)];
+      std::string text = Tr(setting.en, setting.de) + ": ";
+      const std::vector<std::string> keys = SplitKeys(rex::cvar::GetFlagByName(bind));
+      for (size_t i = 0; i < keys.size(); ++i) {
+        text += (i ? " / " : "") + input_pictures::KeyLegend(keys[i], g_german);
+        marks.push_back({input_pictures::MainKey(keys[i]), colour, {}});
+      }
+      if (keys.empty()) text += Tr("no key", "keine Taste");
+      lines.emplace_back(colour, std::move(text));
+    };
+    const bool overview = IsOverview(s);
+    if (overview) {
+      for (const Setting& other : Page()->settings) {
+        if (other.buttons && !other.cvar.empty()) add_menu_key(other);
+      }
+      if (CvarOn("mnk_mode")) {
+        for (const GameKey& k : kGameKeys) {
+          for (const std::string& key : SplitKeys(rex::cvar::GetFlagByName(k.cvar))) {
+            marks.push_back({input_pictures::MainKey(key), kGameKeyColour, Tr(k.en, k.de)});
+          }
+        }
+        lines.emplace_back(kGameKeyColour, Tr("The game: the controller button on each key",
+                                              "Das Spiel: die Controller-Taste auf jeder Taste"));
+      } else {
+        lines.emplace_back(kGameKeyColour,
+                           Tr("Playing with the keyboard is off (mnk_mode)",
+                              "Spielen mit der Tastatur ist aus (mnk_mode)"));
+      }
+    } else {
+      add_menu_key(s);
+    }
+    // The keyboard is wide and flat: the lines go right under it.
+    const float line_h = S(34);
+    const float lines_h = line_h * float(std::max<size_t>(1, lines.size()));
+    const float keyboard_h =
+        input_pictures::DrawKeyboard(dl, a, {b.x, b.y - lines_h - S(12)}, marks, g_german);
+    float y = a.y + keyboard_h + S(24);
+    for (const auto& [colour, text] : lines) {
+      dl->AddCircleFilled({a.x + S(10), y + S(16)}, S(9), colour);
+      float size = S(20);
+      while (TextSize(BoldFont(), size, text).x > b.x - a.x - S(30) && size > S(14)) size -= S(1);
+      Label(dl, BoldFont(), size, {a.x + S(30), y + S(4)}, kWhite, text);
+      y += line_h;
+    }
+  }
+
   void DrawButtons(ImDrawList* dl, const Setting& s, ImVec2 a, ImVec2 b) {
-    static const ImU32 kColours[] = {kGold, Rgba(90, 200, 255), Rgba(120, 220, 130),
-                                     Rgba(240, 120, 200)};
+    if (keyboard_view_) {
+      DrawKeys(dl, s, a, b);
+      return;
+    }
     struct Group {
       std::vector<ButtonEntry> entries;
       std::string label;
@@ -714,7 +884,21 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     const float lines_top = b.y - line_h * float(std::max<size_t>(1, groups.size()));
     const ImTextureID texture =
         g_picture.art_key.empty() ? ImTextureID{} : GameArtTexture(g_picture.art_key);
-    if (texture && g_picture.width > 0 && g_picture.height > 0) {
+    // The game's own picture is an Xbox controller; any other pad, or a game without a picture,
+    // gets a drawn one in its layout.
+    if (!texture || g_picture.width <= 0 || g_picture.height <= 0 ||
+        g_pad_kind != input_pictures::PadKind::kXbox) {
+      std::vector<input_pictures::PadMark> marks;
+      std::unordered_map<std::string, int> rings;
+      for (size_t i = 0; i < groups.size(); ++i) {
+        for (const ButtonEntry& entry : groups[i].entries) {
+          for (const std::string& button : entry.buttons) {
+            marks.push_back({button, kColours[i % std::size(kColours)], rings[button]++});
+          }
+        }
+      }
+      input_pictures::DrawController(dl, a, {b.x, lines_top - S(12)}, g_pad_kind, marks);
+    } else {
       const float scale = std::min((b.x - a.x) / g_picture.width,
                                    (lines_top - S(12) - a.y) / g_picture.height);
       if (scale > 0.15f) {
@@ -819,6 +1003,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   size_t scroll_ = 0;
   Clock::time_point open_time_ = Clock::now();
   std::unordered_map<uint64_t, PadReader> pads_;  // by device
+  bool keyboard_view_ = false;  // the controls page shows the keyboard (last used) instead of a pad
 };
 
 // UI thread only.
@@ -857,12 +1042,21 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
       if (!s.cvar.empty()) g_state.startup[s.cvar] = rex::cvar::GetFlagByName(s.cvar);
     }
   }
-  menu_input::SetButtonHandler(menu_input::ButtonAction::kSettingsMenu, [](DeviceId, uint32_t) {
-    if (g_app_context) g_app_context->CallInUIThread(OpenSettingsMenu);
-  });
+  menu_input::SetButtonHandler(menu_input::ButtonAction::kSettingsMenu,
+                               [](DeviceId device, uint32_t) {
+                                 if (!g_app_context) return;
+                                 g_app_context->CallInUIThread([device] {
+                                   g_opened_by_keyboard = false;
+                                   g_opened_by_device = device;
+                                   OpenSettingsMenu();
+                                 });
+                               });
   // With the menu open, F4 is read by the menu itself (like B, so unsaved changes are asked about).
   rex::ui::RegisterBind("bind_settings_menu", "F4", "Open or close the settings menu", [] {
-    if (!g_menu) OpenSettingsMenu();
+    if (g_menu) return;
+    g_opened_by_keyboard = true;
+    g_opened_by_device.reset();
+    OpenSettingsMenu();
   });
 }
 
