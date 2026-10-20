@@ -1347,6 +1347,19 @@ std::vector<std::string> StatsLines(const portal::FigureStats& s) {
   return lines;
 }
 
+// The gold symbol: the game's own ("ui:gold" from the art provider, e.g. its HUD coin), or a
+// drawn coin while there is none.
+void DrawGoldCoin(ImDrawList* dl, ImVec2 c, float r) {
+  if (ImTextureID t = ArtTexture("ui:gold")) {
+    const float h = r * 1.2f;  // the game's pictures leave a little room around the coin
+    dl->AddImage(t, {c.x - h, c.y - h}, {c.x + h, c.y + h});
+    return;
+  }
+  dl->AddCircleFilled(c, r, Rgba(250, 205, 70));
+  dl->AddCircle(c, r * 0.72f, Rgba(196, 140, 30), 0, std::max(1.0f, r * 0.18f));
+  dl->AddCircle(c, r, Rgba(130, 84, 10), 0, std::max(1.0f, r * 0.14f));
+}
+
 // "+2 Armor", "+0.5 ..." for a hat stat.
 std::string StatText(const HatStat& stat) {
   char text[160];
@@ -2913,14 +2926,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     char text[96];
     std::snprintf(text, sizeof(text), "Level %u", unsigned(s.level));
     OutlinedLabel(dl, TitleFont(), S(30) * scale, a, kGold, text, S(1.5f));
-    // Gold: a coin and the amount at the right.
+    // Gold: the game's coin and the amount at the right.
     const std::string gold = std::to_string(s.gold);
     const ImVec2 gs = TextSize(BoldFont(), S(22) * scale, gold);
     const float coin = S(11) * scale;
     const ImVec2 cc{a.x + width - gs.x - coin - S(10), a.y + S(18) * scale};
-    dl->AddCircleFilled(cc, coin, Rgba(250, 205, 70));
-    dl->AddCircle(cc, coin * 0.72f, Rgba(196, 140, 30), 0, S(2));
-    dl->AddCircle(cc, coin, Rgba(130, 84, 10), 0, S(1.5f));
+    DrawGoldCoin(dl, cc, coin);
     Label(dl, BoldFont(), S(22) * scale, {cc.x + coin + S(6), a.y + S(6) * scale}, kWhite, gold);
     float y = a.y + S(42) * scale;
     const float h = S(24) * scale;
@@ -3331,9 +3342,13 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       const bool focused = detail_icons_.size() == detail_focus_;
       DrawUpgradeIcon(dl, at, icon, u, owned_upgrade, focused);
       if (!owned_upgrade && u.cost) {
+        // The price with a small coin before it, centred under the icon.
         const std::string cost = std::to_string(u.cost);
         const ImVec2 cs = TextSize(BoldFont(), S(14), cost);
-        Label(dl, BoldFont(), S(14), {at.x + (icon - cs.x) / 2, at.y + icon + S(2)},
+        const float r = S(6), w = 2 * r + S(3) + cs.x;
+        const float x0 = at.x + (icon - w) / 2;
+        DrawGoldCoin(dl, {x0 + r, at.y + icon + S(2) + cs.y / 2}, r);
+        Label(dl, BoldFont(), S(14), {x0 + 2 * r + S(3), at.y + icon + S(2)},
               Rgba(250, 205, 70), cost);
       }
       detail_icons_.push_back({&u, owned_upgrade, {at.x, at.y}, {at.x + icon, at.y + icon}});
