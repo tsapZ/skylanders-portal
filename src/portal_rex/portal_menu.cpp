@@ -2591,7 +2591,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                                                                            : T(Text::kNoPortal);
     Label(dl, BoldFont(), S(30), {p0.x + S(60), (p0.y + p1.y) / 2 - S(30)}, kWhite, text,
           p1.x - p0.x - S(120));
-    if (a.back || a.accept) Finish();
+    // Closes through kWaiting like B elsewhere, so this frame still draws as the message.
+    if (a.back || a.accept) StartCancel();
   }
 
   void DrawFooter(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
@@ -2599,7 +2600,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     float x = p0.x + S(38);
     const float y = p1.y - S(54);
     const ImU32 grey = Rgba(78, 86, 120);
-    if (state_ == State::kMessage || state_ == State::kDetails) {
+    // Without the emulated portal the menu only shows a message and has no library to look at
+    // (it crashed here when B closed that message with the real USB portal active).
+    if (state_ == State::kMessage || state_ == State::kDetails || !software_) {
       Hint(dl, {x, y}, kb ? "Esc" : "B", Rgba(232, 73, 43), T(Text::kBack), !kb);
       return;
     }
