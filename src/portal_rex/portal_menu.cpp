@@ -53,6 +53,13 @@ REXCVAR_DEFINE_STRING(portal_menu_hidden_games, "", "Portal",
                       "with Start in the menu)");
 REXCVAR_DEFINE_BOOL(portal_menu_owned_only, false, "Portal",
                     "The portal menu lists only figures that have a figure file");
+REXCVAR_DEFINE_STRING(portal_menu_leave_button, "b", "Portal",
+                      "The button of the game's portal screen that lets a second player leave "
+                      "(\"b\" in Giants and Swap Force, \"rs\" in Spyro's Adventure); the menu's "
+                      "\"Leave the game\" presses it");
+REXCVAR_DEFINE_STRING(portal_menu_hidden_categories, "", "Portal",
+                      "Figure kinds the game can't read, left out of the portal menu, separated "
+                      "by ';' (catalog categories, e.g. \"Sidekicks\" in Spyro's Adventure)");
 REXCVAR_DEFINE_INT32(portal_menu_open_delay_ms, 2500, "Portal",
                      "After the open button lifts the figure, the menu waits for the game's own "
                      "portal screen to come up, at most this long")
@@ -842,6 +849,17 @@ std::vector<std::string> ShownGames(const std::vector<std::string>& games) {
 
 bool IsSidekick(const SkylanderInfo* sky) { return sky && sky->category == "Sidekicks"; }
 
+// The game's button for "leave the game" on its portal screen (portal_menu_leave_button).
+uint16_t LeaveButton() {
+  const uint16_t button = menu_input::ButtonByName(REXCVAR_GET(portal_menu_leave_button));
+  return button ? button : uint16_t(rex::input::X_INPUT_GAMEPAD_B);
+}
+
+// A figure kind the game can't read (portal_menu_hidden_categories).
+bool IsHiddenCategory(std::string_view category) {
+  return Contains(SplitList(REXCVAR_GET(portal_menu_hidden_categories)), category);
+}
+
 bool IsPlayableCategory(std::string_view category) {
   return category != "Items" && category != "Unreleased";
 }
@@ -944,7 +962,9 @@ class Library {
         characters_.push_back(std::move(item));
         continue;
       }
-      if (!IsPlayableCategory(sky.category)) {
+      // Kinds the game can't read (sidekicks in Spyro's Adventure) aren't listed, and their ids
+      // stay unknown, so a later game's figure with such an id isn't either.
+      if (!IsPlayableCategory(sky.category) || IsHiddenCategory(sky.category)) {
         continue;
       }
       if (portal::GetSwapperHalf(sky) == SwapperHalf::kBottom) {
@@ -1910,8 +1930,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         }
         if (item_change_) ScheduleItemChange(user_, item_path_);
         if (sidekick_change_) ScheduleSidekickChange(user_, sidekick_path_);
-        // The game's own way out: B "leave the game" on its portal screen for this player.
-        if (leave_) menu_input::TapButton(user_, rex::input::X_INPUT_GAMEPAD_B);
+        // The game's own way out: "leave the game" on its portal screen for this player.
+        if (leave_) menu_input::TapButton(user_, LeaveButton());
         Finish();
       }
       return;

@@ -672,6 +672,8 @@ void TapButton(uint32_t user, uint16_t button) {
   }
 }
 
+uint16_t ButtonByName(const std::string& name) { return ButtonBit(name); }
+
 bool IsActionChord(ButtonAction action, uint16_t buttons) {
   for (const OpenEntry& entry : OpenEntries()) {
     if (entry.action == action && (buttons & entry.buttons) == entry.buttons) {

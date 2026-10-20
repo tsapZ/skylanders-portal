@@ -110,6 +110,10 @@ void SetDevicePlayer(rex::input::DeviceId device, std::optional<uint32_t> user);
 // buttons with it (B "leave the game" on the portal screen).
 void TapButton(uint32_t user, uint16_t button);
 
+// The X_INPUT_GAMEPAD_* bit of a button name as the *_buttons settings write it ("b", "rs",
+// "start", ...); 0 for an unknown name.
+uint16_t ButtonByName(const std::string& name);
+
 // True when this button set fires the open button (used by the menu to close again with the
 // same button). Edge detection is the caller's job.
 bool IsOpenChord(uint16_t buttons);
