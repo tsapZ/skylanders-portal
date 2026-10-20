@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -28,6 +29,7 @@
 #include "portal/xbox_frame.h"
 #include "portal_rex/portal_overlay_dialog.h"
 #include "portal_rex/sdl_audio_sink.h"
+#include "portal_rex/utf8_path.h"
 
 REXCVAR_DEFINE_STRING(portal_mode, "software", "Portal",
                       "Portal backend: 'software', 'usb' (a real, physical Portal of Power over "
@@ -419,6 +421,58 @@ void SwitchPortalMode(std::string_view mode_text) {
 }  // namespace
 
 namespace skylanders {
+
+std::filesystem::path SharedFiguresDir(const std::filesystem::path& user_data_root) {
+  namespace fs = std::filesystem;
+  const fs::path old_dir = user_data_root / "figures";
+  if (user_data_root.parent_path().empty()) return old_dir;
+  const fs::path shared = user_data_root.parent_path() / "Skylanders" / "Figures";
+  std::error_code ec;
+  fs::create_directories(shared, ec);
+  if (ec) {
+    REXLOG_WARN("Portal: cannot create the shared figures folder {} ({}); using {}",
+                Utf8Path(shared), ec.message(), Utf8Path(old_dir));
+    return old_dir;
+  }
+  const fs::path note = old_dir / "MOVED_TO_SHARED_FOLDER.txt";
+  if (!fs::is_directory(old_dir, ec) || fs::exists(note, ec)) return shared;
+  size_t copied = 0, kept = 0, failed = 0;
+  for (auto it = fs::recursive_directory_iterator(old_dir, ec);
+       !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+    std::error_code file_ec;
+    if (!it->is_regular_file(file_ec)) continue;
+    const fs::path dest = shared / fs::relative(it->path(), old_dir, file_ec);
+    if (file_ec) {
+      ++failed;
+      continue;
+    }
+    if (fs::exists(dest, file_ec)) {
+      ++kept;  // the shared folder's own version wins
+      continue;
+    }
+    fs::create_directories(dest.parent_path(), file_ec);
+    if (fs::copy_file(it->path(), dest, file_ec)) {
+      ++copied;
+    } else {
+      ++failed;
+    }
+  }
+  if (failed) {
+    // Without the note the next start tries again.
+    REXLOG_WARN("Portal: copied {} figure files from {} into {}, {} could not be copied", copied,
+                Utf8Path(old_dir), Utf8Path(shared), failed);
+    return shared;
+  }
+  std::ofstream(note) << "These figures were copied to the folder every game now shares:\n"
+                      << Utf8Path(shared) << "\nThis folder is the old copy and is no longer used.\n\n"
+                      << "Diese Figuren wurden in den Ordner kopiert, den jetzt alle Spiele nutzen:\n"
+                      << Utf8Path(shared)
+                      << "\nDieser Ordner ist die alte Kopie und wird nicht mehr benutzt.\n";
+  REXLOG_INFO("Portal: copied {} figure files from {} into the shared folder {} ({} were already "
+              "there)",
+              copied, Utf8Path(old_dir), Utf8Path(shared), kept);
+  return shared;
+}
 
 void InstallPortal(const std::filesystem::path& default_figures_dir) {
   if (REXCVAR_GET(portal_figures_dir).empty()) {

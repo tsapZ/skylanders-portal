@@ -40,6 +40,15 @@ namespace skylanders {
 // if it doesn't exist yet) so the overlay has somewhere to look without the user passing a flag.
 void InstallPortal(const std::filesystem::path& default_figures_dir);
 
+// The figure folder every game shares, as the real figures lie next to the portal whichever game
+// runs: "Skylanders\Figures" next to the game's own data folder (Documents\swapforcerecomp ->
+// Documents\Skylanders\Figures). A run with a copied --user_data_root gets its own one next to the
+// copy, so tests never touch the real figures. The first time a game uses it, the files of its old
+// per-game folder (<user_data_root>\figures) are copied in, never over a file the shared folder
+// already has, and a note is left in the old folder, which then stays as a backup and is no longer
+// used. Pass the result to InstallPortal.
+std::filesystem::path SharedFiguresDir(const std::filesystem::path& user_data_root);
+
 // Loads the figure at `path` and places it in `slot`; future writes to that slot save back to
 // `path`, replacing any earlier file that slot saved to. Returns false, and changes nothing, if
 // there is no active software portal or `path` cannot be loaded as a figure.
