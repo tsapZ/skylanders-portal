@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <string>
+
+#include <rex/cvar.h>
 
 #include <imgui_internal.h>
 
@@ -125,6 +128,13 @@ void FadeVertices(ImDrawList* dl, int first_vertex, float alpha) {
     const uint32_t a = (col >> IM_COL32_A_SHIFT) & 0xFF;
     col = (col & ~IM_COL32_A_MASK) | (uint32_t(float(a) * alpha) << IM_COL32_A_SHIFT);
   }
+}
+
+bool GermanText() {
+  // user_language is the SDK's (XGetLanguage); the apps set it from their `language` setting at
+  // startup. Before that, or in an app without that step, the setting itself.
+  if (rex::cvar::GetFlagByName("user_language") == "3") return true;
+  return rex::cvar::GetFlagByName("language") == "german";
 }
 
 }  // namespace skylanders::menu_draw

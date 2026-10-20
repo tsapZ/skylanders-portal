@@ -64,4 +64,8 @@ ImTextureID GameArtTexture(const std::string& key);
 // Multiplies the alpha of every vertex drawn into `dl` since `first_vertex` (a fade-in).
 void FadeVertices(ImDrawList* dl, int first_vertex, float alpha);
 
+// True when the menus should speak German: the game runs in German, by the Xbox 360 language the
+// app gave it (user_language 3), which also covers a `language` of "auto" or a raw id.
+bool GermanText();
+
 }  // namespace skylanders::menu_draw

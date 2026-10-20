@@ -279,7 +279,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
         on_done_(std::move(on_done)),
         app_context_(app_context),
         waiting_for_menu_(wait_for_menu) {
-    g_german = rex::cvar::GetFlagByName("language") == "german";
+    g_german = menu_draw::GermanText();
     if (!waiting_for_menu_) Start();
   }
 

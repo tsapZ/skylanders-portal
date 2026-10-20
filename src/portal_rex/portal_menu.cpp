@@ -1818,7 +1818,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         user_(user),
         keyboard_(from_keyboard),
         auto_opened_(auto_opened) {
-    g_german = rex::cvar::GetFlagByName("language") == "german";
+    g_german = menu_draw::GermanText();
     menu_input::SetMenuOpen(true);
     // The settings menu (F4, Back + RB) closes it like B: the lifted figure goes back.
     menu_input::SetMenuCloser([this] { Cancel(); });
@@ -3577,7 +3577,7 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
  public:
   PortalCheckDialog(rex::ui::ImGuiDrawer* drawer, uint32_t reason, std::function<void()> on_done)
       : ImGuiDialog(drawer), reason_(reason), on_done_(std::move(on_done)) {
-    g_german = rex::cvar::GetFlagByName("language") == "german";
+    g_german = menu_draw::GermanText();
     menu_input::SetMenuOpen(true);
     menu_input::SetMenuCloser([this] { Close(); });
     entries_ = PortalEntries();
@@ -3837,7 +3837,7 @@ void ShowToast(std::string text) {
 // without lifting anyone's Skylander. With the menu open, its own Y does that.
 void TakeItemOff() {
   if (g_menu || !PortalItem()) return;
-  g_german = rex::cvar::GetFlagByName("language") == "german";
+  g_german = menu_draw::GermanText();
   REXLOG_INFO("Portal menu: item taken off with the item button");
   SetPortalItem(0, std::nullopt);
   ShowToast(T(Text::kItemTakenOff));
