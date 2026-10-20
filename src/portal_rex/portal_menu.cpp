@@ -141,6 +141,8 @@ enum class Text {
   kItemDuration,
   kCheckTitleSkylanders,
   kCheckTitleItems,
+  kCheckTitleMagicItems,
+  kCheckTitleSidekicks,
   kCheckTitleOther,
   kCheckHint,
   kCheckSidekicks,
@@ -228,6 +230,8 @@ constexpr const char* kEnglish[] = {
     "Lasts %d seconds",
     "Too many Skylanders on the portal",
     "Too many magic items or sidekicks on the portal",
+    "Too many magic items on the portal",
+    "Too many sidekicks on the portal",
     "The game has a problem with the figures on the portal",
     "Choose what to take off, then Continue. This is on the portal:",
     "%u sidekicks: the game takes only one.",
@@ -315,6 +319,8 @@ constexpr const char* kGerman[] = {
     "Wirkt %d Sekunden",
     "Zu viele Skylander auf dem Portal",
     "Zu viele magische Objekte oder Mini-Skylander auf dem Portal",
+    "Zu viele magische Objekte auf dem Portal",
+    "Zu viele Mini-Skylander auf dem Portal",
     "Das Spiel hat ein Problem mit den Figuren auf dem Portal",
     "W\xC3\xA4hle aus, was runter soll, dann Fortfahren. Das ist auf dem Portal:",
     "%u Mini-Skylander: Das Spiel nimmt nur einen.",
@@ -3727,6 +3733,17 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
     Close();
   }
 
+  // The title for "too many items" names what there is too much of, so a game without sidekicks
+  // (Spyro's Adventure) never mentions them; both only when both are doubled, or when the game
+  // complains and a sidekick is on the portal but nothing looks doubled here.
+  const char* ItemsTitle() const {
+    const size_t items = Count(PortalEntry::Kind::kItem);
+    const size_t sidekicks = Count(PortalEntry::Kind::kSidekick);
+    if (sidekicks > 1 && items <= 1) return T(Text::kCheckTitleSidekicks);
+    if (sidekicks <= 1 && (items > 1 || sidekicks == 0)) return T(Text::kCheckTitleMagicItems);
+    return T(Text::kCheckTitleItems);
+  }
+
   void Draw(ImDrawList* dl, ImVec2 size) {
     dl->AddRectFilled({0, 0}, size, Rgba(6, 10, 30, 150));
     const float row_h = S(84), gap = S(10);
@@ -3754,7 +3771,7 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
     const ImVec2 a{(size.x - w) / 2, (size.y - h) / 2}, b{a.x + w, a.y + h};
     DrawPanel(dl, a, b);
     const char* title = reason_ == kReasonTooManyCharacters ? T(Text::kCheckTitleSkylanders)
-                        : reason_ == kReasonTooManyItems    ? T(Text::kCheckTitleItems)
+                        : reason_ == kReasonTooManyItems    ? ItemsTitle()
                                                             : T(Text::kCheckTitleOther);
     OutlinedLabel(dl, TitleFont(), S(36), {a.x + S(36), a.y + S(26)}, kGold, title, S(2));
     Label(dl, BoldFont(), S(21), {a.x + S(36), a.y + S(86)}, kDim, T(Text::kCheckHint), w - S(72));
