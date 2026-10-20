@@ -1,8 +1,9 @@
 #pragma once
 
 // The player menu: which controller plays as which player. Opens with player_menu_buttons (default
-// L3 + R3 together) on any controller or bind_player_menu (F9) on the keyboard. Every controller
-// moves itself with left / right, all at the same time, so a Bluetooth controller that dropped out
+// L3 + R3 together) on any controller or bind_player_menu (F9) on the keyboard. It shows the two
+// players the games have and a column for controllers that don't play. Every controller moves
+// itself with left / right, all at the same time, so a Bluetooth controller that dropped out
 // and came back as another player is put back in a moment; Y puts every controller back in
 // connection order. The game sees no input while it is open.
 //

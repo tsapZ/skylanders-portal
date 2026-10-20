@@ -30,7 +30,13 @@ using namespace menu_draw;
 using rex::input::DeviceId;
 using Clock = std::chrono::steady_clock;
 
-constexpr uint32_t kPlayers = rex::input::kMaxGuestUsers;
+// The games have two players. A third column holds the controllers that don't play (guest users
+// 2 and 3: a third controller, or one moved out of the way).
+constexpr uint32_t kPlayers = 2;
+constexpr uint32_t kColumns = kPlayers + 1;
+static_assert(kPlayers < rex::input::kMaxGuestUsers);
+
+uint32_t ColumnOf(uint32_t user) { return std::min(user, kPlayers); }
 
 bool g_german = false;
 
@@ -74,7 +80,13 @@ class PadState {
 };
 
 void Move(const menu_input::ConnectedDevice& device, int delta) {
-  const uint32_t user = uint32_t((int(device.user) + int(kPlayers) + delta) % int(kPlayers));
+  const uint32_t column =
+      uint32_t((int(ColumnOf(device.user)) + int(kColumns) + delta) % int(kColumns));
+  uint32_t user = column;
+  if (column == kPlayers) {
+    // Out of the game: its own slot if that is one of the non-playing ones, else the first of them.
+    user = device.natural_user >= kPlayers ? device.natural_user : kPlayers;
+  }
   // Back at its own slot, it follows the connection order again.
   menu_input::SetDevicePlayer(
       device.id, device.natural_user == user ? std::nullopt : std::optional<uint32_t>(user));
@@ -219,21 +231,27 @@ class PlayerMenuDialog final : public rex::ui::ImGuiDialog {
   void DrawColumns(ImDrawList* dl, ImVec2 a, ImVec2 b,
                    const std::vector<menu_input::ConnectedDevice>& devices) {
     const float gap = S(18);
-    const float col_w = (b.x - a.x - gap * (kPlayers - 1)) / kPlayers;
-    for (uint32_t user = 0; user < kPlayers; ++user) {
-      const ImVec2 c0{a.x + user * (col_w + gap), a.y}, c1{c0.x + col_w, b.y};
-      dl->AddRectFilled(c0, c1, Rgba(255, 255, 255, 14), S(18));
+    const float col_w = (b.x - a.x - gap * (kColumns - 1)) / kColumns;
+    for (uint32_t column = 0; column < kColumns; ++column) {
+      const ImVec2 c0{a.x + column * (col_w + gap), a.y}, c1{c0.x + col_w, b.y};
+      const bool playing = column < kPlayers;
+      dl->AddRectFilled(c0, c1, Rgba(255, 255, 255, playing ? 14 : 8), S(18));
       // Header in the player's colour.
       const ImVec2 h1{c1.x, c0.y + S(56)};
-      dl->AddRectFilled(c0, h1, PlayerColor(user), S(18), ImDrawFlags_RoundCornersTop);
+      dl->AddRectFilled(c0, h1, playing ? PlayerColor(column) : Rgba(70, 78, 112), S(18),
+                        ImDrawFlags_RoundCornersTop);
       char title[32];
-      std::snprintf(title, sizeof(title), Tr("Player %u", "Spieler %u"), user + 1);
+      if (playing) {
+        std::snprintf(title, sizeof(title), Tr("Player %u", "Spieler %u"), column + 1);
+      } else {
+        std::snprintf(title, sizeof(title), "%s", Tr("Not playing", "Spielt nicht mit"));
+      }
       const ImVec2 ts = TextSize(BoldFont(), S(26), title);
       Label(dl, BoldFont(), S(26), {(c0.x + c1.x - ts.x) / 2, c0.y + S(12)}, kWhite, title);
       float y = h1.y + S(16);
       bool any = false;
       for (const menu_input::ConnectedDevice& device : devices) {
-        if (device.user != user) continue;
+        if (ColumnOf(device.user) != column) continue;
         any = true;
         const ImVec2 d0{c0.x + S(14), y}, d1{c1.x - S(14), y + S(132)};
         GradientRect(dl, d0, d1, Rgba(52, 62, 120), Rgba(28, 34, 76), S(14));
