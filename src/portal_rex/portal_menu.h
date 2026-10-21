@@ -140,6 +140,12 @@ void SetGameBusyProvider(std::function<bool()> busy);
 // the emulated one. Callable from any thread.
 void AutoOpenPortalMenu(uint32_t user);
 
+// The same for a game that says it waits for a Skylander but not whose (Trap Team's portal script
+// only has "Player State - Need Toy"): opens the menu for the first player without a Skylander on
+// the emulated portal, the order in which the game itself hands figures to players. So player 2's
+// prompt while player 1 plays opens player 2's menu. Callable from any thread.
+void AutoOpenPortalMenuForPlayerWithoutFigure();
+
 // For a game integration that knows when the game shows its portal error screen ("too many
 // Skylanders / items on the portal", a figure it can't read; `reason` is the game's own reason
 // code, see magic_moment_watch.cpp): opens the portal check. It lists everything on the emulated

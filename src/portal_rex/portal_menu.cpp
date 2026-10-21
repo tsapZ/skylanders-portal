@@ -3925,6 +3925,21 @@ void AutoOpenPortalMenu(uint32_t user) {
   });
 }
 
+void AutoOpenPortalMenuForPlayerWithoutFigure() {
+  if (!g_app_context) return;
+  g_app_context->CallInUIThread([] {
+    portal::SoftwarePortal* software = GetSoftwarePortal();
+    if (!software) return;
+    uint32_t user = 0;
+    while (user + 1 < g_player_slots.size() &&
+           std::any_of(g_player_slots[user].begin(), g_player_slots[user].end(),
+                       [&](int slot) { return software->HasFigure(slot); })) {
+      ++user;
+    }
+    AutoOpenPortalMenu(user);
+  });
+}
+
 namespace {
 
 // hybrid: a figure from the real portal arrived in `slot`. A Skylander belongs to the player whose
