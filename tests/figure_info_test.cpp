@@ -40,14 +40,31 @@ int main() {
   // Items have no element, even when their name contains a character's ("Scorpion" / "Scorp").
   CHECK(ElementOf("Scorpion Striker Catapult") == Element::kNone);
   CHECK(ElementOf("Sparx Dragonfly") == Element::kNone);
+  // The later games, from their own data: Light and Dark, a Mini, a vehicle, a sensei.
+  CHECK(ElementOf("Knight Light") == Element::kLight);
+  CHECK(ElementOf("Blackout") == Element::kDark);
+  CHECK(ElementOf("Drobit Mini") == Element::kTech);
+  CHECK(ElementOf("Nitro Krypt King") == Element::kUndead);
+  CHECK(ElementOf("Sea Shadow") == Element::kDark);
+  CHECK(ElementOf("Starcast") == Element::kDark);
+  // Crypt Crusher contains Crusher (Earth) but is Undead.
+  CHECK(ElementOf("Crypt Crusher") == Element::kUndead);
+  // Creation crystals by id: "Magic Bazooker" contains Zook (Life).
+  CHECK(ElementOf("Magic Bazooker") == Element::kMagic);
+  CHECK(ElementOf("Cy (@echoseeker715)") == Element::kMagic);
+  // Traps have none, though "Fire Torch" contains Torch (Fire).
+  CHECK(ElementOf("Fire Torch (Eternal Flame)") == Element::kNone);
+  CHECK(ElementOf("Kaos") == Element::kNone);
 
-  // Every character entry of the first three games has an element.
+  // Every character entry has an element, but Kaos (an element of his own), the Hand of Fate (a
+  // magic item among Trap Team's variants) and a creation crystal with an id of no element.
   for (const SkylanderInfo& sky : AllSkylanders()) {
-    bool early = sky.game == "Spyro's Adventure" || sky.game == "Giants" || sky.game == "Swap Force";
-    bool character = sky.category != "Items" && sky.category != "Unreleased";
-    if (early && character && FigureElement(sky) == Element::kNone) {
+    bool character = sky.category != "Items" && sky.category != "Unreleased" && sky.category != "Traps";
+    bool exception = sky.name == "Kaos" || sky.name == "Legendary Hand of Fate" ||
+                     sky.name == "Earth Quickshot Bebop (@echoseeker715)";
+    if (character && !exception && FigureElement(sky) == Element::kNone) {
       std::fprintf(stderr, "no element: %s\n", std::string(sky.name).c_str());
-      CHECK(!"every early character has an element");
+      CHECK(!"every character has an element");
     }
   }
 

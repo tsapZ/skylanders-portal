@@ -24,8 +24,8 @@ enum class Element {
 
 // The element of a catalog entry. Variants ("Legendary Chop Chop", "Anchors Away Gill Grunt
 // (Series 3)", "Nitro Freeze Blade Top") get the element of the character they are a variant of.
-// Covers Spyro's Adventure, Giants and Swap Force; kNone for items, unreleased entries and later
-// games until they are added.
+// Covers every game up to Imaginators (its creation crystals by toy id); kNone for items, traps,
+// unreleased entries and Kaos.
 Element FigureElement(const SkylanderInfo& sky);
 
 // The character a figure belongs to: "Chop Chop" for "Legendary Chop Chop" and "Twin Blade Chop

@@ -12,9 +12,23 @@ struct CharacterElement {
   Element element;
 };
 
-// Every playable character of Spyro's Adventure, Giants and Swap Force (cores, giants, swappers,
-// sidekicks). Variants are matched by containing one of these names, so the list holds base
-// names only.
+// Every playable character of the games (cores, giants, swappers, sidekicks, trap masters, Minis,
+// SuperChargers and their vehicles, senseis). Variants are matched by containing one of these
+// names, so the list holds base names only.
+//
+// Trap Team's, SuperChargers' and Imaginators' characters were read from the games' files
+// (2026-10-21). Trap Team: every character's scene (rom/character/NNN_<model>.bld, its level.bld)
+// names its element ("Elemental_Fire", "Portal_EntryFX_Fire.lvl"); the Minis' scenes are numbered
+// apart from their figure ids and were matched by name (505_Mini_Drobot is Drobit). SuperChargers
+// and Imaginators: permanent.pak's ToyData/<Name>_ToyData.igz, whose toy object (CFullCharacterToyData,
+// CVehicleToyData) has the toy id at +0x08 and the element at +0x0C: 1 Earth, 2 Water, 3 Air,
+// 4 Fire, 5 Life, 6 Undead, 7 Magic, 8 Tech, 9 Light, 10 Dark, 11 Kaos. Checked against the
+// earlier games' characters already here: all 196 that Trap Team's scenes have, and 118 of the 119
+// in SuperChargers' toy data, agree; the other was Crypt Crusher, which matched Crusher (Earth)
+// and is Undead in the game's data, so it is listed now. The Nintendo characters and their
+// vehicles are not on the Xbox 360 discs; theirs are the figures' (Hammer Slam Bowser and the Clown
+// Cruiser Fire, Turbo Charge Donkey Kong and the Barrel Blaster Life). Kaos (Imaginators) has an
+// element of his own the menu doesn't list.
 constexpr CharacterElement kCharacters[] = {
     // Spyro's Adventure
     {"Spyro", Element::kMagic},           {"Voodood", Element::kMagic},
@@ -64,6 +78,79 @@ constexpr CharacterElement kCharacters[] = {
     {"Scratch", Element::kAir},           {"Slobber Tooth", Element::kEarth},
     {"Smolderdash", Element::kFire},      {"Star Strike", Element::kMagic},
     {"Wind-Up", Element::kTech},          {"Zoo Lou", Element::kLife},
+    // Trap Team trap masters
+    {"Blastermind", Element::kMagic},     {"Bushwhack", Element::kLife},
+    {"Enigma", Element::kMagic},          {"Gearshift", Element::kTech},
+    {"Gusto", Element::kAir},             {"Head Rush", Element::kEarth},
+    {"Jawbreaker", Element::kTech},       {"Ka-Boom", Element::kFire},
+    {"Knight Light", Element::kLight},    {"Knight Mare", Element::kDark},
+    {"Krypt King", Element::kUndead},     {"Lob-Star", Element::kWater},
+    {"Short Cut", Element::kUndead},      {"Snap Shot", Element::kWater},
+    {"Thunderbolt", Element::kAir},       {"Tuff Luck", Element::kLife},
+    {"Wallop", Element::kEarth},          {"Wildfire", Element::kFire},
+    // Trap Team cores
+    {"Bat Spin", Element::kUndead},       {"Blackout", Element::kDark},
+    {"Blades", Element::kAir},            {"Chopper", Element::kTech},
+    {"Cobra Cadabra", Element::kMagic},   {"Deja Vu", Element::kMagic},
+    {"Echo", Element::kWater},            {"Fist Bump", Element::kEarth},
+    {"Fling Kong", Element::kAir},        {"Flip Wreck", Element::kWater},
+    {"Food Fight", Element::kLife},       {"Funny Bone", Element::kUndead},
+    {"High Five", Element::kLife},        {"Rocky Roll", Element::kEarth},
+    {"Spotlight", Element::kLight},       {"Torch", Element::kFire},
+    {"Trail Blazer", Element::kFire},     {"Tread Head", Element::kTech},
+    // Trap Team Minis
+    {"Bop", Element::kEarth},             {"Breeze", Element::kAir},
+    {"Drobit", Element::kTech},           {"Hijinx", Element::kUndead},
+    {"Pet Vac", Element::kAir},           {"Small Fry", Element::kFire},
+    {"Spry", Element::kMagic},
+    // SuperChargers
+    {"Astroblast", Element::kLight},      {"Dive-Clops", Element::kWater},
+    {"Fiesta", Element::kUndead},         {"Hammer Slam Bowser", Element::kFire},
+    {"High Volt", Element::kTech},        {"Nightfall", Element::kDark},
+    {"Smash Hit", Element::kEarth},       {"Spitfire", Element::kFire},
+    {"Splat", Element::kMagic},           {"Stormblade", Element::kAir},
+    {"Thrillipede", Element::kLife},      {"Turbo Charge Donkey Kong", Element::kLife},
+    // SuperChargers vehicles
+    {"Barrel Blaster", Element::kLife},   {"Burn-Cycle", Element::kFire},
+    {"Buzz Wing", Element::kLife},        {"Clown Cruiser", Element::kFire},
+    {"Crypt Crusher", Element::kUndead},  {"Dive Bomber", Element::kWater},
+    {"Gold Rusher", Element::kTech},      {"Hot Streak", Element::kFire},
+    {"Jet Stream", Element::kAir},        {"Reef Ripper", Element::kWater},
+    {"Sea Shadow", Element::kDark},       {"Shark Tank", Element::kEarth},
+    {"Shield Striker", Element::kTech},   {"Sky Slicer", Element::kAir},
+    {"Soda Skimmer", Element::kMagic},    {"Splatter Splasher", Element::kMagic},
+    {"Stealth Stinger", Element::kLife},  {"Sun Runner", Element::kLight},
+    {"Thump Truck", Element::kEarth},     {"Tomb Buggy", Element::kUndead},
+    // Imaginators senseis
+    {"Air Strike", Element::kAir},        {"Ambush", Element::kLife},
+    {"Aurora", Element::kLight},          {"Barbella", Element::kEarth},
+    {"Boom Bloom", Element::kLife},       {"Buckshot", Element::kMagic},
+    {"Chain Reaction", Element::kTech},   {"Chopscotch", Element::kUndead},
+    {"Crash Bandicoot", Element::kLife},  {"Dr. Neo Cortex", Element::kTech},
+    {"Ember", Element::kFire},            {"Flarewolf", Element::kFire},
+    {"King Pen", Element::kWater},        {"Mysticat", Element::kMagic},
+    {"Pit Boss", Element::kUndead},       {"Ro-Bow", Element::kTech},
+    {"Starcast", Element::kDark},         {"Tidepool", Element::kWater},
+    {"Tri-Tip", Element::kEarth},         {"Wild Storm", Element::kAir},
+    // Imaginators villain senseis
+    {"Bad Juju", Element::kAir},          {"Blaster-Tron", Element::kLight},
+    {"Chompy Mage", Element::kLife},      {"Dr. Krankcase", Element::kTech},
+    {"Golden Queen", Element::kEarth},    {"Grave Clobber", Element::kWater},
+    {"Hood Sickle", Element::kDark},      {"Pain-Yatta", Element::kMagic},
+    {"Tae Kwon Crow", Element::kFire},    {"Wolfgang", Element::kUndead},
+};
+
+// Imaginators' creation crystals by toy id: their names ("Cy", "Legendary Life Knight") don't
+// always say the element. From the toy data (CYOS_Magic 680 ... CYOS_Light 689; CYOS_Air is not
+// in it, 682 is the Air crystals' id in the catalog).
+struct CrystalElement {
+  uint16_t id;
+  Element element;
+};
+constexpr CrystalElement kCrystals[] = {
+    {680, Element::kMagic}, {681, Element::kWater}, {682, Element::kAir},  {683, Element::kUndead},
+    {684, Element::kTech},  {685, Element::kFire},  {686, Element::kEarth}, {687, Element::kLife},
+    {688, Element::kDark},  {689, Element::kLight},
 };
 
 // Lower-case letters and digits only, so "Eye-Brawl" and "Eye Brawl" compare equal.
@@ -78,8 +165,10 @@ std::string Normalize(std::string_view s) {
   return out;
 }
 
+// Traps are left out: their names say an element and a shape ("Fire Torch"), which would match
+// characters ("Torch").
 bool IsCharacterCategory(std::string_view category) {
-  return category != "Items" && category != "Unreleased";
+  return category != "Items" && category != "Traps" && category != "Unreleased";
 }
 
 // The character entry whose name the figure's name contains; the longest match wins, so a variant
@@ -104,6 +193,12 @@ const CharacterElement* FindCharacter(const SkylanderInfo& sky) {
 }  // namespace
 
 Element FigureElement(const SkylanderInfo& sky) {
+  if (sky.category == "Creation Crystals") {
+    for (const CrystalElement& crystal : kCrystals) {
+      if (crystal.id == sky.id) return crystal.element;
+    }
+    return Element::kNone;
+  }
   const CharacterElement* character = FindCharacter(sky);
   return character ? character->element : Element::kNone;
 }
