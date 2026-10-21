@@ -47,8 +47,9 @@ REXCVAR_DEFINE_INT32(portal_menu_chord_ms, 150, "Portal",
                      "waiting for the others")
     .range(0, 1000);
 REXCVAR_DEFINE_INT32(keyboard_player, 1, "Input",
-                     "Which player the keyboard plays as (1-4); 2 tries co-op with one controller")
-    .range(1, 4);
+                     "Which player the keyboard plays as (1-2, the games have two); 2 tries co-op "
+                     "with one controller")
+    .range(1, 2);
 
 namespace skylanders {
 namespace {
@@ -306,7 +307,8 @@ uint32_t UserOfLocked(const DeviceRecord& record) {
     return *record.forced_user;
   }
   if (record.keyboard) {
-    return uint32_t(std::clamp(REXCVAR_GET(keyboard_player), 1, int(rex::input::kMaxGuestUsers)) - 1);
+    // The games have two players (player_menu.cpp's kPlayers).
+    return uint32_t(std::clamp(REXCVAR_GET(keyboard_player), 1, 2) - 1);
   }
   if (record.synthetic) {
     return 0;
