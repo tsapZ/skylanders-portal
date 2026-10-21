@@ -82,6 +82,18 @@ void SetFigureNameProvider(FigureNameProvider provider);
 // menu's "Abenteuer-Paket" / "Adventure pack". Shown in the details view and the portal check.
 void SetAdventurePackName(std::string name);
 
+// A figure's trait the game shows with a symbol of its own, e.g. Swap Force's SWAP skill of a
+// swapper's bottom half ("Hüpfen" with the HUD's bounce symbol). The menu puts the symbol on the
+// figure's card and the name next to it in the preview and the details view; for a swapper it asks
+// for the bottom half. `image` is an art key for the art image provider; `name` in the menu's
+// language. Same rules as the other providers (UI thread, must not block).
+struct FigureTrait {
+  std::string image;
+  std::string name;
+};
+using FigureTraitProvider = std::function<std::optional<FigureTrait>(uint16_t id, uint16_t variant)>;
+void SetFigureTraitProvider(FigureTraitProvider provider);
+
 // Pictures from the game's own files by key, for the menu's symbols: "element:magic" (the
 // element names in lower case, "light" and "dark" from Trap Team on), "ui:gold" (the game's
 // gold symbol, for the gold amount and the upgrade prices), and the keys the upgrade and hat
