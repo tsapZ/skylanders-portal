@@ -53,6 +53,10 @@ REXCVAR_DEFINE_STRING(portal_menu_hidden_games, "", "Portal",
                       "with Start in the menu)");
 REXCVAR_DEFINE_BOOL(portal_menu_owned_only, false, "Portal",
                     "The portal menu lists only figures that have a figure file");
+REXCVAR_DEFINE_BOOL(portal_menu_later_versions, false, "Portal",
+                    "The portal menu also lists later games' figures of the characters this game "
+                    "knows (Series 2 Spyro in Spyro's Adventure), with their games' tabs; the game "
+                    "plays them as its own");
 REXCVAR_DEFINE_STRING(portal_menu_leave_button, "b", "Portal",
                       "The button of the game's portal screen that lets a second player leave "
                       "(\"b\" in Giants and Swap Force, \"rs\" in Spyro's Adventure); the menu's "
@@ -957,9 +961,12 @@ class Library {
     };
 
     // Characters with all their versions (catalog order is release order). Figures from later
-    // games count too when they carry the id of a character this game knows: the game goes by the
-    // id, so "Eon's Elite Chop Chop" (id 30) plays as Chop Chop in Swap Force, while a
-    // SuperChargers driver (own id) or a character new in a later game is unknown to it.
+    // games can count too when they carry the id of a character this game knows: the game goes by
+    // the id, so "Eon's Elite Chop Chop" (id 30) plays as Chop Chop in Swap Force, while a
+    // SuperChargers driver (own id) or a character new in a later game is unknown to it. They are
+    // listed only with portal_menu_later_versions: the game itself offers only its own figures,
+    // and the owner wants the menu to look like that by default (2026-10-21).
+    const bool later_versions = REXCVAR_GET(portal_menu_later_versions);
     std::unordered_map<std::string, size_t> index;
     std::unordered_map<std::string, std::string> debut;  // character -> first game, unfiltered
     known_ids_.clear();
@@ -997,6 +1004,7 @@ class Library {
         if (name.empty()) name = portal::DisplayName(portal::SwapperBaseName(sky));
         known_ids_.emplace(sky.id, name);
       } else if (auto known = known_ids_.find(sky.id); known != known_ids_.end()) {
+        if (!later_versions) continue;
         name = known->second;
       } else {
         continue;
@@ -1035,11 +1043,26 @@ class Library {
         entry.paths.push_back(path);
         entry.figures.push_back(it->second->sky);
       }
-      if (!entry.figures.empty() && known_ids_.contains(entry.figures[0]->id)) {
+      if (!entry.figures.empty() && known_ids_.contains(entry.figures[0]->id) &&
+          (later_versions || Contains(games, entry.figures[0]->game))) {
         recent_.push_back(std::move(entry));
       }
     }
-    for (const std::string& game : shown) {
+    // The game's own tabs, then (with later_versions) the later games that have a version of one
+    // of its characters, in release order.
+    std::vector<std::string> tab_games = shown;
+    if (later_versions) {
+      for (const SkylanderInfo& sky : portal::AllSkylanders()) {
+        if (Contains(games, sky.game) || Contains(tab_games, sky.game)) continue;
+        for (const Character& character : characters_) {
+          if (!character.item && character.HasVersionFrom(sky.game)) {
+            tab_games.emplace_back(sky.game);
+            break;
+          }
+        }
+      }
+    }
+    for (const std::string& game : tab_games) {
       Tab tab;
       tab.title = game;
       for (size_t i = 0; i < characters_.size(); ++i) {
