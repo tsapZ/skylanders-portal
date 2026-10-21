@@ -2974,6 +2974,14 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (ImTextureID t = ArtTexture(u.image)) {
       dl->AddImageRounded(t, {a.x + pad, a.y + pad}, {b.x - pad, b.y - pad}, {0, 0}, {1, 1},
                           owned ? IM_COL32_WHITE : Rgba(150, 150, 170, 120), S(8));
+    } else if (u.image.empty()) {
+      // A game without upgrade pictures (Spyro's Adventure lists them as text): an upgrade arrow,
+      // gold once bought.
+      const ImVec2 c{(a.x + b.x) / 2, (a.y + b.y) / 2};
+      const float s = size * 0.22f;
+      const ImU32 col = owned ? kGold : Rgba(150, 156, 190, 150);
+      dl->AddTriangleFilled({c.x, c.y - s * 1.3f}, {c.x - s * 1.1f, c.y}, {c.x + s * 1.1f, c.y}, col);
+      dl->AddRectFilled({c.x - s * 0.45f, c.y - S(1)}, {c.x + s * 0.45f, c.y + s * 1.2f}, col);
     } else {
       const ImVec2 qs = TextSize(TitleFont(), size * 0.45f, "?");
       Label(dl, TitleFont(), size * 0.45f, {(a.x + b.x - qs.x) / 2, (a.y + b.y - qs.y) / 2},
