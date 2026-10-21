@@ -170,6 +170,8 @@ enum class Text {
   kRealItem,
   kAdventurePack,
   kAdventurePackInfo,
+  kCheckTitleToys,
+  kCheckToys,
   kCount,
 };
 
@@ -261,6 +263,8 @@ constexpr const char* kEnglish[] = {
     "A magic item is on the real portal: lift it off there first.",
     "Adventure pack",
     "Opens a level of its own when it comes onto the portal.",
+    "Too many toys on the portal",
+    "%u toys: the game takes only one.",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -353,6 +357,8 @@ constexpr const char* kGerman[] = {
     "Abenteuer-Paket",
     "\xC3\x96"
     "ffnet ein eigenes Level, wenn es aufs Portal kommt.",
+    "Zu viele Spielzeuge auf dem Portal",
+    "%u Spielzeuge: Das Spiel nimmt nur eins.",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -3811,6 +3817,15 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
     Close();
   }
 
+  // An adventure pack among the items: the game counts it with them ("Zu viele Spielzeuge auf
+  // dem Portal of Power" in Spyro's Adventure for a magic item and a location piece).
+  bool PackAmongItems() const {
+    return std::any_of(entries_.begin(), entries_.end(), [](const PortalEntry& e) {
+      return e.kind == PortalEntry::Kind::kItem && !e.figures.empty() &&
+             IsAdventurePack(e.figures.front());
+    });
+  }
+
   // The title for "too many items" names what there is too much of, so a game without sidekicks
   // (Spyro's Adventure) never mentions them; both only when both are doubled, or when the game
   // complains and a sidekick is on the portal but nothing looks doubled here.
@@ -3818,7 +3833,9 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
     const size_t items = Count(PortalEntry::Kind::kItem);
     const size_t sidekicks = Count(PortalEntry::Kind::kSidekick);
     if (sidekicks > 1 && items <= 1) return T(Text::kCheckTitleSidekicks);
-    if (sidekicks <= 1 && (items > 1 || sidekicks == 0)) return T(Text::kCheckTitleMagicItems);
+    if (sidekicks <= 1 && (items > 1 || sidekicks == 0)) {
+      return T(items > 1 && PackAmongItems() ? Text::kCheckTitleToys : Text::kCheckTitleMagicItems);
+    }
     return T(Text::kCheckTitleItems);
   }
 
@@ -3833,7 +3850,7 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
       notes.push_back(text);
     }
     if (Count(PortalEntry::Kind::kItem) > 1) {
-      std::snprintf(text, sizeof(text), T(Text::kCheckItems),
+      std::snprintf(text, sizeof(text), T(PackAmongItems() ? Text::kCheckToys : Text::kCheckItems),
                     unsigned(Count(PortalEntry::Kind::kItem)));
       notes.push_back(text);
     }
