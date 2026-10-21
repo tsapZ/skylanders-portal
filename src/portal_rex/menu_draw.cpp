@@ -2,11 +2,28 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <string>
+#include <unordered_map>
 
 #include <rex/cvar.h>
 
 #include <imgui_internal.h>
+
+#include "portal_rex/game_font.h"
+
+namespace skylanders {
+namespace {
+
+GameFonts g_game_fonts;
+
+}  // namespace
+
+void SetGameFonts(GameFonts fonts) { g_game_fonts = std::move(fonts); }
+
+}  // namespace skylanders
 
 namespace skylanders::menu_draw {
 namespace {
@@ -19,15 +36,199 @@ constexpr float kBoldBakeSize = 44.0f;
 
 float g_s = 1.0f;  // pixels per 1080p unit
 
+// A game's bitmap font as an ImGui font source (ImGui 1.92's font loader interface): for each
+// size ImGui asks for, a glyph's cell is scaled from the game's atlas (averaged when smaller,
+// interpolated when larger) and packed into ImGui's own atlas. AddFont wants FontLoaderData empty,
+// so FontSrcInit finds the font by the source's name.
+// The menus' sizes were chosen for Segoe UI, whose capitals are 0.526 of its size (cap height 1434
+// over ascent + descent 2724, from its OS/2 and hhea tables). A game font's cells often have more
+// room around the letters (SuperChargers' ProximaNova: 0.475, its small-caps title font 0.438), so
+// each one is drawn larger until its H is as tall as Segoe's, and the menus look the same size.
+constexpr float kWindowsCapHeight = 0.526f;
+
+struct BitmapSource {
+  std::shared_ptr<const GameFont> font;
+  std::unordered_map<uint32_t, int> index;  // codepoint -> glyph
+  float scale = 1.0f;                       // see kWindowsCapHeight
+};
+
+// The H's ink height in pixels, 0 if the font has no H.
+float CapHeight(const GameFont& font) {
+  for (const GameFontGlyph& g : font.glyphs) {
+    if (g.codepoint != 'H' || g.page < 0 || size_t(g.page) >= font.pages.size()) continue;
+    const GameFontPage& page = font.pages[g.page];
+    int top = -1, bottom = -1;
+    for (int row = 0; row < g.height; ++row) {
+      for (int col = 0; col < g.width; ++col) {
+        const int x = g.x + col, y = g.y + row;
+        if (x < page.width && y < page.height && page.alpha[size_t(y) * page.width + x] >= 128) {
+          if (top < 0) top = row;
+          bottom = row;
+          break;
+        }
+      }
+    }
+    return top < 0 ? 0.0f : float(bottom - top + 1);
+  }
+  return 0.0f;
+}
+std::unordered_map<std::string, BitmapSource> g_bitmap_sources;  // by ImFontConfig::Name
+
+const BitmapSource* SourceOf(const ImFontConfig* src) {
+  return static_cast<const BitmapSource*>(src->FontLoaderData);
+}
+
+bool BitmapSrcInit(ImFontAtlas*, ImFontConfig* src) {
+  auto it = g_bitmap_sources.find(src->Name);
+  if (it == g_bitmap_sources.end()) return false;
+  src->FontLoaderData = &it->second;
+  return true;
+}
+
+void BitmapSrcDestroy(ImFontAtlas*, ImFontConfig* src) { src->FontLoaderData = nullptr; }
+
+bool BitmapContainsGlyph(ImFontAtlas*, ImFontConfig* src, ImWchar codepoint) {
+  return SourceOf(src)->index.count(codepoint) != 0;
+}
+
+bool BitmapBakedInit(ImFontAtlas*, ImFontConfig* src, ImFontBaked* baked, void*) {
+  const GameFont& font = *SourceOf(src)->font;
+  const float scale = baked->Size * SourceOf(src)->scale / font.size;
+  baked->Ascent = ImCeil(font.ascent * scale);
+  baked->Descent = ImFloor((font.ascent - font.size) * scale);
+  return true;
+}
+
+// The coverage of a w x h cell scaled to out_w x out_h: each output pixel averages the source area
+// it covers (several pixels when shrinking, a bilinear sample when enlarging).
+void ScaleCell(const GameFontPage& page, int x, int y, int w, int h, int out_w, int out_h,
+               unsigned char* out) {
+  const float sx = float(w) / out_w, sy = float(h) / out_h;
+  auto at = [&](int px, int py) -> float {
+    px = std::clamp(px, x, x + w - 1);
+    py = std::clamp(py, y, y + h - 1);
+    return page.alpha[size_t(py) * page.width + px];
+  };
+  for (int oy = 0; oy < out_h; ++oy) {
+    for (int ox = 0; ox < out_w; ++ox) {
+      float value;
+      if (sx <= 1.0f && sy <= 1.0f) {
+        const float fx = x + (ox + 0.5f) * sx - 0.5f, fy = y + (oy + 0.5f) * sy - 0.5f;
+        const int x0 = int(std::floor(fx)), y0 = int(std::floor(fy));
+        const float tx = fx - x0, ty = fy - y0;
+        value = (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty) +
+                (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
+      } else {
+        const float x_from = x + ox * sx, x_to = x_from + sx;
+        const float y_from = y + oy * sy, y_to = y_from + sy;
+        float sum = 0, weight = 0;
+        for (int py = int(y_from); py < int(std::ceil(y_to)); ++py) {
+          const float wy = std::min(y_to, py + 1.0f) - std::max(y_from, float(py));
+          for (int px = int(x_from); px < int(std::ceil(x_to)); ++px) {
+            const float wx = std::min(x_to, px + 1.0f) - std::max(x_from, float(px));
+            sum += at(px, py) * wx * wy;
+            weight += wx * wy;
+          }
+        }
+        value = weight > 0 ? sum / weight : 0;
+      }
+      out[size_t(oy) * out_w + ox] = (unsigned char)std::clamp(int(value + 0.5f), 0, 255);
+    }
+  }
+}
+
+bool BitmapLoadGlyph(ImFontAtlas* atlas, ImFontConfig* src, ImFontBaked* baked, void*,
+                     ImWchar codepoint, ImFontGlyph* out_glyph, float* out_advance_x) {
+  const BitmapSource& source = *SourceOf(src);
+  const auto it = source.index.find(codepoint);
+  if (it == source.index.end()) return false;
+  const GameFontGlyph& g = source.font->glyphs[it->second];
+  const float layout = baked->Size * source.scale / source.font->size;
+  if (out_advance_x) {
+    *out_advance_x = g.advance * layout;
+    return true;
+  }
+  out_glyph->Codepoint = codepoint;
+  out_glyph->AdvanceX = g.advance * layout;
+  if (g.width <= 0 || g.height <= 0 || g.page < 0 || size_t(g.page) >= source.font->pages.size()) {
+    return true;
+  }
+  const float density = src->RasterizerDensity * baked->RasterizerDensity;
+  const int w = std::max(1, int(std::ceil(g.width * layout * density)));
+  const int h = std::max(1, int(std::ceil(g.height * layout * density)));
+  const ImFontAtlasRectId pack_id = ImFontAtlasPackAddRect(atlas, w, h);
+  if (pack_id == ImFontAtlasRectId_Invalid) return false;
+  ImTextureRect* r = ImFontAtlasPackGetRect(atlas, pack_id);
+  ImFontAtlasBuilder* builder = atlas->Builder;
+  builder->TempBuffer.resize(w * h);
+  ScaleCell(source.font->pages[g.page], g.x, g.y, g.width, g.height, w, h, builder->TempBuffer.Data);
+  out_glyph->X0 = g.x_offset * layout;
+  out_glyph->Y0 = g.y_offset * layout;
+  out_glyph->X1 = out_glyph->X0 + w / density;
+  out_glyph->Y1 = out_glyph->Y0 + h / density;
+  out_glyph->Visible = true;
+  out_glyph->PackId = pack_id;
+  ImFontAtlasBakedSetFontGlyphBitmap(atlas, baked, src, out_glyph, r, builder->TempBuffer.Data,
+                                     ImTextureFormat_Alpha8, w);
+  return true;
+}
+
+const ImFontLoader* BitmapLoader() {
+  static ImFontLoader loader = [] {
+    ImFontLoader l;
+    l.Name = "skylanders game font";
+    l.FontSrcInit = BitmapSrcInit;
+    l.FontSrcDestroy = BitmapSrcDestroy;
+    l.FontSrcContainsGlyph = BitmapContainsGlyph;
+    l.FontBakedInit = BitmapBakedInit;
+    l.FontBakedLoadGlyph = BitmapLoadGlyph;
+    return l;
+  }();
+  return &loader;
+}
+
+// The game's font with the Windows font merged in for the glyphs it lacks, or just the Windows
+// font without one.
+ImFont* AddFont(ImFontAtlas* atlas, const std::shared_ptr<const GameFont>& game, const char* name,
+                const char* windows_ttf, float size) {
+  ImFont* font = nullptr;
+  if (game && !game->glyphs.empty() && game->size > 0) {
+    BitmapSource& source = g_bitmap_sources[name];
+    source.font = game;
+    source.index.clear();
+    for (size_t i = 0; i < game->glyphs.size(); ++i) {
+      source.index.emplace(game->glyphs[i].codepoint, int(i));
+    }
+    const float cap = CapHeight(*game);
+    source.scale = cap > 0 ? std::clamp(kWindowsCapHeight * game->size / cap, 0.5f, 2.0f) : 1.0f;
+    ImFontConfig cfg;
+    std::snprintf(cfg.Name, sizeof(cfg.Name), "%s", name);
+    cfg.FontLoader = BitmapLoader();
+    cfg.FontDataOwnedByAtlas = true;
+    cfg.SizePixels = size;
+    font = atlas->AddFont(&cfg);
+  }
+#ifdef _WIN32
+  if (font) {
+    ImFontConfig merge;
+    merge.MergeMode = true;
+    atlas->AddFontFromFileTTF(windows_ttf, size, &merge);
+  } else {
+    font = atlas->AddFontFromFileTTF(windows_ttf, size);
+  }
+#else
+  (void)windows_ttf;
+#endif
+  return font;
+}
+
 }  // namespace
 
 void AddFonts(ImFontAtlas* atlas) {
-#ifdef _WIN32
-  g_font_title = atlas->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguibl.ttf", kTitleBakeSize);
-  g_font_bold = atlas->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", kBoldBakeSize);
-#else
-  (void)atlas;
-#endif
+  g_font_title = AddFont(atlas, g_game_fonts.title, "game font: title",
+                         "C:\\Windows\\Fonts\\seguibl.ttf", kTitleBakeSize);
+  g_font_bold = AddFont(atlas, g_game_fonts.body, "game font: body",
+                        "C:\\Windows\\Fonts\\segoeuib.ttf", kBoldBakeSize);
 }
 
 ImFont* TitleFont() { return g_font_title ? g_font_title : ImGui::GetFont(); }
