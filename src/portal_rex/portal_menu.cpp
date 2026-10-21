@@ -404,12 +404,24 @@ std::string_view ElementLabel(Element element) {
   return name.empty() ? "-" : name;
 }
 
+// The German words are the games' own (Imaginators' German text: "Fahrzeug", "Kreationskristall",
+// "Falle", "Mini-Skylander", read 2026-10-21); names the German games keep in English (Eon's
+// Elite, LightCore, Trap Master, SuperChargers) stay as they are.
 std::string BadgeLabel(const std::string& badge) {
   if (g_german) {
+    if (badge.rfind("Series ", 0) == 0) return "Serie " + badge.substr(7);
     if (badge == "Variant") return "Variante";
     if (badge == "Chase") return "Chase-Variante";
     if (badge == "Giant") return "Gigant";
-    if (badge == "Sidekick") return "Mini-Skylander";
+    if (badge == "Sidekick" || badge == "Mini") return "Mini-Skylander";
+    if (badge == "Trap") return "Falle";
+    if (badge == "Vehicle") return "Fahrzeug";
+    if (badge == "Vehicle Variant") return "Fahrzeug-Variante";
+    if (badge == "Sensei Variant") return "Sensei-Variante";
+    if (badge == "Villain Sensei") return "Schurken-Sensei";
+    if (badge == "Villain Variant") return "Schurken-Variante";
+    if (badge == "Creation Crystal") return "Kreationskristall";
+    if (badge == "Unreleased") return "Unver\xC3\xB6" "ffentlicht";
   }
   return badge;
 }

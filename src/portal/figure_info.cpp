@@ -220,6 +220,17 @@ std::string VersionBadge(const SkylanderInfo& sky) {
   if (sky.category == "Swappers") return "Swapper";
   if (sky.category == "Chase Variants") return "Chase";
   if (sky.category == "Variants") return "Variant";
+  // The later games' categories as one figure is called (a card says "Vehicle", not "Vehicles").
+  if (sky.category == "Minis") return "Mini";
+  if (sky.category == "Traps") return "Trap";
+  if (sky.category == "Trap Masters") return "Trap Master";
+  if (sky.category == "Vehicles") return "Vehicle";
+  if (sky.category == "Vehicle Variants") return "Vehicle Variant";
+  if (sky.category == "Senseis") return "Sensei";
+  if (sky.category == "Sensei Variants") return "Sensei Variant";
+  if (sky.category == "Villain Senseis") return "Villain Sensei";
+  if (sky.category == "Villain Variants") return "Villain Variant";
+  if (sky.category == "Creation Crystals") return "Creation Crystal";
   return std::string(sky.category);
 }
 

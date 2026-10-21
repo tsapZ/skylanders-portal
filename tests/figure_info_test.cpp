@@ -106,6 +106,11 @@ int main() {
   CHECK(badge("Metallic Blue Chop Chop") == "Chase");
   CHECK(badge("Tree Rex") == "Giant");
   CHECK(badge("Freeze Blade Top") == "Swapper");
+  CHECK(badge("Wildfire") == "Trap Master");
+  CHECK(badge("Barkley Mini") == "Mini");
+  CHECK(badge("Soda Skimmer") == "Vehicle");
+  CHECK(badge("Buckshot") == "Sensei");
+  CHECK(badge("Hood Sickle") == "Villain Sensei");
 
   CHECK(DisplayName("Dragon_s Peak") == "Dragon's Peak");
   CHECK(DisplayName("Spyro") == "Spyro");
