@@ -3106,6 +3106,14 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (ImTextureID t = info ? ArtTexture(info->image) : ImTextureID{}) {
       dl->AddImageRounded(t, {a.x + S(3), a.y + S(3)}, {a.x + pic - S(3), a.y + pic - S(3)}, {0, 0},
                           {1, 1}, IM_COL32_WHITE, S(8));
+    } else {
+      // No picture on this disc (Imaginators shows its hats as 3D models): a plain top hat.
+      const ImU32 c = Rgba(255, 255, 255, 110);
+      const float cx = a.x + pic * 0.5f;
+      dl->AddRectFilled({cx - pic * 0.18f, a.y + pic * 0.24f}, {cx + pic * 0.18f, a.y + pic * 0.64f}, c,
+                        pic * 0.04f);
+      dl->AddRectFilled({cx - pic * 0.32f, a.y + pic * 0.64f}, {cx + pic * 0.32f, a.y + pic * 0.74f}, c,
+                        pic * 0.05f);
     }
     const float x = a.x + pic + S(12);
     Label(dl, BoldFont(), compact ? S(19) : S(22), {x, a.y + S(2)}, kWhite, HatName(hat),
