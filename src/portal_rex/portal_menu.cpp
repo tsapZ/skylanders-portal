@@ -1841,7 +1841,8 @@ float Pill(ImDrawList* dl, ImVec2 pos, std::string_view text, ImU32 bg, ImU32 fg
   const ImVec2 ts = TextSize(BoldFont(), S(size), text);
   const ImVec2 end{pos.x + ts.x + S(14), pos.y + ts.y + S(4)};
   dl->AddRectFilled(pos, end, bg, S(8));
-  Label(dl, BoldFont(), S(size), {pos.x + S(7), pos.y + S(2)}, fg, text);
+  Label(dl, BoldFont(), S(size), {pos.x + S(7), CapCentredY((pos.y + end.y) / 2, S(size))}, fg,
+        text);
   return end.x - pos.x;
 }
 
@@ -2618,7 +2619,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const ImVec2 c0{c1.x - ts.x - S(40), c1.y};
     dl->AddRectFilled(c0, {c1.x, c1.y + S(42)}, PlayerColor(user_), S(21));
     dl->AddRect(c0, {c1.x, c1.y + S(42)}, Rgba(255, 255, 255, 120), S(21), 0, S(2));
-    Label(dl, BoldFont(), S(24), {c0.x + S(20), c0.y + S(7)}, kWhite, player);
+    Label(dl, BoldFont(), S(24), {c0.x + S(20), CapCentredY(c0.y + S(21), S(24))}, kWhite, player);
   }
 
   void DrawMessage(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const Actions& a) {
@@ -2697,7 +2698,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       const bool active = t == tab_;
       dl->AddRectFilled(a, b, active ? kGold : Rgba(255, 255, 255, 26), S(23));
       if (active) dl->AddRect(a, b, Rgba(255, 240, 190), S(23), 0, S(2));
-      Label(dl, BoldFont(), S(22), {a.x + S(20), a.y + S(10)}, active ? kInk : kDim, title);
+      Label(dl, BoldFont(), S(22), {a.x + S(20), CapCentredY(a.y + tab_h / 2, S(22))},
+            active ? kInk : kDim, title);
       if (ImGui::IsMouseHoveringRect(a, b) && ImGui::IsMouseClicked(0) && state_ == State::kBrowsing) {
         tab_ = t;
         element_ = 0;
@@ -2803,7 +2805,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         DrawElementBadge(dl, {x + h / 2, a.y + h / 2}, S(23), element, active ? 255 : 215);
       }
       if (with_label) {
-        Label(dl, BoldFont(), S(21), {x + (tab.items ? S(20) : S(60)), a.y + S(15)},
+        Label(dl, BoldFont(), S(21),
+              {x + (tab.items ? S(20) : S(60)), CapCentredY(a.y + h / 2, S(21))},
               active ? kInk : kWhite, label_of(e));
       }
       if (ImGui::IsMouseHoveringRect({x, a.y}, b) && ImGui::IsMouseClicked(0) &&

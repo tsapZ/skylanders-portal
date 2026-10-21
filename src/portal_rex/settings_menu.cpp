@@ -653,7 +653,8 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       const bool active = i == page_;
       dl->AddRectFilled(t0, t1, active ? kGold : Rgba(255, 255, 255, 26), S(23));
       if (active) dl->AddRect(t0, t1, Rgba(255, 240, 190), S(23), 0, S(2));
-      Label(dl, BoldFont(), S(22), {t0.x + S(20), t0.y + S(10)}, active ? kInk : kDim, title);
+      Label(dl, BoldFont(), S(22), {t0.x + S(20), CapCentredY(t0.y + h / 2, S(22))},
+            active ? kInk : kDim, title);
       if (!confirm_ && ImGui::IsMouseHoveringRect(t0, t1) && ImGui::IsMouseClicked(0)) {
         page_ = i;
         row_ = scroll_ = 0;

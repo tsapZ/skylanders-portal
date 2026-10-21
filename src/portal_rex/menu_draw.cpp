@@ -302,6 +302,10 @@ void DrawPanel(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
               S(1.5f));
 }
 
+float CapCentredY(float centre_y, float size) {
+  return centre_y - (kWindowsAscent - kWindowsCapHeight / 2) * size;
+}
+
 float HintWidth(std::string_view glyph, std::string_view label, bool round) {
   const float h = S(30);
   const float glyph_w = round ? h : std::max(h, TextSize(BoldFont(), S(18), glyph).x + S(16));
@@ -318,9 +322,10 @@ float Hint(ImDrawList* dl, ImVec2 pos, std::string_view glyph, ImU32 glyph_col,
     dl->AddRectFilled(pos, {pos.x + glyph_w, pos.y + h}, glyph_col, S(8));
   }
   ImVec2 gs = TextSize(BoldFont(), S(18), glyph);
-  Label(dl, BoldFont(), S(18), {pos.x + (glyph_w - gs.x) / 2, pos.y + (h - gs.y) / 2}, kWhite,
-        glyph);
-  Label(dl, BoldFont(), S(20), {pos.x + glyph_w + S(8), pos.y + S(3)}, kDim, label);
+  Label(dl, BoldFont(), S(18), {pos.x + (glyph_w - gs.x) / 2, CapCentredY(pos.y + h / 2, S(18))},
+        kWhite, glyph);
+  Label(dl, BoldFont(), S(20), {pos.x + glyph_w + S(8), CapCentredY(pos.y + h / 2, S(20))}, kDim,
+        label);
   return HintWidth(glyph, label, round);
 }
 

@@ -43,6 +43,10 @@ void Label(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 col, std:
 void OutlinedLabel(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 col,
                    std::string_view text, float outline);
 ImVec2 TextSize(ImFont* font, float size, std::string_view text, float wrap = 0.0f);
+// The top to draw a one-line label of `size` at so its capitals are centred on `centre_y`, for
+// labels in a box (tabs, chips, buttons, hints): the menus' fonts have Segoe UI's proportions (the
+// game fonts are fitted to them), so the capitals' middle is 0.548 of the size below the top.
+float CapCentredY(float centre_y, float size);
 
 // A rounded rectangle with a vertical gradient.
 void GradientRect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom, float rounding,
