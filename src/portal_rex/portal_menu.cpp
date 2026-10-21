@@ -682,6 +682,8 @@ std::string ElementKey(Element element) {
     case Element::kUndead: return "element:undead";
     case Element::kLife: return "element:life";
     case Element::kAir: return "element:air";
+    case Element::kLight: return "element:light";
+    case Element::kDark: return "element:dark";
     default: return {};
   }
 }

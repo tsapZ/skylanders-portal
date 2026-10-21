@@ -77,10 +77,11 @@ void SetFigureImageProvider(FigureImageProvider provider);
 using FigureNameProvider = std::function<std::optional<std::string>(uint16_t id, uint16_t variant)>;
 void SetFigureNameProvider(FigureNameProvider provider);
 
-// Pictures from the game's own files by key, for the menu's symbols: "element:magic" (the eight
-// element names in lower case), "ui:gold" (the game's gold symbol, for the gold amount and the
-// upgrade prices), and the keys the upgrade and hat data below name. Same rules as
-// the figure pictures: return nullptr while loading; without one the menu draws its own symbols.
+// Pictures from the game's own files by key, for the menu's symbols: "element:magic" (the
+// element names in lower case, "light" and "dark" from Trap Team on), "ui:gold" (the game's
+// gold symbol, for the gold amount and the upgrade prices), and the keys the upgrade and hat
+// data below name. Same rules as the figure pictures: return nullptr while loading; without one
+// the menu draws its own symbols.
 using ArtImageProvider = std::function<std::shared_ptr<const FigureImage>(const std::string& key)>;
 void SetArtImageProvider(ArtImageProvider provider);
 
