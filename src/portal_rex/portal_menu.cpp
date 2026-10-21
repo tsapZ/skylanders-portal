@@ -168,6 +168,8 @@ enum class Text {
   kOnRealPortal,
   kRealSidekick,
   kRealItem,
+  kAdventurePack,
+  kAdventurePackInfo,
   kCount,
 };
 
@@ -257,6 +259,8 @@ constexpr const char* kEnglish[] = {
     "This figure is on the real portal.",
     "A sidekick is on the real portal: lift it off there first.",
     "A magic item is on the real portal: lift it off there first.",
+    "Adventure pack",
+    "Opens a level of its own when it comes onto the portal.",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -346,6 +350,9 @@ constexpr const char* kGerman[] = {
     "Diese Figur steht auf dem echten Portal.",
     "Ein Mini-Skylander steht auf dem echten Portal: Nimm ihn dort zuerst runter.",
     "Ein magisches Objekt steht auf dem echten Portal: Nimm es dort zuerst runter.",
+    "Abenteuer-Paket",
+    "\xC3\x96"
+    "ffnet ein eigenes Level, wenn es aufs Portal kommt.",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -1193,6 +1200,7 @@ ArtImageProvider g_art_provider;
 FigureUpgradesProvider g_upgrades_provider;
 HatInfoProvider g_hat_info_provider;
 ItemDurationProvider g_item_duration_provider;
+std::string g_pack_name;  // SetAdventurePackName; empty: the menu's own
 rex::ui::ImmediateDrawer* g_immediate_drawer = nullptr;
 // Uploaded pictures by figure. UI thread only.
 std::unordered_map<uint32_t, std::unique_ptr<rex::ui::ImmediateTexture>> g_textures;
@@ -1431,6 +1439,19 @@ const SkylanderInfo* FigureIn(int slot) {
 }
 
 bool IsItem(const SkylanderInfo* sky) { return sky && sky->category == "Items"; }
+// Adventure packs are the items 300-399 (Spyro's Adventure's location pieces on).
+bool IsAdventurePack(const SkylanderInfo* sky) {
+  return IsItem(sky) && sky->id >= 300 && sky->id < 400;
+}
+
+// The game's word for an adventure pack, else the menu's.
+std::string AdventurePackName() {
+  {
+    std::lock_guard lock(g_provider_mutex);
+    if (!g_pack_name.empty()) return g_pack_name;
+  }
+  return T(Text::kAdventurePack);
+}
 
 // portal_mode "hybrid": whether this figure file is a figure standing on the real portal (the same
 // UID). Two copies of one figure would overwrite each other's progress, so the menu doesn't put
@@ -3283,9 +3304,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     DrawFigurePicture(dl, {a.x + S(26), a.y + S(22)}, {a.x + S(110), a.y + S(106)}, sky, S(14));
     OutlinedLabel(dl, TitleFont(), S(34), {a.x + S(126), a.y + S(26)}, kWhite, FigureName(*sky),
                   S(2));
-    std::string line = IsItem(sky) ? std::string(T(Text::kItems))
-                                   : BadgeLabel(portal::VersionBadge(*sky)) + "   " +
-                                         std::string(ElementLabel(element));
+    std::string line = IsAdventurePack(sky) ? AdventurePackName()
+                       : IsItem(sky)          ? std::string(T(Text::kItems))
+                                              : BadgeLabel(portal::VersionBadge(*sky)) + "   " +
+                                           std::string(ElementLabel(element));
     line += "   " + std::string(sky->game);
     DrawElementBadge(dl, {a.x + S(140), a.y + S(88)}, S(14), element);
     Label(dl, BoldFont(), S(19), {a.x + S(162), a.y + S(77)}, kDim, line);
@@ -3307,7 +3329,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (simple) {
       const float tx = a.x + S(28), tw = b.x - a.x - S(56);
       float ty = top + S(10);
-      const char* info = T(IsItem(sky) ? Text::kItemInfo : Text::kSidekickInfo);
+      const char* info = T(IsAdventurePack(sky) ? Text::kAdventurePackInfo
+                           : IsItem(sky)          ? Text::kItemInfo
+                                                  : Text::kSidekickInfo);
       Label(dl, BoldFont(), S(20), {tx, ty}, kWhite, info, tw);
       ty += TextSize(BoldFont(), S(20), info, tw).y + S(14);
       if (const auto seconds = IsItem(sky) ? ItemDurationFor(*sky) : std::nullopt) {
@@ -3714,7 +3738,10 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
     char text[64];
     std::string kind;
     switch (e.kind) {
-      case PortalEntry::Kind::kItem: kind = T(Text::kCheckItem); break;
+      case PortalEntry::Kind::kItem:
+        kind = !e.figures.empty() && IsAdventurePack(e.figures.front()) ? AdventurePackName()
+                                                                        : T(Text::kCheckItem);
+        break;
       case PortalEntry::Kind::kSidekick: kind = T(Text::kCheckSidekick); break;
       default:
         if (!e.player) {
@@ -4036,6 +4063,11 @@ void SetFigureImageProvider(FigureImageProvider provider) {
 void SetFigureNameProvider(FigureNameProvider provider) {
   std::lock_guard lock(g_provider_mutex);
   g_name_provider = std::move(provider);
+}
+
+void SetAdventurePackName(std::string name) {
+  std::lock_guard lock(g_provider_mutex);
+  g_pack_name = std::move(name);
 }
 
 void SetArtImageProvider(ArtImageProvider provider) {

@@ -77,6 +77,11 @@ void SetFigureImageProvider(FigureImageProvider provider);
 using FigureNameProvider = std::function<std::optional<std::string>(uint16_t id, uint16_t variant)>;
 void SetFigureNameProvider(FigureNameProvider provider);
 
+// What the game calls an adventure pack (the toys 300-399, each opening a level of its own) in its
+// current language, e.g. Spyro's Adventure's "Ortselement" / "Location piece"; empty keeps the
+// menu's "Abenteuer-Paket" / "Adventure pack". Shown in the details view and the portal check.
+void SetAdventurePackName(std::string name);
+
 // Pictures from the game's own files by key, for the menu's symbols: "element:magic" (the
 // element names in lower case, "light" and "dark" from Trap Team on), "ui:gold" (the game's
 // gold symbol, for the gold amount and the upgrade prices), and the keys the upgrade and hat
