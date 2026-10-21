@@ -44,7 +44,12 @@ float g_s = 1.0f;  // pixels per 1080p unit
 // over ascent + descent 2724, from its OS/2 and hhea tables). A game font's cells often have more
 // room around the letters (SuperChargers' ProximaNova: 0.475, its small-caps title font 0.438), so
 // each one is drawn larger until its H is as tall as Segoe's, and the menus look the same size.
+// Its baseline goes where Segoe's is, 0.811 of the size from the line's top (ascent 2210 over
+// 2724): the menus centre a label by the line's height, so a game font whose letters sit higher
+// in their cells drew its labels too high in the tabs, buttons and hints (seen 2026-10-21 in every
+// game with its font).
 constexpr float kWindowsCapHeight = 0.526f;
+constexpr float kWindowsAscent = 0.811f;
 
 struct BitmapSource {
   std::shared_ptr<const GameFont> font;
@@ -91,11 +96,9 @@ bool BitmapContainsGlyph(ImFontAtlas*, ImFontConfig* src, ImWchar codepoint) {
   return SourceOf(src)->index.count(codepoint) != 0;
 }
 
-bool BitmapBakedInit(ImFontAtlas*, ImFontConfig* src, ImFontBaked* baked, void*) {
-  const GameFont& font = *SourceOf(src)->font;
-  const float scale = baked->Size * SourceOf(src)->scale / font.size;
-  baked->Ascent = ImCeil(font.ascent * scale);
-  baked->Descent = ImFloor((font.ascent - font.size) * scale);
+bool BitmapBakedInit(ImFontAtlas*, ImFontConfig*, ImFontBaked* baked, void*) {
+  baked->Ascent = ImCeil(kWindowsAscent * baked->Size);
+  baked->Descent = ImFloor((kWindowsAscent - 1.0f) * baked->Size);
   return true;
 }
 
@@ -163,7 +166,7 @@ bool BitmapLoadGlyph(ImFontAtlas* atlas, ImFontConfig* src, ImFontBaked* baked, 
   builder->TempBuffer.resize(w * h);
   ScaleCell(source.font->pages[g.page], g.x, g.y, g.width, g.height, w, h, builder->TempBuffer.Data);
   out_glyph->X0 = g.x_offset * layout;
-  out_glyph->Y0 = g.y_offset * layout;
+  out_glyph->Y0 = (g.y_offset - source.font->ascent) * layout + kWindowsAscent * baked->Size;
   out_glyph->X1 = out_glyph->X0 + w / density;
   out_glyph->Y1 = out_glyph->Y0 + h / density;
   out_glyph->Visible = true;
