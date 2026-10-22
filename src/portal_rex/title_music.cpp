@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -31,20 +32,23 @@ constexpr double kFadeIn = 1.0, kFadeOut = 2.5;
 struct Capture {
   Clock::time_point start = Clock::now();
   std::mutex mutex;
-  std::vector<int16_t> samples;  // interleaved stereo
+  // Each audio client's stream (the game may play on several), interleaved stereo; summed at the
+  // end, all from the window's start.
+  std::map<const void*, std::vector<float>> streams;
   bool done = false;
 };
 Capture* g_capture = nullptr;
 
 int16_t ToPcm(float v) { return int16_t(std::lround(std::clamp(v, -1.0f, 1.0f) * 32767.0f)); }
 
-// The audio thread's blocks, folded to stereo, kept while the window is open.
-void Tap(const float* samples, uint32_t frames, uint32_t channels, void* user) {
+// The audio thread's blocks, folded to stereo, kept per stream while the window is open.
+void Tap(const void* source, const float* samples, uint32_t frames, uint32_t channels, void* user) {
   auto* c = static_cast<Capture*>(user);
   const double t = std::chrono::duration<double>(Clock::now() - c->start).count();
   if (t < kFrom || t > kTo || channels < 2) return;
   std::lock_guard lock(c->mutex);
   if (c->done) return;
+  std::vector<float>& out = c->streams[source];
   for (uint32_t f = 0; f < frames; ++f) {
     const float* s = samples + size_t(f) * channels;
     float l = s[0], r = s[1];
@@ -52,8 +56,8 @@ void Tap(const float* samples, uint32_t frames, uint32_t channels, void* user) {
       l += 0.707f * s[2] + 0.707f * s[4];
       r += 0.707f * s[2] + 0.707f * s[5];
     }
-    c->samples.push_back(ToPcm(l));
-    c->samples.push_back(ToPcm(r));
+    out.push_back(l);
+    out.push_back(r);
   }
 }
 
@@ -118,7 +122,16 @@ void StartTitleMusicCaptureIfRequested() {
     {
       std::lock_guard lock(g_capture->mutex);
       g_capture->done = true;
-      samples.swap(g_capture->samples);
+      // The streams summed, as the PC mixes them.
+      size_t length = 0;
+      for (const auto& [source, stream] : g_capture->streams) length = std::max(length, stream.size());
+      std::vector<float> mix(length, 0.0f);
+      for (const auto& [source, stream] : g_capture->streams) {
+        for (size_t i = 0; i < stream.size(); ++i) mix[i] += stream[i];
+      }
+      samples.reserve(length);
+      for (const float v : mix) samples.push_back(ToPcm(v));
+      REXLOG_INFO("Title music: {} audio stream(s)", g_capture->streams.size());
     }
     rex::audio::SetOutputTap(nullptr, nullptr);
     // Nearly silent: the game wasn't at a title with music (it stays without a file then).
