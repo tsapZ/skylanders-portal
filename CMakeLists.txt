@@ -99,6 +99,8 @@ if(TARGET rex::runtime)
     target_include_directories(skylanders_portal_rex PUBLIC src)
     target_include_directories(skylanders_portal_rex PRIVATE "${REXSDK_DIR}/thirdparty/imgui")
     target_link_libraries(skylanders_portal_rex PUBLIC skylanders_portal_core rex::runtime hidapi::hidapi SDL3::SDL3)
+    # The SDK's FFmpeg decodes the title music from the disc (title_music.cpp).
+    target_link_libraries(skylanders_portal_rex PRIVATE libavcodec libavutil)
     if(WIN32)
         target_link_libraries(skylanders_portal_rex PRIVATE windowscodecs ole32)
     endif()
