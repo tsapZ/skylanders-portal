@@ -48,6 +48,8 @@ struct Setting {
       preset;
   // An action row: A runs it (with the menu closed).
   std::function<void()> action;
+  // With an action: the question asked first (yes / no), e.g. before quitting the game.
+  std::string confirm_en, confirm_de;
   // The options are controller button entries in the *_buttons settings' format
   // ("guide,back+start,hold_back"); the info panel shows them on the controller picture
   // (SetControllerPicture), each entry in its own colour. Without a cvar (and no action) the row is
@@ -80,5 +82,17 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
 
 // Closes the menu; call from ReXApp::OnShutdown.
 void ShutdownSettingsMenu();
+
+// The rows every game's Game page ends with, so a controller alone can leave the game (it can't
+// press Alt+F4 or click the window's X): "Spiel beenden" closes the game as its window's X does
+// (saves closed as usual; a launcher that started it comes back), "Neu starten" starts it again
+// with the same command line, for the settings that apply only from the next start. Both ask
+// first. Neu starten is left out when the launcher started the game: it sets those settings on
+// the game's card before starting, and it waits for this process.
+void AddQuitSettings(SettingsPage& page);
+
+// A game that "Neu starten" started waits here until the old one has ended (its saves and figure
+// files closed), at most 20 s. Called by InstallPortal (portal_rex.h), early in OnPostSetup.
+void WaitForRestartedInstance();
 
 }  // namespace skylanders

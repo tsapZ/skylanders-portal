@@ -12,6 +12,16 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include <imgui.h>
 #include <rex/cvar.h>
 #include <rex/input/device.h>
@@ -27,6 +37,8 @@
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/settings_file.h"
 
+REXCVAR_DEFINE_UINT32(restart_wait_pid, 0, "Launcher",
+                      "Set by F4's \"Spiel neu starten\": the new game waits for this process to end first");
 REXCVAR_DEFINE_BOOL(started_by_launcher, false, "Launcher",
                     "Started by the Core of Light launcher: the settings menu leaves out the "
                     "Graphics page and the start-up settings, which the launcher sets");
@@ -428,6 +440,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     DrawInfo(dl, {list_right + S(30), p0.y + S(168)}, {p1.x - S(38), p1.y - S(86)});
     DrawFooter(dl, p0, p1);
     if (confirm_) DrawConfirm(dl, p0, p1);
+    if (ask_) DrawAsk(dl, p0, p1);
     FadeVertices(dl, first_vertex,
                  std::chrono::duration<float>(Clock::now() - open_time_).count() / 0.15f);
     ImGui::End();
@@ -550,6 +563,13 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   }
 
   void HandleInput(const Actions& a) {
+    // An action row's question: yes runs it (after the unsaved-changes question, if any).
+    if (ask_) {
+      if (a.up || a.down || a.left || a.right) ask_choice_ = 1 - ask_choice_;
+      if (a.back) ask_ = false;
+      else if (a.accept) ChooseAsk(ask_choice_);
+      return;
+    }
     if (confirm_) {
       if (a.up || a.left) confirm_choice_ = (confirm_choice_ + 2) % 3;
       if (a.down || a.right) confirm_choice_ = (confirm_choice_ + 1) % 3;
@@ -608,8 +628,54 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   // Actions run with the menu closed, after this frame (one may open another overlay); unsaved
   // changes are asked about first.
   void RunAction(const Setting& s) {
+    if (!s.confirm_en.empty()) {
+      ask_ = true;
+      ask_choice_ = 1;  // "No" first: A twice by mistake doesn't quit the game
+      ask_en_ = s.confirm_en;
+      ask_de_ = s.confirm_de;
+      ask_action_ = s.action;
+      return;
+    }
     pending_action_ = s.action;
     RequestClose();
+  }
+
+  // 0 yes, 1 no.
+  void ChooseAsk(int choice) {
+    ask_ = false;
+    if (choice != 0) return;
+    pending_action_ = std::move(ask_action_);
+    RequestClose();
+  }
+
+  // An action row's question: yes or no.
+  void DrawAsk(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
+    dl->AddRectFilled(p0, p1, Rgba(4, 6, 20, 170), S(28));
+    const float w = std::min(S(760), p1.x - p0.x - S(40)), h = S(300);
+    const ImVec2 c{(p0.x + p1.x) / 2, (p0.y + p1.y) / 2};
+    const ImVec2 a{c.x - w / 2, c.y - h / 2}, b{c.x + w / 2, c.y + h / 2};
+    DrawPanel(dl, a, b);
+    OutlinedLabel(dl, TitleFont(), S(36), {a.x + S(36), a.y + S(28)}, kGold, Tr(ask_en_, ask_de_),
+                  S(2));
+    const char* options[2] = {Tr("Yes", "Ja"), Tr("No", "Nein")};
+    float y = a.y + S(110);
+    for (int i = 0; i < 2; ++i) {
+      const ImVec2 r0{a.x + S(36), y}, r1{b.x - S(36), y + S(60)};
+      if (ImGui::IsMouseHoveringRect(r0, r1)) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) ask_choice_ = i;
+        if (ImGui::IsMouseClicked(0)) {
+          ChooseAsk(i);
+          return;
+        }
+      }
+      const bool active = i == ask_choice_;
+      dl->AddRectFilled(r0, r1, active ? Rgba(255, 255, 255, 52) : Rgba(255, 255, 255, 14), S(14));
+      if (active) dl->AddRect(r0, r1, kGold, S(14), 0, S(3));
+      Label(dl, BoldFont(), S(23), {r0.x + S(22), r0.y + S(15)}, active ? kGold : kWhite,
+            options[i]);
+      y += S(72);
+    }
   }
 
   // Unsaved changes when leaving: save, don't save, or back to the menu.
@@ -660,7 +726,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       if (active) dl->AddRect(t0, t1, Rgba(255, 240, 190), S(23), 0, S(2));
       Label(dl, BoldFont(), S(22), {t0.x + S(20), CapCentredY(t0.y + h / 2, S(22))},
             active ? kInk : kDim, title);
-      if (!confirm_ && ImGui::IsMouseHoveringRect(t0, t1) && ImGui::IsMouseClicked(0)) {
+      if (!confirm_ && !ask_ && ImGui::IsMouseHoveringRect(t0, t1) && ImGui::IsMouseClicked(0)) {
         page_ = i;
         row_ = scroll_ = 0;
       }
@@ -679,7 +745,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       const Setting& s = page->settings[i];
       const ImVec2 r0{a.x, a.y + (i - scroll_) * (row_h + gap)}, r1{b.x, r0.y + row_h};
       const bool active = i == row_;
-      if (!confirm_ && ImGui::IsMouseHoveringRect(r0, r1) &&
+      if (!confirm_ && !ask_ && ImGui::IsMouseHoveringRect(r0, r1) &&
           (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f)) {
         row_ = i;
       }
@@ -695,7 +761,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
         const char* go = Tr("Open", "\xC3\x96" "ffnen");
         const ImVec2 ts = TextSize(BoldFont(), S(21), go);
         Label(dl, BoldFont(), S(21), {r1.x - S(24) - ts.x, r0.y + S(19)}, kGold, go);
-        if (!confirm_ && ImGui::IsMouseHoveringRect(r0, r1) && ImGui::IsMouseClicked(0)) {
+        if (!confirm_ && !ask_ && ImGui::IsMouseHoveringRect(r0, r1) && ImGui::IsMouseClicked(0)) {
           RunAction(s);
           return;
         }
@@ -724,7 +790,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       const ImU32 arrow = active ? kGold : Rgba(255, 255, 255, 90);
       Label(dl, BoldFont(), S(24), {v0.x + S(12), v0.y + S(5)}, arrow, "<");
       Label(dl, BoldFont(), S(24), {v1.x - S(26), v0.y + S(5)}, arrow, ">");
-      if (!confirm_ && ImGui::IsMouseHoveringRect(v0, v1) && ImGui::IsMouseClicked(0)) {
+      if (!confirm_ && !ask_ && ImGui::IsMouseHoveringRect(v0, v1) && ImGui::IsMouseClicked(0)) {
         row_ = i;
         Change(s, ImGui::GetIO().MousePos.x < (v0.x + v1.x) / 2 ? -1 : +1);
       }
@@ -953,7 +1019,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   void DrawFooter(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
     float x = p0.x + S(38);
     const float y = p1.y - S(54);
-    if (confirm_) {
+    if (confirm_ || ask_) {
       x += Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Choose", "Ausw\xC3\xA4hlen"), true);
       Hint(dl, {x, y}, "B", kBackRed, Tr("Back", "Zur\xC3\xBC" "ck"), true);
       return;
@@ -1007,6 +1073,10 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   bool waiting_for_menu_ = false;  // another menu is still closing
   bool confirm_ = false;           // asking about unsaved changes
   int confirm_choice_ = 0;
+  bool ask_ = false;               // an action row's question (Setting::confirm_en)
+  int ask_choice_ = 1;
+  std::string ask_en_, ask_de_;
+  std::function<void()> ask_action_;
   std::function<void()> pending_action_;  // an action row waiting for the menu to close
   Clock::time_point created_ = Clock::now();
   Clock::time_point saved_at_{};
@@ -1087,5 +1157,91 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
 void SetControllerPicture(ControllerPicture picture) { g_picture = std::move(picture); }
 
 void ShutdownSettingsMenu() { g_menu.reset(); }
+
+namespace {
+
+// The game's own window closed as by its X (or Alt+F4): the app shuts down as usual.
+void CloseGameWindow() {
+#if defined(_WIN32)
+  EnumWindows(
+      [](HWND window, LPARAM) -> BOOL {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(window, &pid);
+        if (pid != GetCurrentProcessId() || !IsWindowVisible(window) || GetWindow(window, GW_OWNER)) {
+          return TRUE;
+        }
+        PostMessageW(window, WM_CLOSE, 0, 0);
+        return FALSE;
+      },
+      0);
+#endif
+}
+
+// The same exe with the same command line (without an earlier restart's wait), told to wait for
+// this process; then this one closes.
+void RestartGame() {
+#if defined(_WIN32)
+  wchar_t exe[MAX_PATH] = L"", dir[MAX_PATH] = L"";
+  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  GetCurrentDirectoryW(MAX_PATH, dir);
+  std::wstring line = GetCommandLineW();
+  for (size_t at; (at = line.find(L" --restart_wait_pid=")) != std::wstring::npos;) {
+    const size_t end = line.find(L' ', at + 1);
+    line.erase(at, end == std::wstring::npos ? std::wstring::npos : end - at);
+  }
+  line += L" --restart_wait_pid=" + std::to_wstring(GetCurrentProcessId());
+  STARTUPINFOW startup = {sizeof(startup)};
+  PROCESS_INFORMATION info = {};
+  if (!CreateProcessW(exe, line.data(), nullptr, nullptr, FALSE, 0, nullptr, dir, &startup, &info)) {
+    REXLOG_WARN("Settings menu: could not start the game again");
+    return;
+  }
+  CloseHandle(info.hThread);
+  CloseHandle(info.hProcess);
+  REXLOG_INFO("Settings menu: restarting");
+#endif
+  CloseGameWindow();
+}
+
+}  // namespace
+
+void AddQuitSettings(SettingsPage& page) {
+  Setting quit;
+  quit.en = "Quit the game";
+  quit.de = "Spiel beenden";
+  quit.help_en = "Closes the game, as its window's X does. What the game saved stays saved.";
+  quit.help_de =
+      "Schlie\xC3\x9F" "t das Spiel wie das X des Fensters. Was das Spiel gespeichert hat, bleibt "
+      "gespeichert.";
+  quit.confirm_en = "Quit the game?";
+  quit.confirm_de = "Spiel beenden?";
+  quit.action = [] { CloseGameWindow(); };
+  page.settings.push_back(std::move(quit));
+  if (REXCVAR_GET(started_by_launcher)) return;
+  Setting restart;
+  restart.en = "Restart the game";
+  restart.de = "Spiel neu starten";
+  restart.help_en =
+      "Closes the game and starts it again, for the settings that apply only from the next start.";
+  restart.help_de =
+      "Schlie\xC3\x9F" "t das Spiel und startet es wieder, f\xC3\xBC" "r die Einstellungen, die "
+      "erst beim n\xC3\xA4" "chsten Start gelten.";
+  restart.confirm_en = "Restart the game?";
+  restart.confirm_de = "Spiel neu starten?";
+  restart.action = [] { RestartGame(); };
+  page.settings.push_back(std::move(restart));
+}
+
+void WaitForRestartedInstance() {
+  const uint32_t pid = REXCVAR_GET(restart_wait_pid);
+  if (!pid) return;
+#if defined(_WIN32)
+  if (HANDLE old = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
+    const bool ended = WaitForSingleObject(old, 20000) == WAIT_OBJECT_0;
+    CloseHandle(old);
+    REXLOG_INFO("Settings menu: restarted; the old game {}", ended ? "has ended" : "is still running");
+  }
+#endif
+}
 
 }  // namespace skylanders

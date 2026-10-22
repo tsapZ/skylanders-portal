@@ -20,6 +20,7 @@
 #include <rex/logging.h>
 
 #include "portal/figure_file.h"
+#include "portal_rex/settings_menu.h"
 #include "portal/hybrid/real_portal_bridge.h"
 #include "portal/portal_device.h"
 #include "portal/portal_mode.h"
@@ -475,6 +476,8 @@ std::filesystem::path SharedFiguresDir(const std::filesystem::path& user_data_ro
 }
 
 void InstallPortal(const std::filesystem::path& default_figures_dir) {
+  // After F4's "Spiel neu starten": the old game first closes its saves and figure files.
+  WaitForRestartedInstance();
   if (REXCVAR_GET(portal_figures_dir).empty()) {
     std::error_code ec;
     std::filesystem::create_directories(default_figures_dir, ec);

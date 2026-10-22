@@ -19,6 +19,11 @@ namespace skylanders {
 
 void RegisterPlayerMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext* app_context);
 
+// The player menu as an action row for the settings menu ("Open the player menu"), so it opens
+// from there too (its button combination can be switched off).
+struct Setting;
+Setting PlayerMenuSetting();
+
 // Closes the menu; call from ReXApp::OnShutdown.
 void ShutdownPlayerMenu();
 

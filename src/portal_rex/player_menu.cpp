@@ -1,4 +1,5 @@
 #include "portal_rex/player_menu.h"
+#include "portal_rex/settings_menu.h"
 
 #include <algorithm>
 #include <chrono>
@@ -325,5 +326,17 @@ void RegisterPlayerMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
 }
 
 void ShutdownPlayerMenu() { g_menu.reset(); }
+
+Setting PlayerMenuSetting() {
+  Setting s;
+  s.en = "Open the player menu";
+  s.de = "Spieler-Men\xC3\xBC \xC3\xB6" "ffnen";
+  s.help_en = "Which controller plays as which player (also with its button combination, F9 on the keyboard).";
+  s.help_de =
+      "Welcher Controller welcher Spieler ist (auch mit seiner Tastenkombination, F9 auf der "
+      "Tastatur).";
+  s.action = [] { OpenPlayerMenu(); };
+  return s;
+}
 
 }  // namespace skylanders
