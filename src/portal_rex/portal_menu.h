@@ -27,6 +27,8 @@
 
 #include <rex/cvar.h>
 
+#include "portal/figure_stats.h"
+
 struct ImFontAtlas;
 namespace rex::ui {
 class ImGuiDrawer;
@@ -118,6 +120,12 @@ struct FigureTrait {
 };
 using FigureTraitProvider = std::function<std::optional<FigureTrait>(uint16_t id, uint16_t variant)>;
 void SetFigureTraitProvider(FigureTraitProvider provider);
+// A trait kept on the figure itself rather than given by the toy, e.g. the battle class an
+// Imaginators creation crystal's Imaginator was made with (FigureStats::creation_class). Asked
+// first when the menu has a file of the figure (the one played last), else the provider above.
+using FigureStatsTraitProvider = std::function<std::optional<FigureTrait>(
+    uint16_t id, uint16_t variant, const portal::FigureStats& stats)>;
+void SetFigureStatsTraitProvider(FigureStatsTraitProvider provider);
 
 // Pictures from the game's own files by key, for the menu's symbols: "element:magic" (the
 // element names in lower case, "light" and "dark" from Trap Team on), "ui:gold" (the game's

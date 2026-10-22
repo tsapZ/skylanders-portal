@@ -1249,6 +1249,7 @@ HatInfoProvider g_hat_info_provider;
 ItemDurationProvider g_item_duration_provider;
 std::string g_pack_name;  // SetAdventurePackName; empty: the menu's own
 FigureTraitProvider g_trait_provider;
+FigureStatsTraitProvider g_stats_trait_provider;
 rex::ui::ImmediateDrawer* g_immediate_drawer = nullptr;
 // Uploaded pictures by figure. UI thread only.
 std::unordered_map<uint32_t, std::unique_ptr<rex::ui::ImmediateTexture>> g_textures;
@@ -1494,13 +1495,19 @@ bool IsAdventurePack(const SkylanderInfo* sky) {
   return IsItem(sky) && sky->id >= 300 && sky->id < 400;
 }
 
-// The figure's trait (SetFigureTraitProvider), if the game names one.
-std::optional<FigureTrait> TraitOf(const SkylanderInfo* sky) {
+// The figure's trait, if the game names one: from its file's stats when there is one
+// (SetFigureStatsTraitProvider), else from the toy (SetFigureTraitProvider).
+std::optional<FigureTrait> TraitOf(const SkylanderInfo* sky, const portal::FigureStats* stats = nullptr) {
   if (!sky) return std::nullopt;
   FigureTraitProvider provider;
+  FigureStatsTraitProvider stats_provider;
   {
     std::lock_guard lock(g_provider_mutex);
     provider = g_trait_provider;
+    stats_provider = g_stats_trait_provider;
+  }
+  if (stats && stats_provider) {
+    if (auto trait = stats_provider(sky->id, sky->variant, *stats)) return trait;
   }
   return provider ? provider(sky->id, sky->variant) : std::nullopt;
 }
@@ -2176,6 +2183,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   }
 
   const Tab& CurrentTab() const { return library_.tabs()[tab_]; }
+  // The stats of the owner's file of the figure (the one played last), for traits kept on it.
+  const portal::FigureStats* OwnedStats(const SkylanderInfo* sky) const {
+    const OwnedFigure* owned = library_.Owned(sky);
+    return owned && owned->stats ? &*owned->stats : nullptr;
+  }
 
   size_t ItemCount() const {
     const Tab& tab = CurrentTab();
@@ -2980,7 +2992,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
            kWhite, 15);
     }
     DrawElementBadge(dl, {p0.x + S(19), p1.y - S(19)}, S(15), character.element);
-    if (auto trait = TraitOf(version.bottom ? version.bottom : version.sky)) {
+    const SkylanderInfo* trait_sky = version.bottom ? version.bottom : version.sky;
+    if (auto trait = TraitOf(trait_sky, OwnedStats(trait_sky))) {
       DrawTraitSymbol(dl, {p1.x - S(21), p1.y - S(21)}, S(16), *trait);
     }
     if (character.versions.size() > 1) {
@@ -3015,7 +3028,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     DrawElementBadge(dl, {p0.x + S(19), p1.y - S(19)}, S(15), element);
     if (entry.figures.size() == 1 || portal::SwapperPartner(*entry.figures[0]) == entry.figures[1]) {
       // (a mixed swapper combination shows its bottom's picture in that corner instead)
-      if (auto trait = TraitOf(entry.figures.back())) {
+      if (auto trait = TraitOf(entry.figures.back(), OwnedStats(entry.figures.back()))) {
         DrawTraitSymbol(dl, {p1.x - S(21), p1.y - S(21)}, S(16), *trait);
       }
     }
@@ -3195,7 +3208,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       Label(dl, BoldFont(), S(18), {bx + S(10), y + S(4)}, kWhite, text);
       bx += ts.x + S(30);
     }
-    if (auto trait = TraitOf(figures.back())) {
+    if (auto trait = TraitOf(figures.back(), OwnedStats(figures.back()))) {
       const ImVec2 ts = TextSize(BoldFont(), S(18), trait->name);
       dl->AddRectFilled({bx, y}, {bx + ts.x + S(48), y + S(30)}, Rgba(244, 196, 84, 60), S(15));
       DrawTraitSymbol(dl, {bx + S(16), y + S(15)}, S(13), *trait);
@@ -3406,7 +3419,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     DrawElementBadge(dl, {a.x + S(140), a.y + S(88)}, S(14), element);
     Label(dl, BoldFont(), S(19), {a.x + S(162), a.y + S(77)}, kDim, line);
     // The trait (a swapper's from its bottom half) after the line, with its symbol.
-    if (auto trait = TraitOf(figures.empty() ? sky : figures.back())) {
+    const SkylanderInfo* trait_sky = figures.empty() ? sky : figures.back();
+    if (auto trait = TraitOf(trait_sky, OwnedStats(trait_sky))) {
       const float tx = a.x + S(162) + TextSize(BoldFont(), S(19), line).x + S(28);
       DrawTraitSymbol(dl, {tx, a.y + S(88)}, S(14), *trait);
       Label(dl, BoldFont(), S(19), {tx + S(20), a.y + S(77)}, kGold, trait->name);
@@ -4482,6 +4496,11 @@ void SetAdventurePackName(std::string name) {
 void SetFigureTraitProvider(FigureTraitProvider provider) {
   std::lock_guard lock(g_provider_mutex);
   g_trait_provider = std::move(provider);
+}
+
+void SetFigureStatsTraitProvider(FigureStatsTraitProvider provider) {
+  std::lock_guard lock(g_provider_mutex);
+  g_stats_trait_provider = std::move(provider);
 }
 
 void SetArtImageProvider(ArtImageProvider provider) {

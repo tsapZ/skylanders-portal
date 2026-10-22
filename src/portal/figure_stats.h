@@ -28,6 +28,11 @@ struct FigureStats {
   uint16_t hero_points;
   uint8_t platforms;   // bit 0 Wii, bit 1 Xbox 360, bit 2 PS3
   std::optional<FigureDate> last_played;
+  // Imaginators: the battle class a creation crystal's Imaginator was made with, the game's own
+  // number (0 Knight, 1 Swashbuckler, 2 Brawler, 3 Sentinel, 5 Quickshot, 6 Bowslinger,
+  // 7 Bazooker, 8 Sorcerer, 10 Smasher, 11 Ninja). Read for every figure with the second area
+  // pair; it means that only on a creation crystal.
+  std::optional<uint8_t> creation_class;
 };
 
 // Upgrades bought: the upgrade bits without the two path bits.

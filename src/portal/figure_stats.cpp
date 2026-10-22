@@ -25,6 +25,9 @@ using Block = FigureBlock;
 //   +0x02 u8 sequence  +0x03 u16 XP (Giants part, up to 63500)  +0x05 u8 hat (Giants)
 //   +0x08 u32 XP (Swap Force part)  +0x0C u8 hat (Swap Force, Trap Team)
 //   +0x0E u8 hat (SuperChargers, its number minus 255)
+//   +0x56 u8 a creation crystal's battle class (Imaginators; block +5, byte 6). Found 2026-10-22
+//        from 54 premade crystals with their class in the file name: the one byte that is the
+//        same within each of the ten classes and different between them, in both copies.
 constexpr uint8_t kAreas[2] = {0x08, 0x24};
 constexpr uint8_t kExtraAreas[2] = {0x11, 0x2D};
 
@@ -144,7 +147,9 @@ std::optional<FigureStats> ParseFigureStats(const FigureData& data) {
   if (extra0 || extra1) {
     const Block e0 = DecryptFigureBlock(data, kExtraAreas[0]);
     const Block e1 = DecryptFigureBlock(data, kExtraAreas[1]);
-    const Block& extra = !extra0 ? e1 : !extra1 ? e0 : (Newer(e0[0x02], e1[0x02]) ? e1 : e0);
+    const bool newer1 = !extra0 || (extra1 && Newer(e0[0x02], e1[0x02]));
+    const Block& extra = newer1 ? e1 : e0;
+    stats.creation_class = ReadArea(data, kExtraAreas[newer1 ? 1 : 0])[0x56];
     if (area[0x16] & 1) xp += ReadU16LE(&extra[0x03]) + ReadU32LE(&extra[0x08]);
     // The newest game's hat slot that is set wins.
     if (extra[0x0E]) {
