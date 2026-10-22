@@ -746,19 +746,28 @@ void DrawElementBadge(ImDrawList* dl, ImVec2 c, float r, Element element, int al
 }
 
 // A Portal of Power for the preview figure to stand on: a dark round base, a silver rim and a
-// glowing top, with light rising from it. `c` is the middle of the top, `w` the width. Returns
-// the lowest point drawn.
-float DrawPortalOfPower(ImDrawList* dl, ImVec2 c, float w) {
+// glowing top in `glow` (the figure's element colour), as a real portal lights up for the figure on
+// it. Animated like the games' portal: the light above pulses, a swirl turns on the top and sparks
+// rise from it. `c` is the middle of the top, `w` the width. Returns the lowest point drawn.
+float DrawPortalOfPower(ImDrawList* dl, ImVec2 c, float w, ImU32 glow) {
   const float rx = w * 0.5f, ry = w * 0.15f, h = w * 0.12f;
+  const float t = float(ImGui::GetTime());
+  const int gr = int(glow & 0xFF), gg = int((glow >> 8) & 0xFF), gb = int((glow >> 16) & 0xFF);
+  // The glow colour, lightened towards white by `k` (0 the colour, 1 white).
+  auto tint = [&](float k, int alpha) {
+    return IM_COL32(int(gr + (255 - gr) * k), int(gg + (255 - gg) * k), int(gb + (255 - gb) * k),
+                    std::clamp(alpha, 0, 255));
+  };
+  const float pulse = 0.8f + 0.2f * std::sin(t * 2.4f);
   // Light rising from the top, behind the figure.
   const ImVec2 beam0{c.x - rx * 0.62f, c.y - w * 0.95f}, beam1{c.x + rx * 0.62f, c.y};
-  dl->AddRectFilledMultiColor(beam0, beam1, IM_COL32(120, 210, 255, 0), IM_COL32(120, 210, 255, 0),
-                              IM_COL32(120, 210, 255, 70), IM_COL32(120, 210, 255, 70));
+  dl->AddRectFilledMultiColor(beam0, beam1, tint(0.45f, 0), tint(0.45f, 0), tint(0.45f, int(80 * pulse)),
+                              tint(0.45f, int(80 * pulse)));
   // A soft glow on the "floor".
   for (int i = 6; i >= 1; --i) {
     const float k = float(i) / 6.0f;
     dl->AddEllipseFilled({c.x, c.y + h}, {rx * (1.0f + 0.35f * k), ry * (1.0f + 0.35f * k)},
-                         IM_COL32(80, 190, 255, int(14 * (1.0f - k) + 4)));
+                         tint(0.3f, int((14 * (1.0f - k) + 4) * pulse)));
   }
   // The base: its side, then the top.
   const ImU32 side = IM_COL32(22, 24, 40, 255);
@@ -770,11 +779,32 @@ float DrawPortalOfPower(ImDrawList* dl, ImVec2 c, float w) {
   dl->AddEllipse(c, {rx, ry}, IM_COL32(190, 200, 225, 255), 0, 48, std::max(1.5f, w * 0.014f));
   dl->AddEllipse(c, {rx * 0.88f, ry * 0.88f}, IM_COL32(96, 106, 140, 255), 0, 48,
                  std::max(1.0f, w * 0.008f));
-  // The glowing middle, from blue at the edge to white in the centre.
+  // The glowing middle, from the colour at the edge to white in the centre.
   for (int i = 0; i < 8; ++i) {
     const float k = float(i) / 7.0f;
     dl->AddEllipseFilled(c, {rx * (0.80f - 0.55f * k), ry * (0.80f - 0.55f * k)},
-                         IM_COL32(int(40 + 190 * k), int(130 + 110 * k), 255, int(150 + 90 * k)));
+                         tint(0.15f + 0.85f * k, int((150 + 90 * k) * (0.9f + 0.1f * pulse))));
+  }
+  // A swirl turning on the top: two bright arcs opposite each other.
+  for (int k = 0; k < 2; ++k) {
+    const float a0 = t * 1.7f + float(k) * 3.14159265f;
+    dl->PathEllipticalArcTo(c, {rx * 0.6f, ry * 0.6f}, 0, a0, a0 + 1.3f, 16);
+    dl->PathStroke(tint(0.8f, 150), 0, std::max(1.0f, w * 0.012f));
+  }
+  // Sparks rising from the top and fading out, each on its own path and time.
+  constexpr int kSparks = 14;
+  for (int i = 0; i < kSparks; ++i) {
+    float phase = t * 0.42f + float(i) * 0.618034f;
+    phase -= std::floor(phase);
+    const float angle = float(i) * 2.399963f;  // spread around the top
+    // Around the rim, so they show beside the figure's picture.
+    const float x = c.x + std::cos(angle) * rx * 0.88f * (1.0f - 0.3f * phase) +
+                    std::sin(t * 1.3f + float(i)) * rx * 0.05f;
+    const float y = c.y + std::sin(angle) * ry * 0.5f - phase * w * 0.85f;
+    const float size = std::max(1.0f, w * 0.014f * (1.0f - 0.5f * phase));
+    const int alpha = int(220 * (1.0f - phase) * std::min(1.0f, phase * 6.0f));
+    dl->AddCircleFilled({x, y}, size * 2.2f, tint(0.4f, alpha / 5));
+    dl->AddCircleFilled({x, y}, size, tint(0.85f, alpha));
   }
   return c.y + h + ry;
 }
@@ -3180,7 +3210,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const float pic = std::min(b.x - a.x - S(80), S(170));
     const float cx = (a.x + b.x) / 2;
     const float portal_y = y + pic - pic * 0.07f;
-    const float portal_bottom = DrawPortalOfPower(dl, {cx, portal_y}, pic * 1.5f);
+    const float portal_bottom =
+        DrawPortalOfPower(dl, {cx, portal_y}, pic * 1.5f,
+                          item ? IM_COL32(120, 210, 255, 255) : ElementColor(element));
     const bool combo = figures.size() == 2 && portal::SwapperPartner(*figures[0]) != figures[1];
     if (combo) {
       const float s = pic * 0.58f;
