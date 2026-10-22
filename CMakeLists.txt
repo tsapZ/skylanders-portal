@@ -91,6 +91,7 @@ if(TARGET rex::runtime)
         src/portal_rex/settings_file.cpp
         src/portal_rex/settings_menu.cpp
         src/portal_rex/settings_schema.cpp
+        src/portal_rex/title_music.cpp
         src/portal_rex/png_file.cpp
         src/portal/usb/usb_portal.cpp
         src/portal_rex/sdl_audio_sink.cpp

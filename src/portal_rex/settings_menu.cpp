@@ -26,6 +26,7 @@
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/settings_file.h"
+#include "portal_rex/title_music.h"
 
 REXCVAR_DEFINE_BOOL(started_by_launcher, false, "Launcher",
                     "Started by the Core of Light launcher: the settings menu leaves out the "
@@ -1082,6 +1083,8 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
     g_opened_by_device.reset();
     OpenSettingsMenu();
   });
+  // A launcher's recording run of the title music (title_music.h): the window is up now.
+  StartTitleMusicCaptureIfRequested();
 }
 
 void SetControllerPicture(ControllerPicture picture) { g_picture = std::move(picture); }
