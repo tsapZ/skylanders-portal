@@ -61,14 +61,22 @@ void Put32(std::ofstream& out, uint32_t v) { out.write(reinterpret_cast<const ch
 void Put16(std::ofstream& out, uint16_t v) { out.write(reinterpret_cast<const char*>(&v), 2); }
 
 bool WriteWav(const std::filesystem::path& path, std::vector<int16_t>& samples) {
-  // A fade at both ends, so the launcher's loop doesn't click.
+  // As loud as the music allows (the games mix it at about a sixth of full scale; at most 6x), and
+  // a fade at both ends, so the launcher's loop doesn't click.
+  int peak = 1;
+  for (const int16_t s : samples) peak = std::max(peak, std::abs(int(s)));
+  const double gain = std::min(6.0, 24000.0 / double(peak));
   const size_t frames = samples.size() / 2;
   const size_t fade_in = size_t(kFadeIn * kRate), fade_out = size_t(kFadeOut * kRate);
   for (size_t f = 0; f < frames; ++f) {
-    double g = 1.0;
-    if (f < fade_in) g = double(f) / double(fade_in);
-    if (frames - f < fade_out) g = std::min(g, double(frames - f) / double(fade_out));
-    for (int ch = 0; ch < 2; ++ch) samples[f * 2 + ch] = int16_t(std::lround(samples[f * 2 + ch] * g));
+    double fade = 1.0;
+    if (f < fade_in) fade = double(f) / double(fade_in);
+    if (frames - f < fade_out) fade = std::min(fade, double(frames - f) / double(fade_out));
+    const double g = gain * fade;
+    for (int ch = 0; ch < 2; ++ch) {
+      const long v = std::lround(samples[f * 2 + ch] * g);
+      samples[f * 2 + ch] = int16_t(std::clamp(v, -32767L, 32767L));
+    }
   }
   std::error_code ec;
   std::filesystem::create_directories(path.parent_path(), ec);
