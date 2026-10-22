@@ -107,6 +107,13 @@ std::string SettingJson(const Setting& s) {
 
 bool SettingsSchemaRequested() { return !REXCVAR_GET(settings_schema).empty(); }
 
+void ApplyGraphicsDefaults() {
+  if (!rex::cvar::HasNonDefaultValue("anisotropic_override") &&
+      !rex::cvar::SetFlagByName("anisotropic_override", "5")) {
+    REXLOG_WARN("Could not set anisotropic_override to 16x");
+  }
+}
+
 void WriteSettingsSchemaIfRequested(rex::RuntimeConfig& config,
                                     const std::function<std::vector<SettingsPage>()>& pages,
                                     const std::filesystem::path& config_file) {
@@ -115,6 +122,7 @@ void WriteSettingsSchemaIfRequested(rex::RuntimeConfig& config,
   if (!config.graphics && !config.gpu_plugin.empty()) {
     config.graphics = rex::system::LoadGpuPlugin(config.gpu_plugin);
   }
+  ApplyGraphicsDefaults();  // as the game sets them once it runs
   const std::u8string file = config_file.u8string();
   std::string out = "{\"version\": 1, \"config_file\": " + Json(std::string(file.begin(), file.end())) +
                     ", \"pages\": [";

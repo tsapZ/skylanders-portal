@@ -37,6 +37,13 @@ bool SettingsSchemaRequested();
 // as the internal resolution, exist only then), writes `pages()` with every setting's value now and
 // exits the process. Call at the end of ReXApp::OnPreSetup, after the game's own defaults. Without
 // the flag it does nothing.
+// The graphics defaults every game uses where the owner hasn't set his own: 16x texture
+// filtering (the SDK defaults to 4x; ground and floor textures seen at a shallow angle stay sharp
+// for about 1 % of the frame rate). Call from ReXApp::OnPostSetup, once the GPU plugin's settings
+// exist; WriteSettingsSchemaIfRequested applies it too, so the launcher shows the values the game
+// starts with.
+void ApplyGraphicsDefaults();
+
 void WriteSettingsSchemaIfRequested(rex::RuntimeConfig& config,
                                     const std::function<std::vector<SettingsPage>()>& pages,
                                     const std::filesystem::path& config_file);
