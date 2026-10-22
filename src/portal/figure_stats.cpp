@@ -5,7 +5,9 @@
 #include <bit>
 #include <cstring>
 
+#include "portal/figure_catalog.h"
 #include "portal/figure_crypto.h"
+#include "portal/figure_file.h"
 
 namespace skylanders::portal {
 
@@ -129,11 +131,23 @@ std::optional<FigureStats> ParseFigureStats(const FigureData& data) {
   stats.platforms = area[0x13];
   stats.hat = area[0x14];
   stats.hero_points = ReadU16LE(&area[0x5A]);
+  // Imaginators' creation crystals keep their Imaginator's own name there, and their second area
+  // pair holds the creation, not the later games' hats (seen on 54 premade crystals: the names as
+  // 8-bit text, "DARK KNIGHT", up to 32 characters; hat bytes all over the range).
+  const SkylanderInfo* sky = FindSkylander(ReadFigureId(data), ReadFigureVariant(data));
+  const bool crystal = sky && sky->category == "Creation Crystals";
   // The nickname's two halves sit in blocks +2 and +4 (block +3 is the sector trailer).
   std::array<uint8_t, 0x20> nick{};
   std::memcpy(nick.data(), &area[0x20], 0x10);
   std::memcpy(nick.data() + 0x10, &area[0x40], 0x10);
-  stats.nickname = Utf16ToUtf8(nick.data(), 16);
+  if (crystal) {
+    for (uint8_t c : nick) {
+      if (c == 0) break;
+      if (c >= 0x20 && c < 0x7F) stats.nickname.push_back(char(c));
+    }
+  } else {
+    stats.nickname = Utf16ToUtf8(nick.data(), 16);
+  }
   const FigureDate date{ReadU16LE(&area[0x54]), area[0x53], area[0x52], area[0x51], area[0x50]};
   if (date.year >= 2011 && date.year < 2100 && date.month >= 1 && date.month <= 12 &&
       date.day >= 1 && date.day <= 31 && date.hour < 24 && date.minute < 60) {
@@ -152,7 +166,9 @@ std::optional<FigureStats> ParseFigureStats(const FigureData& data) {
     stats.creation_class = ReadArea(data, kExtraAreas[newer1 ? 1 : 0])[0x56];
     if (area[0x16] & 1) xp += ReadU16LE(&extra[0x03]) + ReadU32LE(&extra[0x08]);
     // The newest game's hat slot that is set wins.
-    if (extra[0x0E]) {
+    if (crystal) {
+      // (no hat slot known on a crystal)
+    } else if (extra[0x0E]) {
       stats.hat = uint16_t(extra[0x0E] + 255);
     } else if (extra[0x0C]) {
       stats.hat = extra[0x0C];
