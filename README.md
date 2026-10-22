@@ -37,6 +37,15 @@ pictures), and the achievements with the title's own pictures (`achievements.txt
 The menus use it the other way round as well: `OtherGamePicture` gives a figure's picture from
 another game on the same PC, which the portal menu takes where the game has none.
 
+## The exe's icon
+
+`skylanders_game_icon(<target> <rom folder>)` (cmake/game_icon.cmake) gives a game's exe its own
+logo: at build time `tools/make_game_icon.ps1` reads the NXE dashboard tile (`nxeslot.jpg`) from the
+owner's disc's `nxeart` package and writes it as an .ico (256 to 16 px) into the build folder,
+which is built into the exe as its first icon. Explorer, the installers' shortcuts and, through
+SDL, the window and the taskbar show it. Without a disc it is a plain icon of our own; the
+picture never goes into a repository.
+
 ## Credits
 
 - [Cemu](https://github.com/cemu-project/Cemu), [RPCS3](https://github.com/RPCS3/rpcs3) and

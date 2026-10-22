@@ -7,6 +7,9 @@
 cmake_minimum_required(VERSION 3.25)
 project(skylanders_portal LANGUAGES CXX C)
 
+# skylanders_game_icon(): the game's logo from its disc as the exe's icon (cmake/game_icon.cmake).
+include(cmake/game_icon.cmake)
+
 # skylanders_portal_figures: only the figure files (catalog, names, elements, stats), for programs
 # without the SDK such as the Core of Light launcher. On Windows it needs no SDK tree: AES and MD5
 # come from Windows (CNG). Built whenever REXSDK_DIR isn't set.
