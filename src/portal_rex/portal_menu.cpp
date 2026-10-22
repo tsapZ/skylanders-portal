@@ -1268,6 +1268,8 @@ ImTextureID FigureTexture(const SkylanderInfo* sky) {
     provider = g_image_provider;
   }
   std::shared_ptr<const FigureImage> image = provider ? provider(sky->id, sky->variant) : nullptr;
+  // None of the game's own: another game's, if one on this PC has left it.
+  if (!image) image = OtherGamePicture(sky->id, sky->variant);
   if (!image || image->width <= 0 || image->height <= 0 ||
       image->rgba.size() < size_t(image->width) * image->height * 4) {
     return ImTextureID{};
@@ -4282,7 +4284,38 @@ void WriteUpgradeCache(const std::filesystem::path& dir) {
   if (written) REXLOG_INFO("Portal menu: the upgrades of {} figures for the launcher", written);
 }
 
+// The picture folder StartFigurePictureCache was given, for OtherGamePicture. UI thread.
+std::filesystem::path g_own_pictures_dir;
+std::map<uint32_t, std::shared_ptr<const FigureImage>> g_other_pictures;  // also the misses
+
+std::shared_ptr<const FigureImage> OtherGamePicture(uint16_t id, uint16_t variant) {
+  if (g_own_pictures_dir.empty()) return nullptr;
+  const uint32_t key = uint32_t(id) << 16 | variant;
+  if (auto it = g_other_pictures.find(key); it != g_other_pictures.end()) return it->second;
+  // The games' picture folders, the newest game first: it knows the most figures.
+  static constexpr std::string_view kGames[] = {"Imaginators", "SuperChargers", "Trap Team",
+                                                "Swap Force", "Giants", "Spyro's Adventure"};
+  char name[32];
+  std::snprintf(name, sizeof(name), "%u-%u.png", unsigned(id), unsigned(variant));
+  std::shared_ptr<const FigureImage> found;
+  for (const std::string_view game : kGames) {
+    const std::filesystem::path dir =
+        g_own_pictures_dir.parent_path() / std::filesystem::path(std::u8string(game.begin(), game.end()));
+    if (dir == g_own_pictures_dir) continue;
+    std::error_code ec;
+    if (!std::filesystem::exists(dir / name, ec)) continue;
+    auto image = std::make_shared<FigureImage>();
+    if (ReadPng(dir / name, image->width, image->height, image->rgba)) {
+      found = image;
+      break;
+    }
+  }
+  g_other_pictures.emplace(key, found);
+  return found;
+}
+
 void StartFigurePictureCache(std::filesystem::path dir) {
+  g_own_pictures_dir = dir;
   // The achievements go into the same folder (achievements_ui.h).
   StartAchievementCache(dir);
   std::thread([dir] {

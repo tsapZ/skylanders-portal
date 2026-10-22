@@ -58,4 +58,42 @@ bool WritePng(const std::filesystem::path& path, int width, int height, const ui
 #endif
 }
 
+bool ReadPng(const std::filesystem::path& path, int& width, int& height, std::vector<uint8_t>& rgba) {
+#ifdef _WIN32
+  // On a thread that has COM already (the UI thread), this returns RPC_E_CHANGED_MODE and COM
+  // is usable as it is.
+  const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  bool ok = false;
+  IWICImagingFactory* factory = nullptr;
+  IWICBitmapDecoder* decoder = nullptr;
+  IWICBitmapFrameDecode* frame = nullptr;
+  IWICFormatConverter* converter = nullptr;
+  UINT w = 0, h = 0;
+  if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) &&
+      SUCCEEDED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
+                                                   WICDecodeMetadataCacheOnDemand, &decoder)) &&
+      SUCCEEDED(decoder->GetFrame(0, &frame)) && SUCCEEDED(factory->CreateFormatConverter(&converter)) &&
+      SUCCEEDED(converter->Initialize(frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0,
+                                      WICBitmapPaletteTypeCustom)) &&
+      SUCCEEDED(converter->GetSize(&w, &h)) && w > 0 && h > 0 && w <= 4096 && h <= 4096) {
+    rgba.resize(size_t(w) * h * 4);
+    ok = SUCCEEDED(converter->CopyPixels(nullptr, w * 4, UINT(rgba.size()), rgba.data()));
+  }
+  if (converter) converter->Release();
+  if (frame) frame->Release();
+  if (decoder) decoder->Release();
+  if (factory) factory->Release();
+  if (SUCCEEDED(init)) CoUninitialize();
+  width = ok ? int(w) : 0;
+  height = ok ? int(h) : 0;
+  if (!ok) rgba.clear();
+  return ok;
+#else
+  (void)path;
+  width = height = 0;
+  rgba.clear();
+  return false;
+#endif
+}
+
 }  // namespace skylanders

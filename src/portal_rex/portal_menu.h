@@ -90,6 +90,13 @@ void StartFigurePictureCache(std::filesystem::path dir);
 // <user data root's parent>\Skylanders\Pictures\<game>, next to the shared figure folder.
 std::filesystem::path SharedPicturesDir(const std::filesystem::path& user_data_root, std::string_view game);
 
+// A figure's picture as another game on this PC left it in its picture folder (the folders next to
+// the one given to StartFigurePictureCache, the newest game first), or null. Only after
+// StartFigurePictureCache; looked up once per figure. The menu takes it by itself for a figure the
+// game's provider has no picture of; a provider can ask for it where it has only a stand-in
+// (Spyro's Adventure's symbol for a magic item it has no picture of). UI thread.
+std::shared_ptr<const FigureImage> OtherGamePicture(uint16_t id, uint16_t variant);
+
 // The name the game shows for a figure in its current language (magic items and adventure packs
 // have translated names), or nullopt to keep the catalog name. Same rules as above.
 using FigureNameProvider = std::function<std::optional<std::string>(uint16_t id, uint16_t variant)>;
