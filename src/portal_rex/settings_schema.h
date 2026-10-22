@@ -19,6 +19,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <string_view>
 #include <vector>
 
 #include "portal_rex/settings_menu.h"
@@ -43,6 +44,12 @@ bool SettingsSchemaRequested();
 // exist; WriteSettingsSchemaIfRequested applies it too, so the launcher shows the values the game
 // starts with.
 void ApplyGraphicsDefaults();
+
+// An HD texture pack for the game: <Documents>\Skylanders\Textures\<game> (beside the figure
+// pictures, Pictures\<game>), used when that folder exists and texture_replace_dir isn't set
+// otherwise. A pack is the rexglue-sdk's <hash>.dds files: the textures texture_dump_dir writes,
+// made bigger (e.g. 4x by an AI upscaler) in the same block format. Call from OnPostSetup.
+void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game);
 
 void WriteSettingsSchemaIfRequested(rex::RuntimeConfig& config,
                                     const std::function<std::vector<SettingsPage>()>& pages,

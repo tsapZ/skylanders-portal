@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <filesystem>
 #include <string_view>
 
 #include <rex/cvar.h>
@@ -111,6 +112,21 @@ void ApplyGraphicsDefaults() {
   if (!rex::cvar::HasNonDefaultValue("anisotropic_override") &&
       !rex::cvar::SetFlagByName("anisotropic_override", "5")) {
     REXLOG_WARN("Could not set anisotropic_override to 16x");
+  }
+}
+
+void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game) {
+  if (rex::cvar::HasNonDefaultValue("texture_replace_dir")) return;
+  // Where SharedPicturesDir (portal_menu.h) puts the pictures, with Textures for Pictures.
+  const std::filesystem::path base =
+      user_data_root.parent_path().empty() ? user_data_root : user_data_root.parent_path() / "Skylanders";
+  const std::filesystem::path dir =
+      base / "Textures" / std::filesystem::path(std::u8string(game.begin(), game.end()));
+  std::error_code ec;
+  if (!std::filesystem::is_directory(dir, ec)) return;
+  const std::u8string u8 = dir.u8string();
+  if (rex::cvar::SetFlagByName("texture_replace_dir", std::string(u8.begin(), u8.end()))) {
+    REXLOG_INFO("HD textures from {}", std::string(u8.begin(), u8.end()));
   }
 }
 
