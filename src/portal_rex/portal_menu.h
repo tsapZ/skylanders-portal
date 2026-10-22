@@ -76,8 +76,11 @@ void SetFigureImageProvider(FigureImageProvider provider);
 // the game is running, every figure picture it has (from SetFigureImageProvider) goes into `dir`
 // as "<id>-<variant>.png", once; pictures already there are kept. The pictures are asked for on
 // the UI thread, a few at a time, and written on a thread of its own; a picture the game is still
-// loading is asked for again for about two minutes. Call after RegisterPortalMenu. `dir` is
-// typically SharedPicturesDir(user_data_root, "<the game's name>").
+// loading is asked for again for about two minutes. The hats go there too, once: "hats.txt" (one
+// line per hat the game knows: its number, a tab, its name in the menu's language, a tab, its
+// bonuses joined by " / ") and "hat-<number>.png" for those with a picture (SetHatInfoProvider,
+// SetArtImageProvider). Call after RegisterPortalMenu. `dir` is typically
+// SharedPicturesDir(user_data_root, "<the game's name>").
 void StartFigurePictureCache(std::filesystem::path dir);
 // <user data root's parent>\Skylanders\Pictures\<game>, next to the shared figure folder.
 std::filesystem::path SharedPicturesDir(const std::filesystem::path& user_data_root, std::string_view game);

@@ -20,6 +20,7 @@
 #include <future>
 #include <atomic>
 #include <unordered_map>
+#include <map>
 #include <vector>
 
 #include <imgui.h>
@@ -4196,7 +4197,10 @@ void StartFigurePictureCache(std::filesystem::path dir) {
     // The game loads its pictures in the background first.
     for (int i = 0; i < 20 && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
     size_t written = 0;
-    for (int round = 0; round < 60 && !pending.empty() && !g_picture_cache_stop; ++round) {
+    // Figures the game doesn't know never come: done once five rounds in a row add none after the
+    // first pictures came (the game may still be loading before that, up to the 60 rounds).
+    int figure_quiet = 0;
+    for (int round = 0; round < 60 && figure_quiet < 5 && !pending.empty() && !g_picture_cache_stop; ++round) {
       using Found = std::vector<std::pair<const SkylanderInfo*, std::shared_ptr<const FigureImage>>>;
       auto found = std::make_shared<std::promise<Found>>();
       auto result = found->get_future();
@@ -4217,6 +4221,7 @@ void StartFigurePictureCache(std::filesystem::path dir) {
       });
       if (result.wait_for(10s) != std::future_status::ready) continue;
       const Found images = result.get();
+      figure_quiet = images.empty() && (written || pending.size() < portal::AllSkylanders().size()) ? figure_quiet + 1 : 0;
       for (const auto& [sky, image] : images) {
         if (g_picture_cache_stop) return;
         if (image->width > 0 && image->height > 0 &&
@@ -4229,6 +4234,67 @@ void StartFigurePictureCache(std::filesystem::path dir) {
       for (int i = 0; i < 4 && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
     }
     if (written) REXLOG_INFO("Portal menu: {} figure pictures for the launcher in {}", written, PathUtf8(dir));
+    // The hats, once: asked until three rounds in a row add none (the game's hat table loads in the
+    // background; numbers it doesn't have never come).
+    if (fs::exists(dir / "hats.txt", ec)) return;
+    constexpr uint16_t kLastHat = 300;
+    struct Hat {
+      std::shared_ptr<const HatInfo> info;
+      std::shared_ptr<const FigureImage> image;
+    };
+    std::map<uint16_t, Hat> hats;
+    int quiet = 0;
+    for (int round = 0; round < 30 && quiet < 3 && !g_picture_cache_stop; ++round) {
+      using Found = std::vector<std::pair<uint16_t, Hat>>;
+      auto found = std::make_shared<std::promise<Found>>();
+      auto result = found->get_future();
+      auto known = std::make_shared<std::vector<uint16_t>>();
+      for (const auto& [hat, unused] : hats) known->push_back(hat);
+      if (!g_app_context) return;
+      g_app_context->CallInUIThread([found, known] {
+        HatInfoProvider info_provider;
+        ArtImageProvider art_provider;
+        {
+          std::lock_guard lock(g_provider_mutex);
+          info_provider = g_hat_info_provider;
+          art_provider = g_art_provider;
+        }
+        Found out;
+        for (uint16_t hat = 1; info_provider && hat <= kLastHat; ++hat) {
+          if (std::find(known->begin(), known->end(), hat) != known->end()) continue;
+          auto info = info_provider(hat);
+          if (!info || info->name.empty()) continue;
+          out.emplace_back(hat, Hat{info, art_provider && !info->image.empty() ? art_provider(info->image) : nullptr});
+        }
+        found->set_value(std::move(out));
+      });
+      if (result.wait_for(10s) != std::future_status::ready) continue;
+      const Found more = result.get();
+      quiet = more.empty() && !hats.empty() ? quiet + 1 : 0;
+      for (const auto& [hat, entry] : more) hats[hat] = entry;
+      for (int i = 0; i < 4 && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
+    }
+    if (hats.empty() || g_picture_cache_stop) return;
+    std::string text;
+    size_t pictures = 0;
+    for (const auto& [hat, entry] : hats) {
+      std::string bonuses;
+      for (const HatStat& stat : entry.info->stats) {
+        char value[32];
+        std::snprintf(value, sizeof(value), stat.value == std::floor(stat.value) ? "%+.0f" : "%+.1f",
+                      double(stat.value));
+        bonuses += (bonuses.empty() ? "" : " / ") + std::string(value) + " " + stat.name;
+      }
+      text += std::to_string(hat) + "\t" + entry.info->name + "\t" + bonuses + "\n";
+      const auto& image = entry.image;
+      if (image && image->width > 0 && image->height > 0 &&
+          image->rgba.size() >= size_t(image->width) * image->height * 4 &&
+          WritePng(dir / ("hat-" + std::to_string(hat) + ".png"), image->width, image->height, image->rgba.data())) {
+        ++pictures;
+      }
+    }
+    std::ofstream(dir / "hats.txt", std::ios::binary) << text;
+    REXLOG_INFO("Portal menu: {} hats ({} pictures) for the launcher", hats.size(), pictures);
   }).detach();
 }
 
