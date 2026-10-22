@@ -95,6 +95,7 @@ if(TARGET rex::runtime)
         src/portal_rex/png_file.cpp
         src/portal/usb/usb_portal.cpp
         src/portal_rex/sdl_audio_sink.cpp
+        src/portal_rex/speaker_overlay.cpp
     )
     target_include_directories(skylanders_portal_rex PUBLIC src)
     target_include_directories(skylanders_portal_rex PRIVATE "${REXSDK_DIR}/thirdparty/imgui")

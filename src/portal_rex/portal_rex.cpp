@@ -61,6 +61,8 @@ std::atomic<skylanders::portal::UsbPortal*> g_usb_portal{nullptr};
 
 // Set once a game hook has sent clean speaker PCM (SubmitSpeakerPcm).
 std::atomic<bool> g_speaker_pcm_tap{false};
+// The PC speaker sink of the software portal, for its level (PortalSpeakerLevel).
+std::atomic<skylanders::SdlPortalAudioSink*> g_speaker_sink{nullptr};
 
 // Forwards the game's XamInputNonControllerGetRaw/SetRaw(Ex) calls (through the SDK's handler
 // hook) to whichever portal is active right now. g_portal is re-read on every call, so a live
@@ -343,6 +345,7 @@ skylanders::portal::SoftwarePortal* SetUpSoftwarePortal() {
     if (sink) {
       sink->SetVolume(float(REXCVAR_GET(portal_speaker_volume)));
       software->SetAudioSink(sink.get());
+      g_speaker_sink.store(sink.get());
     }
   }
   return software;
@@ -572,6 +575,11 @@ bool CreateAndPlaceVillainTrap(int slot, const portal::TrapVillain& villain) {
 }
 
 portal::SoftwarePortal* GetSoftwarePortal() { return g_software_portal.load(); }
+
+float PortalSpeakerLevel() {
+  skylanders::SdlPortalAudioSink* sink = g_speaker_sink.load();
+  return sink && g_software_portal.load() ? sink->Level() : 0.0f;
+}
 
 std::vector<uint32_t> RealPortalUids() {
   portal::RealPortalBridge* bridge = g_bridge.load();

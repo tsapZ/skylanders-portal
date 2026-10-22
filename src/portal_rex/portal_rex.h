@@ -77,6 +77,10 @@ bool CreateAndPlaceVillainTrap(int slot, const portal::TrapVillain& villain);
 // nullptr if portal_mode is not "software".
 portal::SoftwarePortal* GetSoftwarePortal();
 
+// How loud the portal speaker plays on the PC right now, 0..1 (software mode with portal_audio on;
+// 0 otherwise), for speaker_overlay.h.
+float PortalSpeakerLevel();
+
 // portal_mode "hybrid": the UIDs of the figures standing on the real portal now (each has a copy
 // in the emulated portal), and whether an emulated slot holds such a copy. Empty / false in the
 // other modes. Any thread.

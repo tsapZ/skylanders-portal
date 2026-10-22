@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdlib>
 
 #include <SDL3/SDL.h>
 #include <rex/logging.h>
@@ -27,6 +29,25 @@ std::unique_ptr<SdlPortalAudioSink> SdlPortalAudioSink::Open() {
 SdlPortalAudioSink::~SdlPortalAudioSink() { SDL_DestroyAudioStream(stream_); }
 
 void SdlPortalAudioSink::Submit(std::span<const int16_t> samples) {
+  // The level, and a log line when a sound starts and ends (the game sends silence in between).
+  int peak = 0;
+  for (const int16_t s : samples) peak = std::max(peak, std::abs(int(s)));
+  const double now =
+      std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  const float loud = std::min(1.0f, float(peak) / 12000.0f);
+  const float falling = level_.load() * 0.92f;
+  level_.store(std::max(loud, falling));
+  if (peak > 1500) {
+    if (!sounding_) {
+      sounding_ = true;
+      sound_start_ = now;
+      REXLOG_INFO("Portal speaker: sound");
+    }
+    last_loud_ = now;
+  } else if (sounding_ && now - last_loud_ > 1.0) {
+    sounding_ = false;
+    REXLOG_INFO("Portal speaker: quiet again after {:.1f} s", last_loud_ - sound_start_);
+  }
   const float v = std::clamp(volume_.load(), 0.0f, 1.0f);
   std::array<int16_t, 64> scaled{};
   while (!samples.empty()) {
