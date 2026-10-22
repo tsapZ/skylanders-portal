@@ -1,20 +1,26 @@
 #include "portal_rex/achievements_ui.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <deque>
+#include <fstream>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include <imgui.h>
 #include <rex/input/input.h>
 #include <rex/logging.h>
+#include <rex/runtime.h>
 #include <rex/system/achievement_manager.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/util/xdbf_utils.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
 #include <rex/ui/overlay/achievement_icon_cache.h>
@@ -23,6 +29,7 @@
 
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
+#include "portal_rex/utf8_path.h"
 
 namespace skylanders {
 namespace {
@@ -425,6 +432,18 @@ rex::ui::ImmediateDrawer* g_immediate_drawer = nullptr;
 rex::ui::WindowedAppContext* g_app_context = nullptr;
 rex::Runtime* g_runtime = nullptr;
 std::function<rex::system::AchievementManager*()> g_manager;
+// Set once the four above are (RegisterAchievementsMenu), for the launcher's cache thread, which
+// only reads them after that.
+std::atomic<bool> g_registered{false};
+std::atomic<bool> g_cache_stop{false};
+
+// One field of achievements.txt: no tabs or line breaks inside.
+std::string CacheField(std::string text) {
+  for (char& c : text) {
+    if (c == '\t' || c == '\n' || c == '\r') c = ' ';
+  }
+  return text;
+}
 
 }  // namespace
 
@@ -444,6 +463,7 @@ void RegisterAchievementsMenu(rex::ui::ImGuiDrawer* drawer,
   g_app_context = app_context;
   g_runtime = runtime;
   g_manager = std::move(manager);
+  g_registered.store(true, std::memory_order_release);
 }
 
 void ToggleAchievementsMenu() {
@@ -462,7 +482,64 @@ void ToggleAchievementsMenu() {
   });
 }
 
-void ShutdownAchievementsMenu() { g_menu.reset(); }
+void ShutdownAchievementsMenu() {
+  g_cache_stop = true;
+  g_menu.reset();
+}
+
+void StartAchievementCache(std::filesystem::path dir) {
+  std::thread([dir] {
+    namespace fs = std::filesystem;
+    using namespace std::chrono_literals;
+    // The list is the kernel's from launch on, once the game's module is loaded: asked every
+    // second for up to two minutes.
+    rex::system::AchievementManager* manager = nullptr;
+    std::vector<rex::system::AchievementInfo> list;
+    for (int i = 0; i < 120 && !g_cache_stop; ++i) {
+      std::this_thread::sleep_for(1s);
+      if (!g_registered.load(std::memory_order_acquire)) continue;
+      manager = g_manager();
+      if (manager) list = manager->ListAchievements();
+      if (!list.empty()) break;
+    }
+    if (list.empty() || g_cache_stop || !g_runtime || !g_runtime->kernel_state()) return;
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (ec) return;
+    const auto db = g_runtime->kernel_state()->title_xdbf();
+    char title[16];
+    std::snprintf(title, sizeof(title), "%08X", g_runtime->kernel_state()->title_id());
+    std::string text = std::string("title\t") + title + "\n";
+    size_t pictures = 0;
+    for (const rex::system::AchievementInfo& a : list) {
+      std::string picture;
+      if (db.is_valid() && a.image_id) {
+        const auto block = db.GetEntry(rex::system::util::XdbfSection::kImage, uint64_t(a.image_id));
+        if (block && block.size > 0) {
+          picture = "ach-" + std::to_string(a.image_id) + ".png";
+          std::ofstream out(dir / picture, std::ios::binary | std::ios::trunc);
+          out.write(reinterpret_cast<const char*>(block.buffer), std::streamsize(block.size));
+          if (out) ++pictures;
+          else picture.clear();
+        }
+      }
+      text += std::to_string(a.id) + "\t" + std::to_string(a.gamerscore) + "\t" + picture + "\t" +
+              CacheField(a.label) + "\t" + CacheField(a.description) + "\t" +
+              CacheField(a.unachieved_description) + "\n";
+    }
+    const fs::path temp = dir / "achievements.txt.new";
+    {
+      std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+      out << text;
+      if (!out) return;
+    }
+    fs::rename(temp, dir / "achievements.txt", ec);
+    if (!ec) {
+      REXLOG_INFO("Achievements: {} ({} pictures) for the launcher in {}", list.size(), pictures,
+                  Utf8Path(dir));
+    }
+  }).detach();
+}
 
 Setting AchievementsSetting() {
   Setting s;

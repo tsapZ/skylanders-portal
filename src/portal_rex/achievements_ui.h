@@ -6,6 +6,7 @@
 // keyboard. Both replace the SDK's built-in ones (ReXApp::CreateAchievementNotificationDialog,
 // CreateAchievementsOverlay).
 
+#include <filesystem>
 #include <functional>
 #include <memory>
 
@@ -44,6 +45,14 @@ void ToggleAchievementsMenu();
 
 // Closes the list and frees its icons; call from ReXApp::OnShutdown.
 void ShutdownAchievementsMenu();
+
+// The achievements for the Core of Light launcher, which shows each profile's progress without a
+// game running: in `dir` (the game's picture folder, SharedPicturesDir) achievements.txt and the
+// title's own pictures, ach-<image id>.png (the PNG files of its XDBF as they are). The first line
+// is "title<TAB><title id in hex>", then one line per achievement: id, gamerscore, picture file,
+// name, the text once unlocked, the text before. On a background thread once the game's list is
+// there (RegisterAchievementsMenu); StartFigurePictureCache starts it.
+void StartAchievementCache(std::filesystem::path dir);
 
 // The settings menu row that opens the list (for a page of the game's settings menu), so the
 // achievements can be seen with a controller too.

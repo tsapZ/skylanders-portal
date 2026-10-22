@@ -42,6 +42,7 @@
 #include "portal/figure_stats.h"
 #include "portal/hybrid/real_portal_bridge.h"
 #include "portal/software/software_portal.h"
+#include "portal_rex/achievements_ui.h"
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/portal_rex.h"
@@ -4282,6 +4283,8 @@ void WriteUpgradeCache(const std::filesystem::path& dir) {
 }
 
 void StartFigurePictureCache(std::filesystem::path dir) {
+  // The achievements go into the same folder (achievements_ui.h).
+  StartAchievementCache(dir);
   std::thread([dir] {
     namespace fs = std::filesystem;
     using namespace std::chrono_literals;
