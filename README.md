@@ -15,6 +15,10 @@ static recompilations of the Xbox 360 Skylanders games. It started as the portal
   figure overlay, and portal speaker audio. It is built only when the including project provides
   the `rex::runtime` target.
 
+- **`skylanders_portal_figures`** is only the figure files (catalog, names, elements, stats) for
+  programs without the SDK, such as the Core of Light launcher; on Windows it takes AES and MD5
+  from Windows (CNG). Built whenever `REXSDK_DIR` isn't set.
+
 `figure_stats` uses the AES and MD5 implementations the ReXGlue SDK vendors, so set `REXSDK_DIR` to
 an SDK source tree when configuring. Standalone test build:
 
@@ -22,6 +26,16 @@ an SDK source tree when configuring. Standalone test build:
 cmake -S . -B out -G Ninja -DREXSDK_DIR=<path to rexglue-sdk>
 cmake --build out && ctest --test-dir out
 ```
+
+## The shared picture folder
+
+Each game that calls `StartFigurePictureCache(SharedPicturesDir(user_data_root, "<game>"))` leaves
+what it reads from its disc in `Documents\Skylanders\Pictures\<game>` for the launcher, which reads
+no disc itself: every figure picture (`<id>-<variant>.png`), the hats (`hats.txt`, `hat-<n>.png`),
+the upgrade trees of the figures in the figure folder (`upgrades-<id>-<variant>.txt` and their
+pictures), and the achievements with the title's own pictures (`achievements.txt`, `ach-<n>.png`).
+The menus use it the other way round as well: `OtherGamePicture` gives a figure's picture from
+another game on the same PC, which the portal menu takes where the game has none.
 
 ## Credits
 
