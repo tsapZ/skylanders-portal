@@ -4382,6 +4382,33 @@ void StartFigurePictureCache(std::filesystem::path dir) {
     }
     if (g_picture_cache_stop) return;
     if (hats.empty()) return WriteUpgradeCache(dir);
+    // Pictures some games read on demand once asked: asked again for a few rounds.
+    for (int round = 0; round < 6 && !g_picture_cache_stop; ++round) {
+      auto missing = std::make_shared<std::vector<std::pair<uint16_t, std::string>>>();
+      for (const auto& [hat, entry] : hats) {
+        if (!entry.image && !entry.info->image.empty()) missing->emplace_back(hat, entry.info->image);
+      }
+      if (missing->empty()) break;
+      using Found = std::vector<std::pair<uint16_t, std::shared_ptr<const FigureImage>>>;
+      auto found = std::make_shared<std::promise<Found>>();
+      auto result = found->get_future();
+      if (!g_app_context) return;
+      g_app_context->CallInUIThread([found, missing] {
+        ArtImageProvider art_provider;
+        {
+          std::lock_guard lock(g_provider_mutex);
+          art_provider = g_art_provider;
+        }
+        Found out;
+        for (const auto& [hat, key] : *missing) {
+          if (auto image = art_provider ? art_provider(key) : nullptr) out.emplace_back(hat, image);
+        }
+        found->set_value(std::move(out));
+      });
+      if (result.wait_for(10s) != std::future_status::ready) continue;
+      for (const auto& [hat, image] : result.get()) hats[hat].image = image;
+      for (int i = 0; i < 4 && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
+    }
     std::string text;
     size_t pictures = 0;
     for (const auto& [hat, entry] : hats) {
