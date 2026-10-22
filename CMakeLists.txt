@@ -88,10 +88,14 @@ if(TARGET rex::runtime)
         src/portal_rex/settings_file.cpp
         src/portal_rex/settings_menu.cpp
         src/portal_rex/settings_schema.cpp
+        src/portal_rex/png_file.cpp
         src/portal/usb/usb_portal.cpp
         src/portal_rex/sdl_audio_sink.cpp
     )
     target_include_directories(skylanders_portal_rex PUBLIC src)
     target_include_directories(skylanders_portal_rex PRIVATE "${REXSDK_DIR}/thirdparty/imgui")
     target_link_libraries(skylanders_portal_rex PUBLIC skylanders_portal_core rex::runtime hidapi::hidapi SDL3::SDL3)
+    if(WIN32)
+        target_link_libraries(skylanders_portal_rex PRIVATE windowscodecs ole32)
+    endif()
 endif()

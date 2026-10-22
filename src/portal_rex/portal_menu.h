@@ -72,6 +72,16 @@ using FigureImageProvider =
     std::function<std::shared_ptr<const FigureImage>(uint16_t id, uint16_t variant)>;
 void SetFigureImageProvider(FigureImageProvider provider);
 
+// The pictures for the Core of Light launcher's figure library, which reads no disc itself: once
+// the game is running, every figure picture it has (from SetFigureImageProvider) goes into `dir`
+// as "<id>-<variant>.png", once; pictures already there are kept. The pictures are asked for on
+// the UI thread, a few at a time, and written on a thread of its own; a picture the game is still
+// loading is asked for again for about two minutes. Call after RegisterPortalMenu. `dir` is
+// typically SharedPicturesDir(user_data_root, "<the game's name>").
+void StartFigurePictureCache(std::filesystem::path dir);
+// <user data root's parent>\Skylanders\Pictures\<game>, next to the shared figure folder.
+std::filesystem::path SharedPicturesDir(const std::filesystem::path& user_data_root, std::string_view game);
+
 // The name the game shows for a figure in its current language (magic items and adventure packs
 // have translated names), or nullopt to keep the catalog name. Same rules as above.
 using FigureNameProvider = std::function<std::optional<std::string>(uint16_t id, uint16_t variant)>;

@@ -17,6 +17,8 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <future>
+#include <atomic>
 #include <unordered_map>
 #include <vector>
 
@@ -41,6 +43,7 @@
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/portal_rex.h"
+#include "portal_rex/png_file.h"
 #include "portal_rex/settings_file.h"
 
 REXCVAR_DEFINE_STRING(portal_menu_games, "", "Portal",
@@ -4148,7 +4151,12 @@ void PortalScreenComing(uint32_t user) {
   });
 }
 
+// --- The figure picture cache for the launcher (StartFigurePictureCache) -------------------------
+
+std::atomic<bool> g_picture_cache_stop{false};
+
 void ShutdownPortalMenu() {
+  g_picture_cache_stop = true;
   StopItemThread();
   g_menu.reset();
   g_check.reset();
@@ -4161,6 +4169,67 @@ void ShutdownPortalMenu() {
 void SetFigureImageProvider(FigureImageProvider provider) {
   std::lock_guard lock(g_provider_mutex);
   g_image_provider = std::move(provider);
+}
+
+std::filesystem::path SharedPicturesDir(const std::filesystem::path& user_data_root, std::string_view game) {
+  const std::filesystem::path base =
+      user_data_root.parent_path().empty() ? user_data_root : user_data_root.parent_path() / "Skylanders";
+  return base / "Pictures" / std::filesystem::path(std::u8string(game.begin(), game.end()));
+}
+
+void StartFigurePictureCache(std::filesystem::path dir) {
+  std::thread([dir] {
+    namespace fs = std::filesystem;
+    using namespace std::chrono_literals;
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (ec) return;
+    auto file_of = [&](const SkylanderInfo& sky) {
+      char name[32];
+      std::snprintf(name, sizeof(name), "%u-%u.png", unsigned(sky.id), unsigned(sky.variant));
+      return dir / name;
+    };
+    std::vector<const SkylanderInfo*> pending;
+    for (const SkylanderInfo& sky : portal::AllSkylanders()) {
+      if (!fs::exists(file_of(sky), ec)) pending.push_back(&sky);
+    }
+    // The game loads its pictures in the background first.
+    for (int i = 0; i < 20 && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
+    size_t written = 0;
+    for (int round = 0; round < 60 && !pending.empty() && !g_picture_cache_stop; ++round) {
+      using Found = std::vector<std::pair<const SkylanderInfo*, std::shared_ptr<const FigureImage>>>;
+      auto found = std::make_shared<std::promise<Found>>();
+      auto result = found->get_future();
+      auto batch = std::make_shared<std::vector<const SkylanderInfo*>>(pending);
+      if (!g_app_context) break;
+      // The provider is meant for the UI thread: asked there, all at once (it only looks up).
+      g_app_context->CallInUIThread([found, batch] {
+        FigureImageProvider provider;
+        {
+          std::lock_guard lock(g_provider_mutex);
+          provider = g_image_provider;
+        }
+        Found out;
+        for (const SkylanderInfo* sky : *batch) {
+          if (auto image = provider ? provider(sky->id, sky->variant) : nullptr) out.emplace_back(sky, image);
+        }
+        found->set_value(std::move(out));
+      });
+      if (result.wait_for(10s) != std::future_status::ready) continue;
+      const Found images = result.get();
+      for (const auto& [sky, image] : images) {
+        if (g_picture_cache_stop) return;
+        if (image->width > 0 && image->height > 0 &&
+            image->rgba.size() >= size_t(image->width) * image->height * 4 &&
+            WritePng(file_of(*sky), image->width, image->height, image->rgba.data())) {
+          ++written;
+        }
+        std::erase(pending, sky);
+      }
+      for (int i = 0; i < 4 && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
+    }
+    if (written) REXLOG_INFO("Portal menu: {} figure pictures for the launcher in {}", written, PathUtf8(dir));
+  }).detach();
 }
 
 void SetFigureNameProvider(FigureNameProvider provider) {
