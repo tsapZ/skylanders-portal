@@ -1,0 +1,146 @@
+#include "portal_rex/settings_schema.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <string>
+#include <string_view>
+
+#include <rex/cvar.h>
+#include <rex/logging.h>
+#include <rex/runtime.h>
+#include <rex/system/gpu_plugin.h>
+
+REXCVAR_DEFINE_STRING(settings_schema, "", "Launcher",
+                      "Write the settings menu's pages to this file (JSON) and quit; for the "
+                      "Core of Light launcher");
+
+namespace skylanders {
+namespace {
+
+std::string Json(std::string_view s) {
+  std::string out = "\"";
+  for (const char c : s) {
+    switch (c) {
+      case '"': out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          char escaped[8];
+          std::snprintf(escaped, sizeof(escaped), "\\u%04x", static_cast<unsigned char>(c));
+          out += escaped;
+        } else {
+          out += c;  // UTF-8 goes through as it is
+        }
+    }
+  }
+  return out + "\"";
+}
+
+const char* TypeName(rex::cvar::FlagType type) {
+  switch (type) {
+    case rex::cvar::FlagType::Boolean: return "bool";
+    case rex::cvar::FlagType::Int32:
+    case rex::cvar::FlagType::Int64:
+    case rex::cvar::FlagType::Uint32:
+    case rex::cvar::FlagType::Uint64: return "int";
+    case rex::cvar::FlagType::Double: return "float";
+    default: return "string";
+  }
+}
+
+std::string Options(const std::vector<SettingOption>& options) {
+  std::string out = "[";
+  for (size_t i = 0; i < options.size(); ++i) {
+    if (i) out += ", ";
+    out += "{\"value\": " + Json(options[i].value) + ", \"en\": " + Json(options[i].en) +
+           ", \"de\": " + Json(options[i].de) + "}";
+  }
+  return out + "]";
+}
+
+// One setting as JSON, or empty for a row without one.
+std::string SettingJson(const Setting& s) {
+  std::string out = "{";
+  const auto texts = [&] {
+    return "\"en\": " + Json(s.en) + ", \"de\": " + Json(s.de) + ", \"help_en\": " + Json(s.help_en) +
+           ", \"help_de\": " + Json(s.help_de);
+  };
+  if (s.preset) {
+    // A preset: its options and the settings each one stands for.
+    out += "\"preset\": true, " + texts() + ", \"options\": " + Options(s.options) + ", \"presets\": {";
+    for (size_t i = 0; i < s.options.size(); ++i) {
+      if (i) out += ", ";
+      out += Json(s.options[i].value) + ": [";
+      const auto values = s.preset(s.options[i].value);
+      for (size_t k = 0; k < values.size(); ++k) {
+        const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(values[k].first);
+        out += std::string(k ? ", " : "") + "[" + Json(values[k].first) + ", " + Json(values[k].second) +
+               ", " + Json(info ? info->category : "") + ", " +
+               Json(info ? TypeName(info->type) : "string") + "]";
+      }
+      out += "]";
+    }
+    out += "}, \"current\": " + Json(s.current ? s.current() : "") + ", \"restart\": " +
+           (s.restart ? "true" : "false") + "}";
+    return out;
+  }
+  if (s.cvar.empty()) return {};
+  const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(s.cvar);
+  if (!info) return {};  // a setting of a part this build doesn't have
+  // Copied out: the pointer is only valid until the registry changes.
+  const std::string category = info->category, default_value = info->default_value;
+  const char* type = TypeName(info->type);
+  const bool restart = s.restart || info->lifecycle != rex::cvar::Lifecycle::kHotReload;
+  out += "\"cvar\": " + Json(s.cvar) + ", " + texts() + ", \"type\": " + Json(type) +
+         ", \"category\": " + Json(category) + ", \"default\": " + Json(default_value) +
+         ", \"value\": " + Json(rex::cvar::GetFlagByName(s.cvar)) + ", \"restart\": " +
+         (restart ? "true" : "false") + ", \"buttons\": " + (s.buttons ? "true" : "false") +
+         ", \"options\": " + Options(s.options) + "}";
+  return out;
+}
+
+}  // namespace
+
+bool SettingsSchemaRequested() { return !REXCVAR_GET(settings_schema).empty(); }
+
+void WriteSettingsSchemaIfRequested(rex::RuntimeConfig& config,
+                                    const std::function<std::vector<SettingsPage>()>& pages,
+                                    const std::filesystem::path& config_file) {
+  const std::string target = REXCVAR_GET(settings_schema);
+  if (target.empty()) return;
+  if (!config.graphics && !config.gpu_plugin.empty()) {
+    config.graphics = rex::system::LoadGpuPlugin(config.gpu_plugin);
+  }
+  const std::u8string file = config_file.u8string();
+  std::string out = "{\"version\": 1, \"config_file\": " + Json(std::string(file.begin(), file.end())) +
+                    ", \"pages\": [";
+  bool first_page = true;
+  for (const SettingsPage& page : pages()) {
+    std::string settings;
+    for (const Setting& s : page.settings) {
+      const std::string json = SettingJson(s);
+      if (json.empty()) continue;
+      settings += (settings.empty() ? "" : ", ") + json;
+    }
+    if (settings.empty()) continue;
+    out += std::string(first_page ? "" : ", ") + "{\"en\": " + Json(page.en) + ", \"de\": " + Json(page.de) +
+           ", \"settings\": [" + settings + "]}";
+    first_page = false;
+  }
+  out += "]}\n";
+  const std::u8string u8(target.begin(), target.end());
+  std::ofstream f(std::filesystem::path(u8), std::ios::binary | std::ios::trunc);
+  f << out;
+  f.close();
+  REXLOG_INFO("Settings schema written to {} ({} bytes)", target, out.size());
+  rex::FlushLogging();
+  // Before any window or the runtime: nothing to shut down. Without static destructors, as the
+  // input script's quit does (the loaded GPU plugin's would run after the host's).
+  std::_Exit(f ? 0 : 1);
+}
+
+}  // namespace skylanders
