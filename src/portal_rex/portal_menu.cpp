@@ -21,6 +21,7 @@
 #include <atomic>
 #include <unordered_map>
 #include <map>
+#include <set>
 #include <vector>
 
 #include <imgui.h>
@@ -4178,6 +4179,108 @@ std::filesystem::path SharedPicturesDir(const std::filesystem::path& user_data_r
   return base / "Pictures" / std::filesystem::path(std::u8string(game.begin(), game.end()));
 }
 
+// One line of the upgrade cache's text: no tabs or line breaks inside a field.
+std::string CacheField(std::string text) {
+  for (char& c : text) {
+    if (c == '\t' || c == '\n' || c == '\r') c = ' ';
+  }
+  return text;
+}
+
+// The upgrade trees of the owner's figures for the launcher (StartFigurePictureCache), on the cache's
+// thread: the figures in the folder next to Pictures, each figure's tree asked for on the UI thread
+// until it comes (the games read some on demand) or ten quiet rounds pass.
+void WriteUpgradeCache(const std::filesystem::path& dir) {
+  namespace fs = std::filesystem;
+  using namespace std::chrono_literals;
+  std::error_code ec;
+  std::set<std::pair<uint16_t, uint16_t>> pending;
+  const fs::path figures = dir.parent_path().parent_path() / "Figures";
+  for (fs::recursive_directory_iterator it(figures, ec), end; it != end; it.increment(ec)) {
+    if (ec) break;
+    if (!it->is_regular_file(ec)) continue;
+    const auto data = portal::LoadFigureFile(it->path());
+    if (!data) continue;
+    const uint16_t id = portal::ReadFigureId(*data), variant = portal::ReadFigureVariant(*data);
+    char name[48];
+    std::snprintf(name, sizeof(name), "upgrades-%u-%u.txt", unsigned(id), unsigned(variant));
+    if (!fs::exists(dir / name, ec)) pending.insert({id, variant});
+  }
+  size_t written = 0;
+  int quiet = 0;
+  // A tree whose pictures are still loading (the games read them on demand once asked) waits a few
+  // rounds for them.
+  std::map<std::pair<uint16_t, uint16_t>, int> waited;
+  for (int round = 0; round < 40 && quiet < 10 && !pending.empty() && !g_picture_cache_stop; ++round) {
+    struct Tree {
+      uint16_t id, variant;
+      std::shared_ptr<const FigureUpgrades> upgrades;
+      std::vector<std::shared_ptr<const FigureImage>> images;  // per upgrade, in order
+      bool complete = true;  // every upgrade with a picture key has its picture
+    };
+    auto found = std::make_shared<std::promise<std::vector<Tree>>>();
+    auto result = found->get_future();
+    auto batch = std::make_shared<std::vector<std::pair<uint16_t, uint16_t>>>(pending.begin(), pending.end());
+    if (!g_app_context) return;
+    g_app_context->CallInUIThread([found, batch] {
+      FigureUpgradesProvider upgrades_provider;
+      ArtImageProvider art_provider;
+      {
+        std::lock_guard lock(g_provider_mutex);
+        upgrades_provider = g_upgrades_provider;
+        art_provider = g_art_provider;
+      }
+      std::vector<Tree> out;
+      for (const auto& [id, variant] : *batch) {
+        auto upgrades = upgrades_provider ? upgrades_provider(id, variant) : nullptr;
+        if (!upgrades) continue;
+        Tree tree{id, variant, upgrades, {}, true};
+        for (const auto& path : upgrades->paths) {
+          for (const auto& u : path.upgrades) {
+            tree.images.push_back(art_provider && !u.image.empty() ? art_provider(u.image) : nullptr);
+            if (!u.image.empty() && !tree.images.back()) tree.complete = false;
+          }
+        }
+        out.push_back(std::move(tree));
+      }
+      found->set_value(std::move(out));
+    });
+    if (result.wait_for(10s) != std::future_status::ready) continue;
+    const auto trees = result.get();
+    quiet = trees.empty() ? quiet + 1 : 0;
+    for (const Tree& tree : trees) {
+      if (!tree.complete && ++waited[{tree.id, tree.variant}] < 6) continue;
+      char prefix[48];
+      std::snprintf(prefix, sizeof(prefix), "%u-%u", unsigned(tree.id), unsigned(tree.variant));
+      std::string text;
+      size_t n = 0;
+      int path_number = 0;
+      for (const auto& path : tree.upgrades->paths) {
+        const bool is_path = path.kind == FigureUpgradePath::Kind::kPath;
+        text += "P\t" + std::to_string(int(path.kind)) + "\t" + std::to_string(is_path ? path_number++ : -1) + "\t" +
+                CacheField(path.name) + "\t" + CacheField(path.description) + "\n";
+        for (const auto& u : path.upgrades) {
+          std::string picture;
+          const auto& image = tree.images[n];
+          if (image && image->width > 0 && image->height > 0 &&
+              image->rgba.size() >= size_t(image->width) * image->height * 4) {
+            picture = "up-" + std::string(prefix) + "-" + std::to_string(n) + ".png";
+            if (!WritePng(dir / picture, image->width, image->height, image->rgba.data())) picture.clear();
+          }
+          text += "U\t" + CacheField(u.name) + "\t" + std::to_string(u.cost) + "\t" + std::to_string(u.bit) + "\t" +
+                  std::to_string(u.alternate_bit) + "\t" + picture + "\t" + CacheField(u.description) + "\n";
+          ++n;
+        }
+      }
+      std::ofstream(dir / ("upgrades-" + std::string(prefix) + ".txt"), std::ios::binary) << text;
+      pending.erase({tree.id, tree.variant});
+      ++written;
+    }
+    for (int i = 0; i < 4 && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
+  }
+  if (written) REXLOG_INFO("Portal menu: the upgrades of {} figures for the launcher", written);
+}
+
 void StartFigurePictureCache(std::filesystem::path dir) {
   std::thread([dir] {
     namespace fs = std::filesystem;
@@ -4236,7 +4339,10 @@ void StartFigurePictureCache(std::filesystem::path dir) {
     if (written) REXLOG_INFO("Portal menu: {} figure pictures for the launcher in {}", written, PathUtf8(dir));
     // The hats, once: asked until three rounds in a row add none (the game's hat table loads in the
     // background; numbers it doesn't have never come).
-    if (fs::exists(dir / "hats.txt", ec)) return;
+    if (fs::exists(dir / "hats.txt", ec)) {
+      WriteUpgradeCache(dir);
+      return;
+    }
     constexpr uint16_t kLastHat = 300;
     struct Hat {
       std::shared_ptr<const HatInfo> info;
@@ -4274,7 +4380,8 @@ void StartFigurePictureCache(std::filesystem::path dir) {
       for (const auto& [hat, entry] : more) hats[hat] = entry;
       for (int i = 0; i < 4 && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
     }
-    if (hats.empty() || g_picture_cache_stop) return;
+    if (g_picture_cache_stop) return;
+    if (hats.empty()) return WriteUpgradeCache(dir);
     std::string text;
     size_t pictures = 0;
     for (const auto& [hat, entry] : hats) {
@@ -4295,6 +4402,7 @@ void StartFigurePictureCache(std::filesystem::path dir) {
     }
     std::ofstream(dir / "hats.txt", std::ios::binary) << text;
     REXLOG_INFO("Portal menu: {} hats ({} pictures) for the launcher", hats.size(), pictures);
+    WriteUpgradeCache(dir);
   }).detach();
 }
 

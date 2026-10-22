@@ -79,7 +79,12 @@ void SetFigureImageProvider(FigureImageProvider provider);
 // loading is asked for again for about two minutes. The hats go there too, once: "hats.txt" (one
 // line per hat the game knows: its number, a tab, its name in the menu's language, a tab, its
 // bonuses joined by " / ") and "hat-<number>.png" for those with a picture (SetHatInfoProvider,
-// SetArtImageProvider). Call after RegisterPortalMenu. `dir` is typically
+// SetArtImageProvider). And the upgrade trees of the figures in the figure folder next to the
+// Pictures folder (SetFigureUpgradesProvider): "upgrades-<id>-<variant>.txt", one line per path
+// ("P", its kind 0-4 as FigureUpgradePath::Kind, its number among the two paths or -1, name,
+// description) and per upgrade after it ("U", name, cost, bit, alternate bit, its picture's file
+// or nothing, description), tab-separated, with the pictures as "up-<id>-<variant>-<n>.png".
+// Call after RegisterPortalMenu. `dir` is typically
 // SharedPicturesDir(user_data_root, "<the game's name>").
 void StartFigurePictureCache(std::filesystem::path dir);
 // <user data root's parent>\Skylanders\Pictures\<game>, next to the shared figure folder.
