@@ -8,6 +8,11 @@
 // settings file, line by line (settings_file.h), and leaving with unsaved changes asks whether to
 // save them (not saving puts the old values back). Settings that only apply at start-up are marked
 // and the menu says so. The game sees no input while it is open.
+//
+// Started by the Core of Light launcher (--started_by_launcher, which it passes), the menu leaves
+// out the Graphics page and every setting that only applies at start-up: the launcher sets those
+// on the game's card before starting (owner's wish, Core of Light #10), and changing them in the
+// middle of a game does nothing until the next start. Started on its own, the game keeps them all.
 
 #include <filesystem>
 #include <functional>

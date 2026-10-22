@@ -27,6 +27,10 @@
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/settings_file.h"
 
+REXCVAR_DEFINE_BOOL(started_by_launcher, false, "Launcher",
+                    "Started by the Core of Light launcher: the settings menu leaves out the "
+                    "Graphics page and the start-up settings, which the launcher sets");
+
 namespace skylanders {
 namespace {
 
@@ -141,6 +145,7 @@ struct SettingsState {
   // The open menu's changes, applied but not saved yet, and each changed cvar's value before.
   std::unordered_map<std::string, std::string> edits;
   std::unordered_map<std::string, std::string> before;
+  bool trimmed = false;  // started by the launcher: graphics and start-up settings left out
 };
 SettingsState g_state;  // UI thread only
 ControllerPicture g_picture;  // UI thread only
@@ -979,6 +984,12 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       const ImVec2 ts = TextSize(BoldFont(), S(19), status);
       Label(dl, BoldFont(), S(19), {std::max(x, p1.x - S(38) - ts.x), y + S(4)}, status_col,
             status);
+    } else if (g_state.trimmed && !pending) {
+      const char* note = Tr("Graphics and start-up settings: in the hub before starting",
+                            "Grafik und Start-Einstellungen: im Hub vor dem Start");
+      const ImVec2 ts = TextSize(BoldFont(), S(19), note);
+      Label(dl, BoldFont(), S(19), {std::max(x, p1.x - S(38) - ts.x), y + S(4)}, kHintGrey,
+            note);
     } else if (pending) {
       const char* note = Tr("Changes marked with a dot apply at the next start",
                             "Mit Punkt markierte \xC3\x84nderungen gelten ab dem n\xC3\xA4"
@@ -1038,6 +1049,18 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
   g_app_context = app_context;
   g_state.pages = std::move(pages);
   g_state.config_path = std::move(config_path);
+  if (REXCVAR_GET(started_by_launcher)) {
+    // The launcher has these on the game's card (settings_menu.h). Action rows and the controls
+    // overview stay; a page left without rows goes.
+    std::vector<SettingsPage> kept;
+    for (SettingsPage& page : g_state.pages) {
+      if (page.en == "Graphics") continue;
+      std::erase_if(page.settings, [](const Setting& s) { return ApplyLater(s); });
+      if (!page.settings.empty()) kept.push_back(std::move(page));
+    }
+    g_state.trimmed = true;
+    g_state.pages = std::move(kept);
+  }
   for (const SettingsPage& page : g_state.pages) {
     for (const Setting& s : page.settings) {
       if (!s.cvar.empty()) g_state.startup[s.cvar] = rex::cvar::GetFlagByName(s.cvar);
