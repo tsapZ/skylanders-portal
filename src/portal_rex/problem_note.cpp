@@ -190,7 +190,7 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
     float x = p0.x + S(38);
     const float hy = p1.y - S(48);
     x += Hint(dl, {x, hy}, "A", kAcceptGreen, Tr("Save", "Speichern"), true);
-    Hint(dl, {x, hy}, "B", kBackRed, Tr("Cancel", "Abbrechen"), true);
+    Hint(dl, {x, hy}, "B", kBackRed, Tr("Cancel", "Abbrechen"), true, "Esc");
     ImGui::End();
     if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) kind_ = std::max(0, kind_ - 1);
     if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) kind_ = std::min(int(std::size(kKinds)) - 1, kind_ + 1);

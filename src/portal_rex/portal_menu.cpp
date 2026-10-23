@@ -1858,6 +1858,10 @@ struct Actions {
        rt = false;
   bool take_off = false;  // Y: take the item off the portal
   bool options = false;   // Start: options (shown games, only my figures, leave the portal)
+
+  bool Any() const {
+    return up || down || left || right || accept || back || details || lb || rb || lt || rt || take_off || options;
+  }
 };
 
 // Edge and key-repeat detection for one controller.
@@ -2015,6 +2019,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     // The keyboard steers the menu of the player it plays as.
     const std::optional<DeviceId> keyboard = menu_input::KeyboardDevice();
     keyboard_controls_ = keyboard_ || (keyboard && menu_input::UserOf(*keyboard) == user_);
+    // The hints start with what opened the menu.
+    menu_draw::UseKeyboardHints(keyboard_, true);
     software_ = GetSoftwarePortal() != nullptr;
     if (software_) {
       library_.Build(user_);
@@ -2220,6 +2226,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       pads_released = pads_released && reader.Released(*pad);
       const Actions read = reader.Read(*pad);
       if (!waiting_for_release_) Merge(actions, read);
+      if (!waiting_for_release_ && read.Any()) menu_draw::UseKeyboardHints(false);
     }
     if (waiting_for_release_) {
       const bool keys_released =
@@ -2227,7 +2234,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       if (pads_released && keys_released) waiting_for_release_ = false;
       return {};
     }
-    if (keyboard_controls_) Merge(actions, ReadKeyboard());
+    if (keyboard_controls_) {
+      const Actions keys = ReadKeyboard();
+      if (keys.Any()) menu_draw::UseKeyboardHints(true);
+      Merge(actions, keys);
+    }
     return actions;
   }
 
@@ -2906,19 +2917,18 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   }
 
   void DrawFooter(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
-    const bool kb = keyboard_;
     float x = p0.x + S(38);
     const float y = p1.y - S(54);
     const ImU32 grey = Rgba(78, 86, 120);
     // Without the emulated portal the menu only shows a message and has no library to look at
     // (it crashed here when B closed that message with the real USB portal active).
     if (state_ == State::kMessage || state_ == State::kDetails || !software_) {
-      Hint(dl, {x, y}, kb ? "Esc" : "B", Rgba(232, 73, 43), T(Text::kBack), !kb);
+      Hint(dl, {x, y}, "B", Rgba(232, 73, 43), T(Text::kBack), true, "Esc");
       return;
     }
     if (state_ == State::kOptions) {
-      x += Hint(dl, {x, y}, kb ? "Enter" : "A", Rgba(76, 175, 80), T(Text::kToggle), !kb);
-      Hint(dl, {x, y}, kb ? "Esc" : "B", Rgba(232, 73, 43), T(Text::kClose), !kb);
+      x += Hint(dl, {x, y}, "A", Rgba(76, 175, 80), T(Text::kToggle), true, "Enter");
+      Hint(dl, {x, y}, "B", Rgba(232, 73, 43), T(Text::kClose), true, "Esc");
       return;
     }
     const Character* character = SelectedCharacter();
@@ -2931,32 +2941,31 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                                            ? T(Text::kTakeOff)
                                            : T(Text::kBringAlong))
                                     : T(Text::kPlace);
-    x += Hint(dl, {x, y}, kb ? "Enter" : "A", Rgba(76, 175, 80), accept, !kb);
-    x += Hint(dl, {x, y}, kb ? "Esc" : "B", Rgba(232, 73, 43), T(Text::kBack), !kb);
-    x += Hint(dl, {x, y}, kb ? "L" : "X", Rgba(46, 134, 222), T(Text::kDetails), !kb);
+    x += Hint(dl, {x, y}, "A", Rgba(76, 175, 80), accept, true, "Enter");
+    x += Hint(dl, {x, y}, "B", Rgba(232, 73, 43), T(Text::kBack), true, "Esc");
+    x += Hint(dl, {x, y}, "X", Rgba(46, 134, 222), T(Text::kDetails), true, "L");
     if (state_ == State::kBuilding) {
-      x += Hint(dl, {x, y}, kb ? "1 / 3" : "LB / RB", grey, T(Text::kHalf), false);
+      x += Hint(dl, {x, y}, "LB / RB", grey, T(Text::kHalf), false, "1 / 3");
       if (const BuildTile* tile = BuildTileAt(build_focus_); tile && tile->versions.size() > 1) {
-        Hint(dl, {x, y}, kb ? "P" : "Y", Rgba(230, 180, 40), T(Text::kVariant), !kb);
+        Hint(dl, {x, y}, "Y", Rgba(230, 180, 40), T(Text::kVariant), true, "P");
       }
     } else if (state_ == State::kBrowsing) {
-      x += Hint(dl, {x, y}, kb ? "Q / E" : "LT / RT", grey, T(Text::kCategory), false);
+      x += Hint(dl, {x, y}, "LT / RT", grey, T(Text::kCategory), false, "Q / E");
       if (!CurrentTab().recent) {
-        x += Hint(dl, {x, y}, kb ? "1 / 3" : "LB / RB", grey,
-                  CurrentTab().items ? T(Text::kGame) : T(Text::kElement), false);
+        x += Hint(dl, {x, y}, "LB / RB", grey, CurrentTab().items ? T(Text::kGame) : T(Text::kElement), false,
+                  "1 / 3");
       } else if (SelectedRecentSwapper()) {
-        x += Hint(dl, {x, y}, kb ? "1 / 3" : "LB / RB", grey, T(Text::kChangeHalves), false);
+        x += Hint(dl, {x, y}, "LB / RB", grey, T(Text::kChangeHalves), false, "1 / 3");
       }
       if (current_item_) {
-        x += Hint(dl, {x, y}, kb ? "P" : "Y", Rgba(230, 180, 40), T(Text::kTakeOffItem), !kb);
+        x += Hint(dl, {x, y}, "Y", Rgba(230, 180, 40), T(Text::kTakeOffItem), true, "P");
       }
       // Options last, at the right edge when there is room.
       const std::string options = user_ > 0
                                       ? std::string(T(Text::kOptions)) + " / " + T(Text::kLeave)
                                       : std::string(T(Text::kOptions));
-      const char* glyph = kb ? "O" : "Start";
-      const float w = HintWidth(glyph, options, false);
-      Hint(dl, {std::max(x, p1.x - S(38) - w + S(28)), y}, glyph, grey, options, false);
+      const float w = HintWidth("Start", options, false, "O");
+      Hint(dl, {std::max(x, p1.x - S(38) - w + S(28)), y}, "Start", grey, options, false, "O");
     }
   }
 
@@ -4250,8 +4259,8 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
     const float fy = b.y - S(56);
     const bool on_continue = cursor_ >= entries_.size();
     x += Hint(dl, {x, fy}, "A", kAcceptGreen,
-              on_continue ? T(Text::kCheckContinue) : T(Text::kCheckToggle), true);
-    Hint(dl, {x, fy}, "B", kBackRed, T(Text::kClose), true);
+              on_continue ? T(Text::kCheckContinue) : T(Text::kCheckToggle), true, "Enter");
+    Hint(dl, {x, fy}, "B", kBackRed, T(Text::kClose), true, "Esc");
   }
 
   uint32_t reason_;

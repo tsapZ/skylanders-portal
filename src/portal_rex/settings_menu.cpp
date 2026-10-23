@@ -470,15 +470,21 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       const Actions read = pads_[uint64_t(device.id)].Read(*pad);
       if (waiting_for_release_) continue;
       Merge(actions, read);
-      // The controls page shows the device that was used last.
-      if (Any(read)) UseDevice(device);
+      // The controls page shows the device that was used last; the hints follow it.
+      if (Any(read)) {
+        UseDevice(device);
+        menu_draw::UseKeyboardHints(device.keyboard);
+      }
     }
     if (waiting_for_release_) {
       if (released && !ImGui::IsKeyDown(ImGuiKey_F4)) waiting_for_release_ = false;
       return {};
     }
     const Actions keys = ReadKeyboard();
-    if (Any(keys)) keyboard_view_ = true;
+    if (Any(keys)) {
+      keyboard_view_ = true;
+      menu_draw::UseKeyboardHints(true);
+    }
     Merge(actions, keys);
     if (ImGui::IsKeyPressed(ImGuiKey_F4, false)) actions.back = true;
     return actions;
@@ -498,6 +504,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     for (const menu_input::ConnectedDevice& device : menu_input::ConnectedDevices()) {
       if (g_opened_by_device && device.id == *g_opened_by_device) UseDevice(device);
     }
+    menu_draw::UseKeyboardHints(keyboard_view_, true);
     menu_input::SetMenuOpen(true);
     open_time_ = Clock::now();
     REXLOG_INFO("Settings menu: opened");
@@ -1021,19 +1028,19 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     float x = p0.x + S(38);
     const float y = p1.y - S(54);
     if (confirm_ || ask_) {
-      x += Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Choose", "Ausw\xC3\xA4hlen"), true);
-      Hint(dl, {x, y}, "B", kBackRed, Tr("Back", "Zur\xC3\xBC" "ck"), true);
+      x += Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Choose", "Ausw\xC3\xA4hlen"), true, "Enter");
+      Hint(dl, {x, y}, "B", kBackRed, Tr("Back", "Zur\xC3\xBC" "ck"), true, "Esc");
       return;
     }
     const Setting* s = Selected();
     if (s && s->action) {
-      x += Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Open", "\xC3\x96" "ffnen"), true);
+      x += Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Open", "\xC3\x96" "ffnen"), true, "Enter");
     } else if (!s || !IsOverview(*s)) {
       x += Hint(dl, {x, y}, "< / >", kHintGrey, Tr("Change", "\xC3\x84ndern"), false);
     }
-    x += Hint(dl, {x, y}, "LB / RB", kHintGrey, Tr("Page", "Seite"), false);
-    x += Hint(dl, {x, y}, "Y", kYellow, Tr("Save", "Speichern"), true);
-    x += Hint(dl, {x, y}, "B", kBackRed, Tr("Close", "Schlie\xC3\x9F" "en"), true);
+    x += Hint(dl, {x, y}, "LB / RB", kHintGrey, Tr("Page", "Seite"), false, "Q / E");
+    x += Hint(dl, {x, y}, "Y", kYellow, Tr("Save", "Speichern"), true, "Y");
+    x += Hint(dl, {x, y}, "B", kBackRed, Tr("Close", "Schlie\xC3\x9F" "en"), true, "Esc");
     bool pending = false;
     for (const SettingsPage& page : g_state.pages) {
       for (const Setting& setting : page.settings) pending = pending || Pending(setting);

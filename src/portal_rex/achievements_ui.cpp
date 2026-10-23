@@ -297,8 +297,8 @@ class AchievementsMenu final : public rex::ui::ImGuiDialog {
     const float y = p1.y - S(54);
     x += Hint(dl, {x, y}, Tr("Up / Down", "Hoch / Runter"), kHintGrey,
               Tr("Scroll", "Bl\xC3\xA4ttern"), false);
-    x += Hint(dl, {x, y}, "LB / RB", kHintGrey, Tr("Page", "Seite"), false);
-    Hint(dl, {x, y}, "B", kBackRed, Tr("Close", "Schlie\xC3\x9F" "en"), true);
+    x += Hint(dl, {x, y}, "LB / RB", kHintGrey, Tr("Page", "Seite"), false, "PgUp / PgDn");
+    Hint(dl, {x, y}, "B", kBackRed, Tr("Close", "Schlie\xC3\x9F" "en"), true, "Esc");
     FadeVertices(dl, first_vertex, std::chrono::duration<float>(Clock::now() - open_time_).count() / 0.15f);
     ImGui::End();
   }
@@ -324,6 +324,7 @@ class AchievementsMenu final : public rex::ui::ImGuiDialog {
       released = released && PadEdges::Released(*pad);
       const Edges r = pads_[uint64_t(device.id)].Read(*pad);
       if (waiting_for_release_) continue;
+      if (r.up || r.down || r.page_up || r.page_down || r.close) UseKeyboardHints(device.keyboard);
       e.up |= r.up;
       e.down |= r.down;
       e.page_up |= r.page_up;

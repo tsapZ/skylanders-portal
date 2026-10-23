@@ -55,11 +55,17 @@ void GradientRect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom, f
 // The menus' panel: slightly see-through dark blue, a magic glow from the top, a gold frame.
 void DrawPanel(ImDrawList* dl, ImVec2 p0, ImVec2 p1);
 
+// Which input the hints show (SwapForceRecomp #63): the keyboard's keys after a key, the
+// controller's buttons after a pad button, cross-fading in a quarter second. The menus say what
+// they read; `now` sets it without the fade (when a menu opens, from what opened it). UI thread.
+void UseKeyboardHints(bool keyboard, bool now = false);
+
 // A controller button or key hint: a coloured round glyph for face buttons, a pill otherwise.
-// Returns the width it took, including the gap to the next hint.
+// With a `key` (the keyboard's key for it) the glyph turns into that key, as a key cap, while the
+// keyboard is in use. Returns the width it took, including the gap to the next hint.
 float Hint(ImDrawList* dl, ImVec2 pos, std::string_view glyph, ImU32 glyph_col,
-           std::string_view label, bool round);
-float HintWidth(std::string_view glyph, std::string_view label, bool round);
+           std::string_view label, bool round, std::string_view key = {});
+float HintWidth(std::string_view glyph, std::string_view label, bool round, std::string_view key = {});
 
 // The game's picture for an art key (portal_menu.h SetArtImageProvider) as a texture, kept once
 // made; a null id while there is none (yet). Lives in portal_menu.cpp, which owns the textures.

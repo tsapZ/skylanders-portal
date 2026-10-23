@@ -306,27 +306,89 @@ float CapCentredY(float centre_y, float size) {
   return centre_y - (kWindowsAscent - kWindowsCapHeight / 2) * size;
 }
 
-float HintWidth(std::string_view glyph, std::string_view label, bool round) {
+namespace {
+
+// 0: the controller's buttons are shown, 1: the keyboard's keys; `shown` follows `wanted`, once
+// a frame (the first hint drawn in it moves it on).
+float g_keyboard_wanted = 0.0f;
+float g_keyboard_shown = 0.0f;
+int g_keyboard_frame = -1;
+
+void StepKeyboardHints() {
+  const int frame = ImGui::GetFrameCount();
+  if (frame == g_keyboard_frame) return;
+  g_keyboard_frame = frame;
+  // A key pressed in any menu (the keyboard reaches the menus through ImGui); the controllers'
+  // presses the menus report themselves (they read the pads).
+  for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_GamepadStart; ++k) {
+    if (ImGui::IsKeyPressed(ImGuiKey(k), false)) {
+      g_keyboard_wanted = 1.0f;
+      break;
+    }
+  }
+  const float step = ImGui::GetIO().DeltaTime / 0.25f;
+  g_keyboard_shown = g_keyboard_wanted > g_keyboard_shown ? std::min(g_keyboard_wanted, g_keyboard_shown + step)
+                                                          : std::max(g_keyboard_wanted, g_keyboard_shown - step);
+}
+
+ImU32 Faded(ImU32 col, float alpha) {
+  const uint32_t a = uint32_t(float((col >> IM_COL32_A_SHIFT) & 0xFF) * std::clamp(alpha, 0.0f, 1.0f));
+  return (col & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+}
+
+float PadGlyphWidth(std::string_view glyph, bool round) {
   const float h = S(30);
-  const float glyph_w = round ? h : std::max(h, TextSize(BoldFont(), S(18), glyph).x + S(16));
-  return glyph_w + S(8) + TextSize(BoldFont(), S(20), label).x + S(28);
+  return round ? h : std::max(h, TextSize(BoldFont(), S(18), glyph).x + S(16));
+}
+
+float KeyCapWidth(std::string_view key) { return std::max(S(30), TextSize(BoldFont(), S(17), key).x + S(18)); }
+
+// The glyph's width as drawn now: between the button's and the key's while they cross-fade.
+float GlyphWidth(std::string_view glyph, bool round, std::string_view key) {
+  const float pad = PadGlyphWidth(glyph, round);
+  return key.empty() ? pad : pad + (KeyCapWidth(key) - pad) * g_keyboard_shown;
+}
+
+}  // namespace
+
+void UseKeyboardHints(bool keyboard, bool now) {
+  g_keyboard_wanted = keyboard ? 1.0f : 0.0f;
+  if (now) g_keyboard_shown = g_keyboard_wanted;
+}
+
+float HintWidth(std::string_view glyph, std::string_view label, bool round, std::string_view key) {
+  return GlyphWidth(glyph, round, key) + S(8) + TextSize(BoldFont(), S(20), label).x + S(28);
 }
 
 float Hint(ImDrawList* dl, ImVec2 pos, std::string_view glyph, ImU32 glyph_col,
-           std::string_view label, bool round) {
+           std::string_view label, bool round, std::string_view key) {
+  StepKeyboardHints();
   const float h = S(30);
-  const float glyph_w = round ? h : std::max(h, TextSize(BoldFont(), S(18), glyph).x + S(16));
-  if (round) {
-    dl->AddCircleFilled({pos.x + h / 2, pos.y + h / 2}, h / 2, glyph_col);
-  } else {
-    dl->AddRectFilled(pos, {pos.x + glyph_w, pos.y + h}, glyph_col, S(8));
+  const float t = key.empty() ? 0.0f : g_keyboard_shown;
+  const float pad_w = PadGlyphWidth(glyph, round);
+  const float glyph_w = GlyphWidth(glyph, round, key);
+  if (t < 1.0f) {
+    if (round) {
+      dl->AddCircleFilled({pos.x + h / 2, pos.y + h / 2}, h / 2, Faded(glyph_col, 1.0f - t));
+    } else {
+      dl->AddRectFilled(pos, {pos.x + pad_w, pos.y + h}, Faded(glyph_col, 1.0f - t), S(8));
+    }
+    ImVec2 gs = TextSize(BoldFont(), S(18), glyph);
+    Label(dl, BoldFont(), S(18), {pos.x + (pad_w - gs.x) / 2, CapCentredY(pos.y + h / 2, S(18))},
+          Faded(kWhite, 1.0f - t), glyph);
   }
-  ImVec2 gs = TextSize(BoldFont(), S(18), glyph);
-  Label(dl, BoldFont(), S(18), {pos.x + (glyph_w - gs.x) / 2, CapCentredY(pos.y + h / 2, S(18))},
-        kWhite, glyph);
+  if (t > 0.0f) {
+    // The key cap: dark with a light edge, as Core of Light draws it.
+    const float key_w = KeyCapWidth(key);
+    dl->AddRectFilled(pos, {pos.x + key_w, pos.y + h}, Faded(IM_COL32(34, 40, 72, 255), t), S(6));
+    dl->AddRect(pos, {pos.x + key_w, pos.y + h}, Faded(IM_COL32(200, 206, 228, 255), t), S(6), 0, S(2));
+    ImVec2 ks = TextSize(BoldFont(), S(17), key);
+    Label(dl, BoldFont(), S(17), {pos.x + (key_w - ks.x) / 2, CapCentredY(pos.y + h / 2, S(17))},
+          Faded(kWhite, t), key);
+  }
   Label(dl, BoldFont(), S(20), {pos.x + glyph_w + S(8), CapCentredY(pos.y + h / 2, S(20))}, kDim,
         label);
-  return HintWidth(glyph, label, round);
+  return HintWidth(glyph, label, round, key);
 }
 
 void FadeVertices(ImDrawList* dl, int first_vertex, float alpha) {

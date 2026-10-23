@@ -182,8 +182,8 @@ class PlayerMenuDialog final : public rex::ui::ImGuiDialog {
     float x = p0.x + S(38);
     const float y = p1.y - S(54);
     x += Hint(dl, {x, y}, "< / >", kHintGrey, Tr("Change player", "Spieler wechseln"), false);
-    x += Hint(dl, {x, y}, "Y", kYellow, Tr("Connection order", "Verbindungsreihenfolge"), true);
-    Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Done", "Fertig"), true);
+    x += Hint(dl, {x, y}, "Y", kYellow, Tr("Connection order", "Verbindungsreihenfolge"), true, "R");
+    Hint(dl, {x, y}, "A", kAcceptGreen, Tr("Done", "Fertig"), true, "Enter");
     FadeVertices(dl, first_vertex,
                  std::chrono::duration<float>(Clock::now() - open_time_).count() / 0.15f);
     ImGui::End();
@@ -201,6 +201,7 @@ class PlayerMenuDialog final : public rex::ui::ImGuiDialog {
       released = released && PadState::Released(*pad);
       const PadEdges e = pads_[uint64_t(device.id)].Read(*pad);
       if (waiting_for_release_) continue;
+      if (e.left || e.right || e.close || e.reset) UseKeyboardHints(device.keyboard);
       if (e.left) moves.push_back({&device, -1});
       if (e.right) moves.push_back({&device, +1});
       close |= e.close;
