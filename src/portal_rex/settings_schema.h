@@ -51,6 +51,10 @@ void ApplyGraphicsDefaults();
 // made bigger (e.g. 4x by an AI upscaler) in the same block format. Call from OnPostSetup.
 void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game);
 
+// The F4 > Grafik row that switches the pack off and on (hd_textures, default on; read at start,
+// so it takes effect when the game starts again). Every game's graphics page has it.
+Setting HdTexturesSetting();
+
 void WriteSettingsSchemaIfRequested(rex::RuntimeConfig& config,
                                     const std::function<std::vector<SettingsPage>()>& pages,
                                     const std::filesystem::path& config_file);

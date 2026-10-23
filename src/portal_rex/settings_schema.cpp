@@ -15,6 +15,9 @@
 REXCVAR_DEFINE_STRING(settings_schema, "", "Launcher",
                       "Write the settings menu's pages to this file (JSON) and quit; for the "
                       "Core of Light launcher");
+REXCVAR_DEFINE_BOOL(hd_textures, true, "Graphics",
+                    "Use the HD texture pack in Documents\\Skylanders\\Textures\\<game> when there "
+                    "is one (false: the game's own textures); read at start");
 
 namespace skylanders {
 namespace {
@@ -125,9 +128,25 @@ void UseTexturePack(const std::filesystem::path& user_data_root, std::string_vie
   std::error_code ec;
   if (!std::filesystem::is_directory(dir, ec)) return;
   const std::u8string u8 = dir.u8string();
+  if (!REXCVAR_GET(hd_textures)) {
+    REXLOG_INFO("HD textures off (hd_textures = false): the game's own, not {}", std::string(u8.begin(), u8.end()));
+    return;
+  }
   if (rex::cvar::SetFlagByName("texture_replace_dir", std::string(u8.begin(), u8.end()))) {
     REXLOG_INFO("HD textures from {}", std::string(u8.begin(), u8.end()));
   }
+}
+
+Setting HdTexturesSetting() {
+  Setting s{"hd_textures", "HD textures", "HD-Texturen",
+            "With an HD texture pack installed (Documents\\Skylanders\\Textures\\<game>): on, the "
+            "game uses its sharper textures; off, the game's own, as on the console. Without a "
+            "pack nothing changes. Takes effect when the game starts again.",
+            "Mit einem installierten HD-Texturpaket (Dokumente\\Skylanders\\Textures\\<Spiel>): an, "
+            "das Spiel nimmt die sch\xC3\xA4rferen Texturen; aus, die eigenen wie auf der Konsole. "
+            "Ohne Paket \xC3\xA4ndert sich nichts. Wirkt beim n\xC3\xA4" "chsten Spielstart."};
+  s.restart = true;
+  return s;
 }
 
 void WriteSettingsSchemaIfRequested(rex::RuntimeConfig& config,
