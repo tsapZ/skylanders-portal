@@ -185,6 +185,8 @@ enum class Text {
   kAdventurePackInfo,
   kCheckTitleToys,
   kCheckToys,
+  kChangeHalves,
+  kVariant,
   kCount,
 };
 
@@ -278,6 +280,8 @@ constexpr const char* kEnglish[] = {
     "Opens a level of its own when it comes onto the portal.",
     "Too many toys on the portal",
     "%u toys: the game takes only one.",
+    "Change top / bottom",
+    "Version",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -372,6 +376,8 @@ constexpr const char* kGerman[] = {
     "ffnet ein eigenes Level, wenn es aufs Portal kommt.",
     "Zu viele Spielzeuge auf dem Portal",
     "%u Spielzeuge: Das Spiel nimmt nur eins.",
+    "Oben / Unten tauschen",
+    "Variante",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -2303,7 +2309,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   // the character's version played last (else its first).
   std::vector<const SkylanderInfo*> PreviewFigures() const {
     if (state_ == State::kBuilding || (state_ == State::kDetails && previous_state_ == State::kBuilding)) {
-      return {tops_[build_top_], bottoms_[build_bottom_]};
+      const SkylanderInfo* top = BuiltHalf(0);
+      const SkylanderInfo* bottom = BuiltHalf(1);
+      if (!top || !bottom) return {};
+      return {top, bottom};
     }
     if ((state_ == State::kChoosing ||
          (state_ == State::kDetails && previous_state_ == State::kChoosing)) &&
@@ -2391,6 +2400,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       OpenOptions();
       return;
     }
+    // A swapper in Recent: LB changes its top, RB its bottom, the other half stays (the owner's
+    // idea, 2026-10-23: right after opening the menu, without looking for the character again).
+    if (const RecentEntry* entry = SelectedRecentSwapper(); entry && (a.lb || a.rb)) {
+      OpenBuilder(entry->figures[0], entry->figures[1], a.lb ? 0 : 1, entry);
+      return;
+    }
     if (a.lt) SwitchTab(-1);
     if (a.rt) SwitchTab(+1);
     if (a.lb) SwitchRow(-1);
@@ -2428,7 +2443,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     if (TakenBy(*character)) return;
     if (character->swapper) {
-      OpenBuilder(*character);
+      // Starts with the version the card shows, whole.
+      const Version& v = ShownVersion(*character);
+      OpenBuilder(v.sky, v.bottom, 0, nullptr);
       return;
     }
     choices_ = ChoicesFor(*character);
@@ -2442,29 +2459,109 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   }
 
   // --- swapper builder: pick a top and a bottom, then place both ---
+  //
+  // Each half is a grid of the swapper characters with their pictures, one column per element in
+  // the game's order (Swap Force has two swappers of each), the top grid above the bottom one, so
+  // all of them are in view at once (the owner, 2026-10-23: the two long name lists were hard to
+  // choose from). The stick moves through both grids, LB / RB jump to the top / bottom one, Y
+  // switches a tile between the character's versions (Legendary, Dark, ...).
 
-  void OpenBuilder(const Character& character) {
-    if (tops_.empty()) {
+  struct BuildTile {
+    Element element = Element::kNone;
+    std::vector<const SkylanderInfo*> versions;  // this half of each version, catalog order
+    size_t version = 0;                          // the one the tile shows
+    const SkylanderInfo* sky() const { return versions[version]; }
+  };
+  struct BuildHalf {
+    std::vector<std::vector<BuildTile>> columns;  // one per element, never empty
+    size_t col = 0, row = 0;                      // the chosen tile
+  };
+
+  void MakeBuildGrids() {
+    for (int half = 0; half < 2; ++half) {
+      BuildHalf& grid = build_[half];
+      grid = {};
       for (const Character& c : library_.characters()) {
         if (!c.swapper) continue;
+        BuildTile tile;
+        tile.element = c.element;
+        const OwnedFigure* latest = nullptr;
         for (const Version& v : c.versions) {
-          if (v.bottom) {
-            tops_.push_back(v.sky);
-            bottoms_.push_back(v.bottom);
+          if (!v.bottom) continue;
+          const SkylanderInfo* sky = half == 0 ? v.sky : v.bottom;
+          // A tile starts on the version of this half played last.
+          const OwnedFigure* owned = library_.Owned(sky);
+          if (owned && (!latest || owned->mtime > latest->mtime)) {
+            latest = owned;
+            tile.version = tile.versions.size();
           }
+          tile.versions.push_back(sky);
         }
+        if (tile.versions.empty()) continue;
+        auto column = std::find_if(grid.columns.begin(), grid.columns.end(), [&](const auto& col) {
+          return col.front().element == c.element;
+        });
+        if (column == grid.columns.end()) {
+          grid.columns.emplace_back();
+          column = grid.columns.end() - 1;
+        }
+        column->push_back(std::move(tile));
+      }
+      std::stable_sort(grid.columns.begin(), grid.columns.end(), [](const auto& a, const auto& b) {
+        return ElementRank(a.front().element) < ElementRank(b.front().element);
+      });
+    }
+  }
+
+  const BuildTile* BuildTileAt(int half) const {
+    const BuildHalf& grid = build_[half];
+    if (grid.col >= grid.columns.size() || grid.row >= grid.columns[grid.col].size()) {
+      return nullptr;
+    }
+    return &grid.columns[grid.col][grid.row];
+  }
+  const SkylanderInfo* BuiltHalf(int half) const {
+    const BuildTile* tile = BuildTileAt(half);
+    return tile ? tile->sky() : nullptr;
+  }
+
+  // Puts a half's choice on the tile of `sky`, showing that version.
+  void SelectBuildHalf(int half, const SkylanderInfo* sky) {
+    BuildHalf& grid = build_[half];
+    for (size_t c = 0; c < grid.columns.size(); ++c) {
+      for (size_t r = 0; r < grid.columns[c].size(); ++r) {
+        BuildTile& tile = grid.columns[c][r];
+        auto it = std::find(tile.versions.begin(), tile.versions.end(), sky);
+        if (it == tile.versions.end()) continue;
+        tile.version = size_t(it - tile.versions.begin());
+        grid.col = c;
+        grid.row = r;
+        return;
       }
     }
-    if (tops_.empty()) return;
-    // Start with the version the card shows, whole.
-    const Version* start = &ShownVersion(character);
-    build_top_ = size_t(std::find(tops_.begin(), tops_.end(), start->sky) - tops_.begin()) %
-                 tops_.size();
-    build_bottom_ =
-        size_t(std::find(bottoms_.begin(), bottoms_.end(), start->bottom) - bottoms_.begin()) %
-        bottoms_.size();
-    build_column_ = 0;
+  }
+
+  // Opens on `top` + `bottom`, the top grid focused (`focus` 0) or the bottom one (1); `from` is
+  // the recent entry being changed, whose file of the half that stays is kept.
+  void OpenBuilder(const SkylanderInfo* top, const SkylanderInfo* bottom, int focus,
+                   const RecentEntry* from) {
+    if (build_[0].columns.empty()) MakeBuildGrids();
+    if (build_[0].columns.empty() || build_[1].columns.empty()) return;
+    SelectBuildHalf(0, top);
+    SelectBuildHalf(1, bottom);
+    build_focus_ = focus;
+    build_keep_.reset();
+    if (from) build_keep_ = *from;
     state_ = State::kBuilding;
+  }
+
+  // The highlighted recent entry if it is a swapper, a top with a bottom.
+  const RecentEntry* SelectedRecentSwapper() const {
+    const RecentEntry* entry = SelectedRecent();
+    if (!entry || entry->figures.size() != 2) return nullptr;
+    const bool swapper = portal::GetSwapperHalf(*entry->figures[0]) == SwapperHalf::kTop &&
+                         portal::GetSwapperHalf(*entry->figures[1]) == SwapperHalf::kBottom;
+    return swapper ? entry : nullptr;
   }
 
   void HandleBuilder(const Actions& a) {
@@ -2472,16 +2569,38 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       state_ = State::kBrowsing;
       return;
     }
-    if (a.left || a.lb) build_column_ = 0;
-    if (a.right || a.rb) build_column_ = 1;
-    size_t& index = build_column_ == 0 ? build_top_ : build_bottom_;
-    const size_t count = build_column_ == 0 ? tops_.size() : bottoms_.size();
-    if (a.up) index = (index + count - 1) % count;
-    if (a.down) index = (index + 1) % count;
+    if (a.lb) build_focus_ = 0;
+    if (a.rb) build_focus_ = 1;
+    BuildHalf& grid = build_[build_focus_];
+    auto clamp_row = [&] { grid.row = std::min(grid.row, grid.columns[grid.col].size() - 1); };
+    if (a.left && grid.col > 0) --grid.col, clamp_row();
+    if (a.right && grid.col + 1 < grid.columns.size()) ++grid.col, clamp_row();
+    // Up out of the bottom grid goes to the top one, down out of the top grid to the bottom one;
+    // each keeps its own choice.
+    if (a.up) {
+      if (grid.row > 0) {
+        --grid.row;
+      } else {
+        build_focus_ = 0;
+      }
+    }
+    if (a.down) {
+      if (grid.row + 1 < grid.columns[grid.col].size()) {
+        ++grid.row;
+      } else {
+        build_focus_ = 1;
+      }
+    }
+    if (a.take_off) {
+      BuildTile& tile = grid.columns[grid.col][grid.row];
+      tile.version = (tile.version + 1) % tile.versions.size();
+    }
     if (a.accept) {
-      const SkylanderInfo* top = tops_[build_top_];
-      const SkylanderInfo* bottom = bottoms_[build_bottom_];
-      if (!TakenBy(top) && !TakenBy(bottom)) Confirm({top, bottom});
+      const SkylanderInfo* top = BuiltHalf(0);
+      const SkylanderInfo* bottom = BuiltHalf(1);
+      if (top && bottom && !TakenBy(top) && !TakenBy(bottom)) {
+        Confirm({top, bottom}, build_keep_ ? &*build_keep_ : nullptr);
+      }
     }
   }
 
@@ -2552,8 +2671,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   void RebuildLibrary() {
     const std::string title = CurrentTab().title;
     library_.Build(user_);
-    tops_.clear();
-    bottoms_.clear();
+    build_[0].columns.clear();
+    build_[1].columns.clear();
     tab_ = element_ = selected_ = scroll_row_ = 0;
     for (size_t t = 0; t < library_.tabs().size(); ++t) {
       if (library_.tabs()[t].title == title) tab_ = t;
@@ -2695,16 +2814,24 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     StartCancel();
   }
 
-  void Confirm(const std::vector<const SkylanderInfo*>& figures) {
+  // Each figure's file: the one `keep` (a recent entry) has for it, else the one played last, else
+  // a new one.
+  void Confirm(const std::vector<const SkylanderInfo*>& figures,
+               const RecentEntry* keep = nullptr) {
     std::vector<std::filesystem::path> paths;
     std::vector<const SkylanderInfo*> placed;
     for (const SkylanderInfo* sky : figures) {
       if (!sky) continue;
       std::optional<std::filesystem::path> path;
-      if (const OwnedFigure* owned = library_.Owned(sky)) {
-        path = owned->path;
-      } else {
-        path = CreateFigureFile(*sky);
+      for (size_t i = 0; keep && i < keep->figures.size() && i < keep->paths.size(); ++i) {
+        if (keep->figures[i] == sky) path = keep->paths[i];
+      }
+      if (!path) {
+        if (const OwnedFigure* owned = library_.Owned(sky)) {
+          path = owned->path;
+        } else {
+          path = CreateFigureFile(*sky);
+        }
       }
       if (!path) {
         REXLOG_WARN("Portal menu: could not create a figure file for {}", sky->name);
@@ -2798,12 +2925,17 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     x += Hint(dl, {x, y}, kb ? "Esc" : "B", Rgba(232, 73, 43), T(Text::kBack), !kb);
     x += Hint(dl, {x, y}, kb ? "L" : "X", Rgba(46, 134, 222), T(Text::kDetails), !kb);
     if (state_ == State::kBuilding) {
-      Hint(dl, {x, y}, kb ? "A / D" : "< / >", grey, T(Text::kHalf), false);
+      x += Hint(dl, {x, y}, kb ? "1 / 3" : "LB / RB", grey, T(Text::kHalf), false);
+      if (const BuildTile* tile = BuildTileAt(build_focus_); tile && tile->versions.size() > 1) {
+        Hint(dl, {x, y}, kb ? "P" : "Y", Rgba(230, 180, 40), T(Text::kVariant), !kb);
+      }
     } else if (state_ == State::kBrowsing) {
       x += Hint(dl, {x, y}, kb ? "Q / E" : "LT / RT", grey, T(Text::kCategory), false);
       if (!CurrentTab().recent) {
         x += Hint(dl, {x, y}, kb ? "1 / 3" : "LB / RB", grey,
                   CurrentTab().items ? T(Text::kGame) : T(Text::kElement), false);
+      } else if (SelectedRecentSwapper()) {
+        x += Hint(dl, {x, y}, kb ? "1 / 3" : "LB / RB", grey, T(Text::kChangeHalves), false);
       }
       if (current_item_) {
         x += Hint(dl, {x, y}, kb ? "P" : "Y", Rgba(230, 180, 40), T(Text::kTakeOffItem), !kb);
@@ -3355,68 +3487,113 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
   }
 
-  // Two lists side by side, tops and bottoms; the preview shows the combination.
+  // The two grids, the top one above, each with the chosen version's name; the preview shows
+  // the combination.
   void DrawBuilder(ImDrawList* dl, ImVec2 area0, ImVec2 area1) {
     ImVec2 a, b;
-    const float w = std::min(area1.x - area0.x, S(980));
+    const float w = std::min(area1.x - area0.x, S(1240));
     DrawOverlayPanel(dl, area0, area1, {w, area1.y - area0.y}, a, b);
     Label(dl, BoldFont(), S(26), {a.x + S(28), a.y + S(20)}, kGold, T(Text::kBuildSwapper));
-    const std::string combo = ComboName({tops_[build_top_], bottoms_[build_bottom_]});
-    const ImVec2 cs = TextSize(TitleFont(), S(34), combo);
-    OutlinedLabel(dl, TitleFont(), S(34), {b.x - S(28) - cs.x, a.y + S(14)}, kWhite, combo, S(2));
+    const SkylanderInfo* top = BuiltHalf(0);
+    const SkylanderInfo* bottom = BuiltHalf(1);
+    if (top && bottom) {
+      const std::string combo = ComboName({top, bottom});
+      const ImVec2 cs = TextSize(TitleFont(), S(34), combo);
+      OutlinedLabel(dl, TitleFont(), S(34), {b.x - S(28) - cs.x, a.y + S(14)}, kWhite, combo,
+                    S(2));
+    }
 
-    const float col_gap = S(20);
-    const float col_w = (b.x - a.x - S(56) - col_gap) / 2;
-    const float list_top = a.y + S(110);
-    const float row_h = S(54), row_gap = S(8);
-    const size_t visible =
-        std::max<size_t>(1, size_t((b.y - S(20) - list_top + row_gap) / (row_h + row_gap)));
-    for (int column = 0; column < 2; ++column) {
-      const auto& list = column == 0 ? tops_ : bottoms_;
-      size_t& index = column == 0 ? build_top_ : build_bottom_;
-      size_t& scroll = column == 0 ? top_scroll_ : bottom_scroll_;
-      const bool focused = build_column_ == column;
-      const float x0 = a.x + S(28) + column * (col_w + col_gap);
-      Label(dl, BoldFont(), S(22), {x0 + S(6), list_top - S(38)}, focused ? kGold : kDim,
-            T(column == 0 ? Text::kTop : Text::kBottom));
-      if (index < scroll) scroll = index;
-      if (index >= scroll + visible) scroll = index - visible + 1;
-      for (size_t i = scroll; i < list.size() && i < scroll + visible; ++i) {
-        const SkylanderInfo* sky = list[i];
-        const Element element = portal::FigureElement(*sky);
-        const ImVec2 r0{x0, list_top + (i - scroll) * (row_h + row_gap)};
-        const ImVec2 r1{x0 + col_w, r0.y + row_h};
-        const bool chosen = i == index;
-        if (state_ == State::kBuilding && (MouseSelects(r0, r1) ||
-                                           (ImGui::IsMouseHoveringRect(r0, r1) &&
-                                            ImGui::IsMouseClicked(0)))) {
-          build_column_ = column;
-          index = i;
-        }
-        dl->AddRectFilled(r0, r1,
-                          chosen ? ElementColor(element, focused ? 0.80f : 0.55f, 255)
-                                 : Rgba(255, 255, 255, 14),
-                          S(12));
-        if (chosen) dl->AddRect(r0, r1, focused ? kGold : Rgba(255, 255, 255, 90), S(12), 0,
-                                focused ? S(3) : S(1.5f));
-        DrawFigurePicture(dl, {r0.x + S(5), r0.y + S(5)}, {r0.x + S(49), r0.y + S(49)}, sky, S(8));
-        Label(dl, BoldFont(), S(21), {r0.x + S(56), r0.y + S(14)}, kWhite,
-              portal::DisplayName(portal::SwapperBaseName(*sky)), col_w - S(130));
-        if (auto owner = TakenBy(sky)) {
-          dl->AddRectFilled(r0, r1, Rgba(8, 10, 26, 150), S(12));
-          char text[48];
-          std::snprintf(text, sizeof(text), T(Text::kTaken), *owner + 1);
-          const ImVec2 ts = TextSize(BoldFont(), S(16), text);
-          dl->AddRectFilled({r1.x - ts.x - S(30), r0.y + S(13)}, {r1.x - S(10), r1.y - S(13)},
-                            PlayerColor(*owner), S(14));
-          Label(dl, BoldFont(), S(16), {r1.x - ts.x - S(20), r0.y + S(16)}, kWhite, text);
-        } else if (const OwnedFigure* owned = library_.Owned(sky); owned && owned->stats) {
-          const std::string lv = "Lv " + std::to_string(owned->stats->level);
-          const ImVec2 ts = TextSize(BoldFont(), S(18), lv);
-          Label(dl, BoldFont(), S(18), {r1.x - ts.x - S(16), r0.y + S(16)}, kGold, lv);
+    // Tiles as large as both grids allow, the columns centred.
+    size_t cols = 1, rows[2] = {1, 1};
+    for (int half = 0; half < 2; ++half) {
+      cols = std::max(cols, build_[half].columns.size());
+      for (const auto& column : build_[half].columns) rows[half] = std::max(rows[half], column.size());
+    }
+    const float gap = S(10), label_h = S(38), name_h = S(26), half_gap = S(12);
+    const float grids_y = a.y + S(72);
+    const float rows_h = b.y - S(18) - grids_y - 2 * label_h - half_gap -
+                         float(rows[0] - 1 + rows[1] - 1) * gap;
+    const float tile_w =
+        std::min({S(150), (b.x - a.x - S(56) - float(cols - 1) * gap) / float(cols),
+                  rows_h / float(rows[0] + rows[1]) - name_h});
+    const float tile_h = tile_w + name_h;
+    const float x0 = (a.x + b.x - (float(cols) * tile_w + float(cols - 1) * gap)) / 2;
+
+    float y = grids_y;
+    for (int half = 0; half < 2; ++half) {
+      BuildHalf& grid = build_[half];
+      const bool focused = build_focus_ == half;
+      const char* title = T(half == 0 ? Text::kTop : Text::kBottom);
+      Label(dl, BoldFont(), S(23), {x0, y + S(4)}, focused ? kGold : kDim, title);
+      if (const BuildTile* tile = BuildTileAt(half)) {
+        const float tx = x0 + TextSize(BoldFont(), S(23), title).x + S(18);
+        Label(dl, BoldFont(), S(20), {tx, y + S(6)}, focused ? kWhite : kDim,
+              portal::DisplayName(portal::SwapperBaseName(*tile->sky())));
+      }
+      y += label_h;
+      for (size_t c = 0; c < grid.columns.size(); ++c) {
+        for (size_t r = 0; r < grid.columns[c].size(); ++r) {
+          const ImVec2 t0{x0 + float(c) * (tile_w + gap), y + float(r) * (tile_h + gap)};
+          const ImVec2 t1{t0.x + tile_w, t0.y + tile_h};
+          if (state_ == State::kBuilding &&
+              (MouseSelects(t0, t1) ||
+               (ImGui::IsMouseHoveringRect(t0, t1) && ImGui::IsMouseClicked(0)))) {
+            build_focus_ = half;
+            grid.col = c;
+            grid.row = r;
+          }
+          const bool chosen = c == grid.col && r == grid.row;
+          DrawBuildTile(dl, t0, t1, grid.columns[c][r], chosen, build_focus_ == half);
         }
       }
+      y += float(rows[half]) * (tile_h + gap) - gap + half_gap;
     }
+  }
+
+  // A builder tile: the half's picture, the character's name below, the version's own word
+  // ("Legendary") and one dot per version on the picture, the level. The other grid is dimmed but
+  // for its choice.
+  void DrawBuildTile(ImDrawList* dl, ImVec2 a, ImVec2 b, const BuildTile& tile, bool chosen,
+                     bool focused) {
+    const SkylanderInfo* sky = tile.sky();
+    DrawCardFrame(dl, a, b, tile.element, chosen && focused);
+    if (chosen && !focused) dl->AddRect(a, b, Rgba(255, 255, 255, 190), S(14), 0, S(3));
+    const float pad = S(7);
+    const ImVec2 p0{a.x + pad, a.y + pad};
+    const ImVec2 p1{b.x - pad, a.y + pad + (b.x - a.x - 2 * pad)};
+    DrawFigurePicture(dl, p0, p1, sky, S(10));
+    const std::string base = portal::DisplayName(portal::SwapperBaseName(*sky));
+    const std::string_view character = portal::CharacterName(*sky);
+    const std::string name = character.empty() ? base : portal::DisplayName(character);
+    dl->PushClipRect(a, b, true);
+    const ImVec2 ts = TextSize(BoldFont(), S(16), name);
+    Label(dl, BoldFont(), S(16), {std::max(a.x + S(5), (a.x + b.x - ts.x) / 2), p1.y + S(4)},
+          kWhite, name);
+    if (base.size() > name.size() &&
+        base.compare(base.size() - name.size(), name.size(), name) == 0) {
+      std::string word = base.substr(0, base.size() - name.size());
+      while (!word.empty() && word.back() == ' ') word.pop_back();
+      if (!word.empty()) {
+        const float pw = PillWidth(word, 13);
+        Pill(dl, {std::max(p0.x, (p0.x + p1.x - pw) / 2), p1.y - S(42)}, word, kGold, kInk, 13);
+      }
+    }
+    if (tile.versions.size() > 1) {
+      const float step = S(12);
+      float x = (p0.x + p1.x) / 2 - step * float(tile.versions.size() - 1) / 2;
+      for (size_t i = 0; i < tile.versions.size(); ++i, x += step) {
+        dl->AddCircleFilled({x, p1.y - S(10)}, S(5.5f), Rgba(10, 12, 30, 210));
+        dl->AddCircleFilled({x, p1.y - S(10)}, S(4),
+                            i == tile.version ? kGold : Rgba(255, 255, 255, 120));
+      }
+    }
+    if (const OwnedFigure* owned = library_.Owned(sky); owned && owned->stats) {
+      const std::string lv = "Lv " + std::to_string(owned->stats->level);
+      Pill(dl, {p1.x - S(4) - PillWidth(lv, 13), p0.y + S(4)}, lv, kGold, kInk, 13);
+    }
+    dl->PopClipRect();
+    if (!focused && !chosen) dl->AddRectFilled(a, b, Rgba(8, 10, 26, 110), S(14));
+    if (auto owner = TakenBy(sky)) DrawTaken(dl, a, b, *owner);
   }
 
   // The details view, for one figure at a time (a swapper's halves with LB / RB): level, hat and
@@ -3685,10 +3862,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   std::vector<Choice> choices_;
   size_t choice_ = 0;
   size_t choice_scroll_ = 0;
-  std::vector<const SkylanderInfo*> tops_, bottoms_;
-  int build_column_ = 0;
-  size_t build_top_ = 0, build_bottom_ = 0;
-  size_t top_scroll_ = 0, bottom_scroll_ = 0;
+  BuildHalf build_[2];  // the top grid, the bottom grid
+  int build_focus_ = 0;
+  std::optional<RecentEntry> build_keep_;  // the recent entry the builder changes
   std::unordered_map<uint64_t, PadReader> pad_readers_;  // by device
 };
 
