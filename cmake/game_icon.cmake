@@ -5,6 +5,12 @@
 # exe as its first icon. Windows shows that for the exe and its shortcuts (the installers' desktop
 # and start menu ones point at the exe), and SDL takes the exe's first icon for the window and the
 # taskbar. Without a disc, a plain icon of our own. The picture never goes into a repository.
+#
+# Builds that are passed on (the setups on GitHub Releases) must not carry the disc's artwork
+# either: configured with -DSKYLANDERS_DISC_ICON=OFF the exe gets the plain icon, disc or not.
+
+option(SKYLANDERS_DISC_ICON
+       "The exe's icon from the disc's dashboard tile (OFF for builds that are passed on: a plain icon)" ON)
 
 function(skylanders_game_icon target rom_dir)
   if(NOT WIN32)
@@ -12,6 +18,12 @@ function(skylanders_game_icon target rom_dir)
   endif()
   set(dir "${CMAKE_CURRENT_BINARY_DIR}/game_icon")
   set(ico "${dir}/game.ico")
+  if(NOT SKYLANDERS_DISC_ICON)
+    # A folder without the disc's package: the script makes the plain icon. Its own file name, so
+    # switching the option rebuilds the icon.
+    set(rom_dir "${dir}/no_disc")
+    set(ico "${dir}/plain.ico")
+  endif()
   set(rc "${dir}/game_icon.rc")
   set(script "${_SKYLANDERS_GAME_ICON_DIR}/../tools/make_game_icon.ps1")
   set(deps "${script}")
