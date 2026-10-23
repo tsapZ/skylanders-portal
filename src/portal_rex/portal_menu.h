@@ -197,12 +197,6 @@ void AutoOpenPortalMenu(uint32_t user);
 // prompt while player 1 plays opens player 2's menu. Callable from any thread.
 void AutoOpenPortalMenuForPlayerWithoutFigure();
 
-// Weiterspielen (continue_game) for a game whose save slot screen doesn't start on the save played
-// last: called from the continue thread before each of its A presses (every 1.5 s); the game can
-// move its slot cursor there (menu_input::TapButton) and returns true while the A should wait.
-// After 30 s of true in a row the A presses go on regardless.
-void SetContinueStepProvider(std::function<bool()> step);
-
 // For the settings menu's Problem melden (problem_note.h), UI thread: the game's picture as it is
 // now (the guest output, without the menus over it) as RGBA, false without one; the figures on the
 // emulated portal ("Chop Chop (player 1), ..."); and a short message at the top of the screen.
