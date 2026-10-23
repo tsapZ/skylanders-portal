@@ -1012,8 +1012,14 @@ class Library {
     const bool owned_only = REXCVAR_GET(portal_menu_owned_only);
     // A version is listed unless its game is hidden or, with "only my figures", neither of its
     // figures has a file.
+    // Imaginators' toys only with a file: they carry 32 bytes in sector 0 (blocks 2 and 4) that the
+    // game checks, and a blank figure, or a real dump with those two blocks zeroed, is "damaged"
+    // (portal error reason 0; Air Strike, a Water crystal and a Bronze Mystery Chest, 2026-10-23).
+    // The earlier games' figures have zeros there. The menu can't make such a toy, so only the
+    // files there are of them (read from the real portal, docs/hybrid-portal.md) are offered.
     auto listed = [&](const SkylanderInfo* sky, const SkylanderInfo* bottom) {
       if (Contains(games, sky->game) && !Contains(shown, sky->game)) return false;
+      if (sky->game == "Imaginators" && !Owned(sky)) return false;
       return !owned_only || Owned(sky) || (bottom && Owned(bottom));
     };
 
