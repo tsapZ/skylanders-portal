@@ -55,6 +55,9 @@ struct Setting {
   // (SetControllerPicture), each entry in its own colour. Without a cvar (and no action) the row is
   // an overview: every button setting of its page on the picture, one colour each.
   bool buttons = false;
+  // A bool cvar this setting needs on: while it is off the row is greyed and can't be changed (the
+  // keyboard's player with the keyboard off; a colleague's wish, 2026-10-23). Empty: always.
+  std::string enabled_by;
 };
 
 struct SettingsPage {

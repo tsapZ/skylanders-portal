@@ -103,7 +103,7 @@ std::string SettingJson(const Setting& s) {
          ", \"category\": " + Json(category) + ", \"default\": " + Json(default_value) +
          ", \"value\": " + Json(rex::cvar::GetFlagByName(s.cvar)) + ", \"restart\": " +
          (restart ? "true" : "false") + ", \"buttons\": " + (s.buttons ? "true" : "false") +
-         ", \"options\": " + Options(s.options) + "}";
+         ", \"enabled_by\": " + Json(s.enabled_by) + ", \"options\": " + Options(s.options) + "}";
   return out;
 }
 

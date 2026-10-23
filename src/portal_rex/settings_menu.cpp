@@ -610,8 +610,21 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       if (a.accept) RunAction(s);
       return;
     }
+    if (!Enabled(s)) return;  // greyed: its enabled_by setting is off
     if (a.left) Change(s, -1);
     if (a.right || a.accept) Change(s, +1);
+  }
+
+  static bool Enabled(const Setting& s) { return s.enabled_by.empty() || CvarOn(s.enabled_by.c_str()); }
+
+  // The setting of any page with that cvar (for "only with ... on"), or null.
+  static const Setting* FindSetting(const std::string& cvar) {
+    for (const SettingsPage& page : g_state.pages) {
+      for (const Setting& s : page.settings) {
+        if (s.cvar == cvar) return &s;
+      }
+    }
+    return nullptr;
   }
 
   void Change(const Setting& s, int delta) {
@@ -757,10 +770,12 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
           (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f)) {
         row_ = i;
       }
+      const bool enabled = Enabled(s);
+      const ImU32 greyed = Rgba(255, 255, 255, 90);
       dl->AddRectFilled(r0, r1, active ? Rgba(255, 255, 255, 52) : Rgba(255, 255, 255, 14), S(14));
-      if (active) dl->AddRect(r0, r1, kGold, S(14), 0, S(3));
+      if (active) dl->AddRect(r0, r1, enabled ? kGold : greyed, S(14), 0, S(3));
       const std::string& label = Tr(s.en, s.de);
-      Label(dl, BoldFont(), S(23), {r0.x + S(22), r0.y + S(17)}, kWhite, label);
+      Label(dl, BoldFont(), S(23), {r0.x + S(22), r0.y + S(17)}, enabled ? kWhite : greyed, label);
       if (Pending(s)) {
         const float lx = r0.x + S(30) + TextSize(BoldFont(), S(23), label).x;
         dl->AddCircleFilled({lx, r0.y + row_h / 2}, S(6), kGold);
@@ -794,7 +809,8 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
         vs = TextSize(BoldFont(), size, value);
       }
       Label(dl, BoldFont(), size, {(v0.x + v1.x - vs.x) / 2, (v0.y + v1.y - vs.y) / 2},
-            active ? kGold : kWhite, value);
+            !enabled ? greyed : active ? kGold : kWhite, value);
+      if (!enabled) continue;  // no arrows, no clicks
       const ImU32 arrow = active ? kGold : Rgba(255, 255, 255, 90);
       Label(dl, BoldFont(), S(24), {v0.x + S(12), v0.y + S(5)}, arrow, "<");
       Label(dl, BoldFont(), S(24), {v1.x - S(26), v0.y + S(5)}, arrow, ">");
@@ -833,8 +849,10 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
         "steht die Controller-Taste, f\xC3\xBCr die sie steht (Einstellungen keybind_* in der "
         "Einstellungsdatei).";
     const bool keyboard_help = keyboard_view_ && IsOverview(*s);
-    const std::string& help = keyboard_help ? Tr(kKeyboardHelpEn, kKeyboardHelpDe)
-                                            : Tr(s->help_en, s->help_de);
+    std::string help = keyboard_help ? Tr(kKeyboardHelpEn, kKeyboardHelpDe) : Tr(s->help_en, s->help_de);
+    if (const Setting* needs = Enabled(*s) ? nullptr : FindSetting(s->enabled_by)) {
+      help = (g_german ? "Nur mit \xE2\x80\x9E" + needs->de + "\xE2\x80\x9C an. " : "Only with \"" + needs->en + "\" on. ") + help;
+    }
     if (!help.empty()) {
       Label(dl, BoldFont(), S(21), {a.x + S(24), y}, kDim, help, wrap);
       y += TextSize(BoldFont(), S(21), help, wrap).y + S(22);
