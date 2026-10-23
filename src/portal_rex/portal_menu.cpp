@@ -4341,11 +4341,20 @@ ImTextureID menu_draw::GameArtTexture(const std::string& key) { return ArtTextur
 // prompt within 10 minutes, after a long cutscene too (a fresh save of SuperChargers or
 // Imaginators starts with one that A doesn't skip; Trap Team's opening movie only Start skips).
 //
-// Only for games whose slot screen starts on the save played last (Swap Force's does, checked with
-// a real save; Spyro's Adventure's and Giants' start on slot 1, and A there starts a new game in an
-// empty slot, so the launcher doesn't offer it for them).
+// Swap Force's and SuperChargers' slot screens start on the save played last (checked with saves
+// in slots 1 and 2). Spyro's Adventure, Giants, Trap Team and Imaginators start on slot 1, where A
+// starts a new game in an empty slot or loads the wrong save: there a game integration moves the
+// cursor first (SetContinueStepProvider, Trap Team), or the launcher doesn't offer it.
 std::atomic<bool> g_continue_pressing{false};
 std::atomic<bool> g_continue_place{false};
+std::mutex g_continue_step_mutex;
+std::function<bool()> g_continue_step;
+
+// The game's step before an A (SetContinueStepProvider): true while the A should wait.
+bool ContinueStepWants() {
+  std::lock_guard lock(g_continue_step_mutex);
+  return g_continue_step && g_continue_step();
+}
 
 void StartContinue() {
   if (!REXCVAR_GET(continue_game) || g_continue_place.exchange(true)) return;
@@ -4355,6 +4364,7 @@ void StartContinue() {
     const auto start = Clock::now();
     const uint64_t presses = menu_input::RealButtonPresses();
     std::this_thread::sleep_for(std::chrono::seconds(4));
+    std::optional<Clock::time_point> step_since;  // the game's step has held the A since then
     while (g_continue_place.load()) {
       const auto waited = Clock::now() - start;
       if (waited > std::chrono::minutes(10)) {
@@ -4369,7 +4379,11 @@ void StartContinue() {
         } else if (waited > std::chrono::seconds(120)) {
           REXLOG_INFO("Continue: no portal prompt after 120 s of A, waiting for it");
           g_continue_pressing = false;
+        } else if ((!step_since || Clock::now() - *step_since < std::chrono::seconds(30)) &&
+                   ContinueStepWants()) {
+          if (!step_since) step_since = Clock::now();
         } else {
+          step_since.reset();
           menu_input::TapButton(0, rex::input::X_INPUT_GAMEPAD_A);
         }
       }
@@ -4905,6 +4919,11 @@ void SetItemDurationProvider(ItemDurationProvider provider) {
 void SetGameBusyProvider(std::function<bool()> busy) {
   std::lock_guard lock(g_provider_mutex);
   g_game_busy = std::move(busy);
+}
+
+void SetContinueStepProvider(std::function<bool()> step) {
+  std::lock_guard lock(g_continue_step_mutex);
+  g_continue_step = std::move(step);
 }
 
 void AddPortalMenuFonts(ImFontAtlas* atlas) { menu_draw::AddFonts(atlas); }
