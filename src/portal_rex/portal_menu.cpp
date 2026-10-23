@@ -57,6 +57,10 @@ REXCVAR_DEFINE_STRING(portal_menu_games, "", "Portal",
                       "all games)");
 REXCVAR_DEFINE_BOOL(portal_menu_auto_open, true, "Portal",
                     "Open the portal menu by itself when the game asks a player for a Skylander");
+REXCVAR_DEFINE_BOOL(continue_game, false, "Launcher",
+                    "Weiterspielen (the Core of Light launcher): A for player 1 until the game asks "
+                    "for a Skylander, then player 1's newest figure from Recent goes on the portal; "
+                    "stops when a button is pressed or after 120 s");
 REXCVAR_DEFINE_STRING(portal_menu_hidden_games, "", "Portal",
                       "Games of portal_menu_games the portal menu hides, separated by ';' (set "
                       "with Start in the menu)");
@@ -4284,9 +4288,84 @@ void TakeItemOff() {
 
 ImTextureID menu_draw::GameArtTexture(const std::string& key) { return ArtTexture(key); }
 
+// --- Weiterspielen (continue_game) ---
+//
+// The launcher's "Weiterspielen" tile (#16 there) takes the player from the start into the save
+// played last, with the figure played last: A for player 1 every 1.5 s goes through the title
+// screen, the notices, the main menu's first entry and the save slots (where the cursor stands on
+// the save played last), until the game asks for a Skylander (AutoOpenPortalMenu); then player
+// 1's newest Recent entry goes on the portal
+// instead of the menu opening. The presses stop after 120 s, or as soon as a real controller or
+// the keyboard presses a button (the player takes over); the figure still goes on at the first
+// prompt within 10 minutes, after a long cutscene too (a fresh save of SuperChargers or
+// Imaginators starts with one that A doesn't skip; Trap Team's opening movie only Start skips).
+//
+// Only for games whose slot screen starts on the save played last (Swap Force's does, checked with
+// a real save; Spyro's Adventure's and Giants' start on slot 1, and A there starts a new game in an
+// empty slot, so the launcher doesn't offer it for them).
+std::atomic<bool> g_continue_pressing{false};
+std::atomic<bool> g_continue_place{false};
+
+void StartContinue() {
+  if (!REXCVAR_GET(continue_game) || g_continue_place.exchange(true)) return;
+  g_continue_pressing = true;
+  REXLOG_INFO("Continue: pressing A for player 1 until the game asks for a Skylander");
+  std::thread([] {
+    const auto start = Clock::now();
+    const uint64_t presses = menu_input::RealButtonPresses();
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+    while (g_continue_place.load()) {
+      const auto waited = Clock::now() - start;
+      if (waited > std::chrono::minutes(10)) {
+        REXLOG_INFO("Continue: no portal prompt within 10 minutes, the menu opens as usual");
+        g_continue_place = false;
+        break;
+      }
+      if (g_continue_pressing.load()) {
+        if (menu_input::RealButtonPresses() != presses) {
+          REXLOG_INFO("Continue: a button was pressed, the player takes over");
+          g_continue_pressing = false;
+        } else if (waited > std::chrono::seconds(120)) {
+          REXLOG_INFO("Continue: no portal prompt after 120 s of A, waiting for it");
+          g_continue_pressing = false;
+        } else {
+          menu_input::TapButton(0, rex::input::X_INPUT_GAMEPAD_A);
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    }
+  }).detach();
+}
+
+// At the first prompt for player 1 with continue_game: their newest Recent entry this game reads
+// (Recent is shared by all games, so the newest can be another game's: an Imaginators sensei in
+// Swap Force) onto the portal. False if there is none (the menu opens as usual).
+bool PlaceContinueFigure() {
+  if (!GetSoftwarePortal()) return false;
+  const std::vector<std::string> games = AllowedGames();
+  for (const auto& entry : LoadRecentPaths(0)) {
+    bool usable = true;
+    for (const auto& path : entry) {
+      const auto data = portal::LoadFigureFile(path);
+      const SkylanderInfo* sky =
+          data ? portal::FindSkylander(portal::ReadFigureId(*data), portal::ReadFigureVariant(*data)) : nullptr;
+      if (!sky || (!games.empty() && !Contains(games, sky->game))) usable = false;
+    }
+    if (!usable) continue;
+    PlaceForPlayer(0, entry, {});
+    REXLOG_INFO("Continue: player 1's figure from Recent ({}) is on the portal", PathUtf8(entry.front().filename()));
+    return true;
+  }
+  return false;
+}
+
 void AutoOpenPortalMenu(uint32_t user) {
   if (!g_app_context || user >= rex::input::kMaxGuestUsers) return;
   g_app_context->CallInUIThread([user] {
+    if (user == 0 && !g_menu && g_continue_place.exchange(false)) {
+      g_continue_pressing = false;
+      if (PlaceContinueFigure()) return;
+    }
     // Opened with the button for this player and waiting for the game's portal screen: here it is.
     if (g_menu) {
       if (g_menu->user() == user) g_menu->Reveal();
@@ -4795,6 +4874,7 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
   g_app_context = app_context;
   g_immediate_drawer = immediate_drawer;
   g_item_app_context = app_context;
+  StartContinue();
   menu_input::SetOpenHandler([](DeviceId device, uint32_t user) {
     if (!g_app_context) return;
     g_app_context->CallInUIThread([device, user] { OpenMenu(device, user, false); });

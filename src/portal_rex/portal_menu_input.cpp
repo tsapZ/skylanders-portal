@@ -91,7 +91,10 @@ struct DeviceRecord {
   // A press the menu makes on the game's behalf (TapButton).
   uint16_t tap = 0;
   Clock::time_point tap_from{}, tap_until{};
+  uint16_t real_buttons = 0;  // the device's own buttons at the last poll (RealButtonPresses)
 };
+
+std::atomic<uint64_t> g_real_presses{0};
 
 std::mutex g_mutex;
 std::unordered_map<uint64_t, DeviceRecord> g_devices;  // by DeviceId
@@ -350,6 +353,7 @@ class MenuInputDriver final : public InputDriver {
     if (result != X_ERROR_SUCCESS) {
       return result;
     }
+    const uint16_t raw = state.gamepad.buttons;
     bool hide = !is_active() || g_menu_open.load();
     uint16_t visible = state.gamepad.buttons;
     if (Observe(id, state.gamepad, &hide, &visible)) {
@@ -363,6 +367,13 @@ class MenuInputDriver final : public InputDriver {
         uint16_t(visible & uint16_t(~uint16_t(rex::input::X_INPUT_GAMEPAD_GUIDE)));
     if (hide) {
       std::memset(&state.gamepad, 0, sizeof(state.gamepad));
+    }
+    {
+      // Presses of the device itself, before any tap is added (Weiterspielen stops at one).
+      std::lock_guard lock(g_mutex);
+      DeviceRecord& record = g_devices[uint64_t(id)];
+      if (raw & uint16_t(~record.real_buttons)) g_real_presses.fetch_add(1);
+      record.real_buttons = raw;
     }
     if (!g_menu_open.load()) {
       std::lock_guard lock(g_mutex);
@@ -675,6 +686,8 @@ void TapButton(uint32_t user, uint16_t button) {
 }
 
 uint16_t ButtonByName(const std::string& name) { return ButtonBit(name); }
+
+uint64_t RealButtonPresses() { return g_real_presses.load(); }
 
 bool IsActionChord(ButtonAction action, uint16_t buttons) {
   for (const OpenEntry& entry : OpenEntries()) {
