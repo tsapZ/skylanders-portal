@@ -63,9 +63,10 @@ REXCVAR_DEFINE_STRING(portal_menu_hidden_games, "", "Portal",
 REXCVAR_DEFINE_BOOL(portal_menu_owned_only, false, "Portal",
                     "The portal menu lists only figures that have a figure file");
 REXCVAR_DEFINE_BOOL(portal_menu_later_versions, false, "Portal",
-                    "The portal menu also lists later games' figures of the characters this game "
-                    "knows (Series 2 Spyro in Spyro's Adventure), with their games' tabs; the game "
-                    "plays them as its own");
+                    "The portal menu also shows the tabs of later games that have figures of the "
+                    "characters this game knows (those figures, Series 2 Spyro in Spyro's "
+                    "Adventure, are among each character's versions anyway; the game plays them as "
+                    "its own)");
 REXCVAR_DEFINE_STRING(portal_menu_leave_button, "b", "Portal",
                       "The button of the game's portal screen that lets a second player leave "
                       "(\"b\" in Giants and Swap Force, \"rs\" in Spyro's Adventure); the menu's "
@@ -1024,11 +1025,13 @@ class Library {
     };
 
     // Characters with all their versions (catalog order is release order). Figures from later
-    // games can count too when they carry the id of a character this game knows: the game goes by
+    // games count too when they carry the id of a character this game knows: the game goes by
     // the id, so "Eon's Elite Chop Chop" (id 30) plays as Chop Chop in Swap Force, while a
     // SuperChargers driver (own id) or a character new in a later game is unknown to it. They are
-    // listed only with portal_menu_later_versions: the game itself offers only its own figures,
-    // and the owner wants the menu to look like that by default (2026-10-21).
+    // always among a character's versions (Y: Spyro in Spyro's Adventure with Series 2 and 3,
+    // LightCore, Eon's Elite; the owner's wish, 2026-10-24), while the tabs stay the game's own
+    // unless portal_menu_later_versions adds the later games' (the menu looks like the game's own
+    // by default, 2026-10-21).
     const bool later_versions = REXCVAR_GET(portal_menu_later_versions);
     std::unordered_map<std::string, size_t> index;
     std::unordered_map<std::string, std::string> debut;  // character -> first game, unfiltered
@@ -1067,8 +1070,7 @@ class Library {
         if (name.empty()) name = portal::DisplayName(portal::SwapperBaseName(sky));
         known_ids_.emplace(sky.id, name);
       } else if (auto known = known_ids_.find(sky.id); known != known_ids_.end()) {
-        if (!later_versions) continue;
-        name = known->second;
+        name = known->second;  // a later game's version of a character this game knows
       } else {
         continue;
       }
@@ -1106,8 +1108,7 @@ class Library {
         entry.paths.push_back(path);
         entry.figures.push_back(it->second->sky);
       }
-      if (!entry.figures.empty() && known_ids_.contains(entry.figures[0]->id) &&
-          (later_versions || Contains(games, entry.figures[0]->game))) {
+      if (!entry.figures.empty() && known_ids_.contains(entry.figures[0]->id)) {
         recent_.push_back(std::move(entry));
       }
     }
