@@ -49,6 +49,9 @@
 #include "portal_rex/png_file.h"
 #include "portal_rex/settings_file.h"
 
+REXCVAR_DEFINE_STRING(export_pictures, "", "Launcher",
+                      "Write the figure, hat and achievement pictures to this folder and quit; for the "
+                      "Core of Light launcher, right after a disc is set up");
 REXCVAR_DEFINE_STRING(portal_menu_games, "", "Portal",
                       "Games whose Skylanders the portal menu offers, separated by ';' (empty: "
                       "all games)");
@@ -4360,11 +4363,52 @@ std::shared_ptr<const FigureImage> OtherGamePicture(uint16_t id, uint16_t varian
   return found;
 }
 
+namespace {
+void RunFigurePictureCache(std::filesystem::path dir);
+
+// --export_pictures: once the cache has run, the achievements' list is waited for (at most 20 s)
+// and the game quits; nothing of it is needed any more (a hidden, muted run of the launcher's).
+void FinishPictureExport(const std::filesystem::path& dir) {
+  using namespace std::chrono_literals;
+  std::error_code ec;
+  for (int i = 0; i < 40 && !std::filesystem::exists(dir / "achievements.txt", ec); ++i) {
+    std::this_thread::sleep_for(500ms);
+  }
+  size_t pictures = 0;
+  for (std::filesystem::directory_iterator it(dir, ec), end; it != end; it.increment(ec)) {
+    pictures += it->path().extension() == ".png" ? 1 : 0;
+  }
+  REXLOG_INFO("Pictures exported: {} PNG files in {}", pictures, rex::cvar::GetFlagByName("export_pictures"));
+  rex::FlushLogging();
+  std::_Exit(0);
+}
+}  // namespace
+
 void StartFigurePictureCache(std::filesystem::path dir) {
+  // --export_pictures: into that folder, then quit (with a limit, should the game never get there).
+  const std::string export_dir = REXCVAR_GET(export_pictures);
+  if (!export_dir.empty()) {
+    dir = std::filesystem::path(std::u8string(export_dir.begin(), export_dir.end()));
+    std::thread([] {
+      std::this_thread::sleep_for(std::chrono::seconds(180));
+      REXLOG_WARN("Pictures export: not done after 180 s, quitting");
+      rex::FlushLogging();
+      std::_Exit(3);
+    }).detach();
+  }
   g_own_pictures_dir = dir;
   // The achievements go into the same folder (achievements_ui.h).
   StartAchievementCache(dir);
   std::thread([dir] {
+    RunFigurePictureCache(dir);
+    if (!REXCVAR_GET(export_pictures).empty()) FinishPictureExport(dir);
+  }).detach();
+}
+
+namespace {
+
+// The cache's work, on its own thread: the figures' pictures, the hats, the upgrade trees.
+void RunFigurePictureCache(std::filesystem::path dir) {
     namespace fs = std::filesystem;
     using namespace std::chrono_literals;
     std::error_code ec;
@@ -4512,8 +4556,9 @@ void StartFigurePictureCache(std::filesystem::path dir) {
     std::ofstream(dir / "hats.txt", std::ios::binary) << text;
     REXLOG_INFO("Portal menu: {} hats ({} pictures) for the launcher", hats.size(), pictures);
     WriteUpgradeCache(dir);
-  }).detach();
 }
+
+}  // namespace
 
 void SetFigureNameProvider(FigureNameProvider provider) {
   std::lock_guard lock(g_provider_mutex);
