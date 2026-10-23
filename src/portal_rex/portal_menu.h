@@ -197,6 +197,13 @@ void AutoOpenPortalMenu(uint32_t user);
 // prompt while player 1 plays opens player 2's menu. Callable from any thread.
 void AutoOpenPortalMenuForPlayerWithoutFigure();
 
+// For the settings menu's Problem melden (problem_note.h), UI thread: the game's picture as it is
+// now (the guest output, without the menus over it) as RGBA, false without one; the figures on the
+// emulated portal ("Chop Chop (player 1), ..."); and a short message at the top of the screen.
+bool CaptureGamePicture(int& width, int& height, std::vector<uint8_t>& rgba);
+std::string PortalFiguresText();
+void ShowPortalToast(std::string text);
+
 // For a game integration that knows when the game shows its portal error screen ("too many
 // Skylanders / items on the portal", a figure it can't read; `reason` is the game's own reason
 // code, see magic_moment_watch.cpp): opens the portal check. It lists everything on the emulated

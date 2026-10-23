@@ -35,6 +35,7 @@
 #include "portal_rex/input_pictures.h"
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
+#include "portal_rex/problem_note.h"
 #include "portal_rex/settings_file.h"
 
 REXCVAR_DEFINE_UINT32(restart_wait_pid, 0, "Launcher",
@@ -1117,6 +1118,7 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
                           std::vector<SettingsPage> pages, std::filesystem::path config_path) {
   g_drawer = drawer;
   g_app_context = app_context;
+  RegisterProblemNote(drawer, app_context);
   g_state.pages = std::move(pages);
   g_state.config_path = std::move(config_path);
   if (REXCVAR_GET(started_by_launcher)) {
@@ -1156,7 +1158,10 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
 
 void SetControllerPicture(ControllerPicture picture) { g_picture = std::move(picture); }
 
-void ShutdownSettingsMenu() { g_menu.reset(); }
+void ShutdownSettingsMenu() {
+  g_menu.reset();
+  ShutdownProblemNote();
+}
 
 namespace {
 
@@ -1206,6 +1211,18 @@ void RestartGame() {
 }  // namespace
 
 void AddQuitSettings(SettingsPage& page) {
+  // Problem melden (problem_note.h): the picture of this moment, the kind of problem, a few words.
+  Setting report;
+  report.en = "Report a problem";
+  report.de = "Problem melden";
+  report.help_en =
+      "Keeps the picture of this moment and what kind of problem it is (and a few words typed on the "
+      "keyboard if you like). Report a problem in Core of Light sends it along with the logs.";
+  report.help_de =
+      "Speichert das Bild von genau jetzt und welche Art Problem es ist (auf Wunsch mit ein paar "
+      "Worten von der Tastatur). Problem melden im Hub schickt es mit den Logs mit.";
+  report.action = [] { OpenProblemNote(); };
+  page.settings.push_back(std::move(report));
   Setting quit;
   quit.en = "Quit the game";
   quit.de = "Spiel beenden";

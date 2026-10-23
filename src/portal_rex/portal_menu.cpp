@@ -4286,6 +4286,47 @@ void TakeItemOff() {
 
 }  // namespace
 
+bool CaptureGamePicture(int& width, int& height, std::vector<uint8_t>& rgba) {
+  rex::ui::Presenter* presenter = g_immediate_drawer ? g_immediate_drawer->presenter() : nullptr;
+  rex::ui::RawImage image;
+  if (!presenter || !presenter->CaptureGuestOutput(image) || !image.width || !image.height) return false;
+  width = int(image.width);
+  height = int(image.height);
+  rgba.resize(size_t(width) * height * 4);
+  for (int y = 0; y < height; ++y) {
+    const uint8_t* src = image.data.data() + size_t(y) * image.stride;
+    uint8_t* dst = rgba.data() + size_t(y) * width * 4;
+    for (int x = 0; x < width; ++x) {
+      dst[x * 4 + 0] = src[x * 4 + 0];
+      dst[x * 4 + 1] = src[x * 4 + 1];
+      dst[x * 4 + 2] = src[x * 4 + 2];
+      dst[x * 4 + 3] = 255;  // R8 G8 B8 X8
+    }
+  }
+  return true;
+}
+
+std::string PortalFiguresText() {
+  std::string text;
+  auto add = [&](const std::string& part) { text += (text.empty() ? "" : ", ") + part; };
+  portal::SoftwarePortal* software = GetSoftwarePortal();
+  for (int slot = 0; software && slot < portal::kMaxFigures; ++slot) {
+    const SkylanderInfo* sky = software->HasFigure(slot) ? FigureIn(slot) : nullptr;
+    if (!sky) continue;
+    // Whose it is when the menu put it there (figures put on some other way have no player).
+    std::string who;
+    for (uint32_t user = 0; user < g_player_slots.size(); ++user) {
+      const auto& slots = g_player_slots[user];
+      if (std::find(slots.begin(), slots.end(), slot) != slots.end()) who = " (player " + std::to_string(user + 1) + ")";
+    }
+    if (IsItemSlot(slot)) who = " (item)";
+    add(FigureName(*sky) + who);
+  }
+  return text;
+}
+
+void ShowPortalToast(std::string text) { ShowToast(std::move(text)); }
+
 ImTextureID menu_draw::GameArtTexture(const std::string& key) { return ArtTexture(key); }
 
 // --- Weiterspielen (continue_game) ---
