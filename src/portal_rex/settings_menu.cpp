@@ -1286,4 +1286,20 @@ void WaitForRestartedInstance() {
 #endif
 }
 
+void ResolutionFromScreenIfAutomatic() {
+  if (!rex::cvar::GetFlagByName("settings_schema").empty()) return;  // the launcher shows the file's value
+  if (!rex::cvar::GetFlagByName("resolution").empty() || !CvarOn("fullscreen")) return;
+#if defined(_WIN32)
+  // The primary screen's mode in pixels, whatever its scaling (under Gamescope: its output).
+  DEVMODEW mode = {};
+  mode.dmSize = sizeof(mode);
+  if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) || !mode.dmPelsWidth || !mode.dmPelsHeight) {
+    return;
+  }
+  const std::string size = std::to_string(mode.dmPelsWidth) + "x" + std::to_string(mode.dmPelsHeight);
+  rex::cvar::SetFlagByName("resolution", size.c_str());
+  REXLOG_INFO("Settings menu: resolution automatic in fullscreen, the screen's {}", size);
+#endif
+}
+
 }  // namespace skylanders

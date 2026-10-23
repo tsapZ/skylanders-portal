@@ -98,4 +98,11 @@ void AddQuitSettings(SettingsPage& page);
 // files closed), at most 20 s. Called by InstallPortal (portal_rex.h), early in OnPostSetup.
 void WaitForRestartedInstance();
 
+// "Fenstergröße: Automatisch" in fullscreen: `resolution` set, for this start only (nothing is
+// written), to the screen's mode, so a 21:9 or 32:9 screen gets the ultrawide picture by itself
+// (the ultrawide hooks and the presenter take the aspect from `resolution`; a colleague's 21:9
+// screen stayed 16:9, 2026-10-23). Nothing when started for the launcher's schema, which shows the
+// file's own value. Call first thing in OnPreSetup.
+void ResolutionFromScreenIfAutomatic();
+
 }  // namespace skylanders
