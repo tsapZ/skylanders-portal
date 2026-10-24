@@ -23,6 +23,7 @@
 #include "portal/data_folder.h"
 #include "portal/figure_file.h"
 #include "portal_rex/settings_menu.h"
+#include "portal_rex/settings_schema.h"
 #include "portal/hybrid/real_portal_bridge.h"
 #include "portal/portal_device.h"
 #include "portal/portal_mode.h"
@@ -440,6 +441,8 @@ void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem:
     g_data_folder_note = "Data folder: " + Utf8Path(user_data_root) + " (--user_data_root)";
     return;
   }
+  // The launcher asking for the settings pages needs no user data: nothing is copied then.
+  if (SettingsSchemaRequested()) return;
   const fs::path old_dir = user_data_root;
   const fs::path target = DataFolder() / fs::path(std::u8string(game.begin(), game.end()));
   std::error_code ec;
