@@ -72,6 +72,9 @@ REXCVAR_DEFINE_STRING(portal_menu_leave_button, "b", "Portal",
                       "The button of the game's portal screen that lets a second player leave "
                       "(\"b\" in Giants and Swap Force, \"rs\" in Spyro's Adventure); the menu's "
                       "\"Leave the game\" presses it");
+REXCVAR_DEFINE_BOOL(portal_menu_nintendo, false, "Portal",
+                    "List Bowser, Donkey Kong and their vehicles too (their toys work only on "
+                    "Nintendo's consoles; the Xbox 360 discs don't have them)");
 REXCVAR_DEFINE_STRING(portal_menu_hidden_categories, "", "Portal",
                       "Figure kinds the game can't read, left out of the portal menu, separated "
                       "by ';' (catalog categories, e.g. \"Sidekicks\" in Spyro's Adventure)");
@@ -877,7 +880,7 @@ struct Character {
   std::string debut_game;
   bool swapper = false;
   bool item = false;
-  bool sidekick = false;  // tags along next to the player's Skylander
+  bool sidekick = false;  // a companion (IsCompanion): goes on next to the player's Skylander
   std::vector<Version> versions;  // catalog (release) order
 
   bool HasVersionFrom(std::string_view game) const {
@@ -947,7 +950,36 @@ std::vector<std::string> ShownGames(const std::vector<std::string>& games) {
   return shown.empty() ? games : shown;
 }
 
-bool IsSidekick(const SkylanderInfo* sky) { return sky && sky->category == "Sidekicks"; }
+// What goes on the portal next to a player's Skylander instead of being one, by the game the menu
+// runs in (its newest game in portal_menu_games): up to Swap Force the sidekicks, which only tag
+// along; in Trap Team the traps (one trap slot, as on the Traptanium portal); from SuperChargers on
+// the vehicles (each driver's own). From Trap Team on the old sidekicks are Minis the game plays,
+// so they go on as a player's Skylander (the colleague's reports, TrapTeamRecomp #11,
+// SuperChargersRecomp #6, Core of Light #32: a trap or a vehicle lifted the player's Skylander).
+enum class CompanionKind { kSidekick, kTrap, kVehicle };
+CompanionKind GameCompanionKind() {
+  const std::vector<std::string> games = SplitList(REXCVAR_GET(portal_menu_games));
+  if (Contains(games, "SuperChargers") || Contains(games, "Imaginators")) return CompanionKind::kVehicle;
+  if (Contains(games, "Trap Team")) return CompanionKind::kTrap;
+  return CompanionKind::kSidekick;
+}
+
+bool IsCompanion(const SkylanderInfo* sky) {
+  if (!sky) return false;
+  switch (GameCompanionKind()) {
+    case CompanionKind::kSidekick: return sky->category == "Sidekicks";
+    case CompanionKind::kTrap: return sky->category == "Traps";
+    case CompanionKind::kVehicle: return sky->category == "Vehicles" || sky->category == "Vehicle Variants";
+  }
+  return false;
+}
+
+// The Nintendo characters and their vehicles: their toys work only on Nintendo's consoles, the
+// Xbox 360 discs don't have them (the game only says the Skylander isn't supported; figure_info.cpp,
+// ImaginatorsRecomp #7). Hidden unless portal_menu_nintendo.
+bool IsNintendoOnly(const SkylanderInfo& sky) {
+  return sky.id == 3423 || sky.id == 3424 || sky.id == 3233 || sky.id == 3240;
+}
 
 // The game's button for "leave the game" on its portal screen (portal_menu_leave_button).
 uint16_t LeaveButton() {
@@ -1073,6 +1105,7 @@ class Library {
         characters_.push_back(std::move(item));
         continue;
       }
+      if (IsNintendoOnly(sky) && !REXCVAR_GET(portal_menu_nintendo)) continue;
       // Kinds the game can't read (sidekicks in Spyro's Adventure) aren't listed, and their ids
       // stay unknown, so a later game's figure with such an id isn't either.
       if (!IsPlayableCategory(sky.category) || IsHiddenCategory(sky.category)) {
@@ -1110,7 +1143,7 @@ class Library {
         character.element = portal::FigureElement(sky);
         character.debut_game = debut[name];
         character.swapper = portal::GetSwapperHalf(sky) == SwapperHalf::kTop;
-        character.sidekick = IsSidekick(&sky);
+        character.sidekick = IsCompanion(&sky);
         characters_.push_back(std::move(character));
       }
       characters_[it->second].versions.push_back(version);
@@ -1532,10 +1565,25 @@ int g_item_slot = -1;
 // shared like the item: any player can bring another (it replaces the first) or take it off.
 int g_sidekick_slot = -1;
 uint32_t g_sidekick_user = 0;
+// A trap goes in that shared slot too (one at a time, a new one in place of the old one), a vehicle
+// in its driver's own slot (SuperChargers: each player drives one).
+std::array<int, rex::input::kMaxGuestUsers> g_vehicle_slots = [] {
+  std::array<int, rex::input::kMaxGuestUsers> slots;
+  slots.fill(-1);
+  return slots;
+}();
+
+int& CompanionSlot(uint32_t user) {
+  return GameCompanionKind() == CompanionKind::kVehicle ? g_vehicle_slots[user % g_vehicle_slots.size()]
+                                                       : g_sidekick_slot;
+}
 
 bool IsItemSlot(int slot) { return slot >= 0 && slot == g_item_slot; }
 
-bool IsSidekickSlot(int slot) { return slot >= 0 && slot == g_sidekick_slot; }
+bool IsSidekickSlot(int slot) {
+  return slot >= 0 && (slot == g_sidekick_slot ||
+                       std::find(g_vehicle_slots.begin(), g_vehicle_slots.end(), slot) != g_vehicle_slots.end());
+}
 
 // A slot that belongs to no player's Skylander: the item or a sidekick.
 bool IsExtraSlot(int slot) { return IsItemSlot(slot) || IsSidekickSlot(slot); }
@@ -1642,7 +1690,7 @@ std::vector<std::pair<uint32_t, const SkylanderInfo*>> OtherPlayersFigures(uint3
     if (!software->HasFigure(slot) || IsExtraSlot(slot)) continue;
     const SkylanderInfo* sky = FigureIn(slot);
     const uint32_t owner = OwnerOf(slot);
-    if (sky && !IsItem(sky) && !IsSidekick(sky) && owner != user) figures.emplace_back(owner, sky);
+    if (sky && !IsItem(sky) && !IsCompanion(sky) && owner != user) figures.emplace_back(owner, sky);
   }
   return figures;
 }
@@ -1666,7 +1714,7 @@ std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
   if (slots.empty() && user == 0) {
     for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
       if (software->HasFigure(slot) && !OwnedByOther(slot, user) && !IsExtraSlot(slot) &&
-          !IsItem(FigureIn(slot)) && !IsSidekick(FigureIn(slot))) {
+          !IsItem(FigureIn(slot)) && !IsCompanion(FigureIn(slot))) {
         slots.push_back(slot);
       }
     }
@@ -1742,10 +1790,11 @@ const SkylanderInfo* PortalItem() {
   return FigureIn(slot);
 }
 
-// The sidekick put on through the menu, if it's still there.
-const SkylanderInfo* PortalSidekick() {
+// The companion (sidekick, trap, or this player's vehicle) put on through the menu, if it's still
+// there.
+const SkylanderInfo* PortalSidekick(uint32_t user) {
   portal::SoftwarePortal* software = GetSoftwarePortal();
-  int& slot = g_sidekick_slot;
+  int& slot = CompanionSlot(user);
   if (!software || slot < 0 || !software->HasFigure(slot)) {
     slot = -1;
     return nullptr;
@@ -1773,7 +1822,7 @@ void SetPortalItem(uint32_t user, const std::optional<std::filesystem::path>& pa
 }
 
 void SetPortalSidekick(uint32_t user, const std::optional<std::filesystem::path>& path) {
-  SetExtraFigure(g_sidekick_slot, user, path);
+  SetExtraFigure(CompanionSlot(user), user, path);
   g_sidekick_user = user;
 }
 
@@ -2051,7 +2100,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         if (!name.empty()) taken_.emplace(name, owner);
       }
       current_item_ = PortalItem();
-      current_sidekick_ = PortalSidekick();
+      current_sidekick_ = PortalSidekick(user_);
       // Recent starts with what is on the portal besides the Skylanders, so A takes it off.
       for (const SkylanderInfo* extra : {current_item_, current_sidekick_}) {
         if (auto index = library_.CharacterIndex(extra)) extras_.push_back(*index);
@@ -2727,8 +2776,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     pending_paths_.clear();
     restore_ = false;
     item_change_ = false;
-    // A player who leaves takes the sidekick along if they brought it.
-    sidekick_change_ = current_sidekick_ != nullptr && g_sidekick_user == user_;
+    // A player who leaves takes the sidekick or trap along if they brought it, and their vehicle.
+    sidekick_change_ = current_sidekick_ != nullptr &&
+                       (GameCompanionKind() == CompanionKind::kVehicle || g_sidekick_user == user_);
     sidekick_path_.reset();
     leave_ = true;
     state_ = State::kWaiting;
@@ -2828,9 +2878,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   void ToggleSidekick(const SkylanderInfo& sidekick) {
     if (current_sidekick_ && current_sidekick_->id == sidekick.id) {
       sidekick_path_.reset();
-      REXLOG_INFO("Portal menu: player {} takes off sidekick {}", user_ + 1, sidekick.name);
+      REXLOG_INFO("Portal menu: player {} takes off companion {}", user_ + 1, sidekick.name);
     } else {
-      if (RealPortalHas(IsSidekick)) {
+      if (RealPortalHas(IsCompanion)) {
         ShowToast(T(Text::kRealSidekick));
         return;
       }
@@ -2849,7 +2899,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         return;
       }
       sidekick_path_ = path;
-      REXLOG_INFO("Portal menu: player {} brings sidekick {}", user_ + 1, sidekick.name);
+      REXLOG_INFO("Portal menu: player {} brings companion {}", user_ + 1, sidekick.name);
     }
     sidekick_change_ = true;
     StartCancel();
@@ -3646,8 +3696,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const SkylanderInfo* sky = figures[detail_half_];
     const OwnedFigure* owned = library_.Owned(sky);
     const portal::FigureStats* stats = owned && owned->stats && !IsItem(sky) ? &*owned->stats : nullptr;
-    // Items and sidekicks keep nothing on the figure: a smaller panel with what they do.
-    const bool simple = IsItem(sky) || IsSidekick(sky);
+    // Items and sidekicks keep nothing on the figure: a smaller panel with what they do. Traps
+    // (their villain) and vehicles (their mods) do, and get the usual one.
+    const bool simple = IsItem(sky) || (IsCompanion(sky) && GameCompanionKind() == CompanionKind::kSidekick);
     const auto upgrades = !simple ? UpgradesFor(*sky) : nullptr;
 
     const float avail_w = area1.x - area0.x - S(24), avail_h = area1.y - area0.y - S(24);
@@ -3722,7 +3773,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         Label(dl, BoldFont(), S(17), {lx, y}, kDim, text, left_w - S(20));
         y += TextSize(BoldFont(), S(17), text, left_w - S(20)).y + S(8);
       }
-    } else if (!IsItem(sky) && !IsSidekick(sky)) {
+    } else if (!IsItem(sky) && !IsCompanion(sky)) {
       Label(dl, BoldFont(), S(19), {lx, y}, kDim, T(owned ? Text::kNoProgress : Text::kNewFigure),
             left_w - S(20));
       y += S(80);
@@ -4005,7 +4056,7 @@ std::vector<PortalEntry> PortalEntries() {
     const SkylanderInfo* sky = FigureIn(slot);
     if (IsItem(sky) || IsItemSlot(slot)) {
       entry.kind = PortalEntry::Kind::kItem;
-    } else if (IsSidekick(sky) || IsSidekickSlot(slot)) {
+    } else if (IsCompanion(sky) || IsSidekickSlot(slot)) {
       entry.kind = PortalEntry::Kind::kSidekick;
     }
     entry.slots.push_back(slot);
@@ -4166,6 +4217,9 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
         RemoveFigureFromSlot(slot);
         if (slot == g_item_slot) g_item_slot = -1;
         if (slot == g_sidekick_slot) g_sidekick_slot = -1;
+        for (int& vehicle : g_vehicle_slots) {
+          if (slot == vehicle) vehicle = -1;
+        }
         for (auto& slots : g_player_slots) {
           slots.erase(std::remove(slots.begin(), slots.end(), slot), slots.end());
         }
@@ -4397,7 +4451,7 @@ namespace {
 void RealFigureArrived(int slot) {
   portal::SoftwarePortal* software = GetSoftwarePortal();
   const SkylanderInfo* sky = FigureIn(slot);
-  if (!software || !sky || IsItem(sky) || IsSidekick(sky)) return;
+  if (!software || !sky || IsItem(sky) || IsCompanion(sky)) return;
   auto has_figure = [&](uint32_t u) {
     return std::any_of(g_player_slots[u].begin(), g_player_slots[u].end(),
                        [&](int s) { return s != slot && software->HasFigure(s); });
