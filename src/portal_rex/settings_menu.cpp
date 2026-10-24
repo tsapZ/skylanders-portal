@@ -731,6 +731,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     if (a.prev_page || a.next_page) {
       page_ = (page_ + pages + (a.next_page ? 1 : -1)) % pages;
       row_ = scroll_ = 0;
+      followed_row_ = SIZE_MAX;  // follow the choice again
     }
     const SettingsPage* page = Page();
     const size_t rows = page ? page->settings.size() : 0;
@@ -910,6 +911,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       if (!confirm_ && !ask_ && ImGui::IsMouseHoveringRect(t0, t1) && ImGui::IsMouseClicked(0)) {
         page_ = i;
         row_ = scroll_ = 0;
+        followed_row_ = SIZE_MAX;  // follow the choice again
       }
       x = t1.x + S(12);
     }
@@ -920,8 +922,8 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     if (!page) return;
     const float row_h = S(64), gap = S(8);
     const size_t visible = std::max<size_t>(1, size_t((b.y - a.y + gap) / (row_h + gap)));
-    if (row_ < scroll_) scroll_ = row_;
-    if (row_ >= scroll_ + visible) scroll_ = row_ - visible + 1;
+    ScrollList(scroll_, followed_row_, wheel_, row_, visible, page->settings.size(),
+               !confirm_ && !ask_);
     for (size_t i = scroll_; i < page->settings.size() && i < scroll_ + visible; ++i) {
       const Setting& s = page->settings[i];
       const ImVec2 r0{a.x, a.y + (i - scroll_) * (row_h + gap)}, r1{b.x, r0.y + row_h};
@@ -1277,6 +1279,8 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   size_t page_ = 0;
   size_t row_ = 0;
   size_t scroll_ = 0;
+  size_t followed_row_ = SIZE_MAX;  // ScrollList's
+  float wheel_ = 0.0f;
   Clock::time_point open_time_ = Clock::now();
   std::unordered_map<uint64_t, PadReader> pads_;  // by device
   bool keyboard_view_ = false;  // the controls page shows the keyboard (last used) instead of a pad

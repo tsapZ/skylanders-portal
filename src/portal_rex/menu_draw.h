@@ -4,6 +4,7 @@
 // a 1080p-based scale, outlined text, gradients, the gold-framed panel and button hints. Everything
 // draws straight into an ImDrawList; UI thread only.
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -70,6 +71,14 @@ float HintWidth(std::string_view glyph, std::string_view label, bool round, std:
 // The game's picture for an art key (portal_menu.h SetArtImageProvider) as a texture, kept once
 // made; a null id while there is none (yet). Lives in portal_menu.cpp, which owns the textures.
 ImTextureID GameArtTexture(const std::string& key);
+
+// A list's first shown row. The mouse wheel (when `wheel_on`) moves it a row per notch and leaves
+// the chosen row where it is; it follows the chosen row only when that changes (the keys, the pad),
+// so the choice stays in view (SwapForceRecomp #65, as Core of Light's settings). `followed` is the
+// chosen row it last followed, `wheel` the part of a notch left over (a touchpad's small steps add
+// up); both belong to the list. UI thread.
+void ScrollList(size_t& first, size_t& followed, float& wheel, size_t chosen, size_t visible,
+                size_t total, bool wheel_on);
 
 // Multiplies the alpha of every vertex drawn into `dl` since `first_vertex` (a fade-in).
 void FadeVertices(ImDrawList* dl, int first_vertex, float alpha);

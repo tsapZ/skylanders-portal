@@ -391,6 +391,26 @@ float Hint(ImDrawList* dl, ImVec2 pos, std::string_view glyph, ImU32 glyph_col,
   return HintWidth(glyph, label, round, key);
 }
 
+void ScrollList(size_t& first, size_t& followed, float& wheel, size_t chosen, size_t visible,
+                size_t total, bool wheel_on) {
+  long long top = static_cast<long long>(first);
+  if (wheel_on) {
+    wheel += ImGui::GetIO().MouseWheel;
+    const int notches = static_cast<int>(wheel);
+    wheel -= static_cast<float>(notches);
+    top -= notches;  // up (positive) shows earlier rows
+  }
+  const long long row = static_cast<long long>(chosen);
+  const long long shown = static_cast<long long>(std::max<size_t>(1, visible));
+  if (chosen != followed) {
+    followed = chosen;
+    if (row < top) top = row;
+    if (row >= top + shown) top = row - shown + 1;
+  }
+  const long long last = total > visible ? static_cast<long long>(total - visible) : 0;
+  first = static_cast<size_t>(std::clamp(top, 0LL, last));
+}
+
 void FadeVertices(ImDrawList* dl, int first_vertex, float alpha) {
   alpha = std::clamp(alpha, 0.0f, 1.0f);
   if (alpha >= 1.0f) return;

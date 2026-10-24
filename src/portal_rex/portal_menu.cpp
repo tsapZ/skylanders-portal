@@ -2253,6 +2253,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   // to take off, not to be picked by a quick A); with nothing in it, the lifted figure's character.
   void OpenFirstTab() {
     tab_ = element_ = selected_ = scroll_row_ = 0;
+    followed_row_ = SIZE_MAX;  // follow the choice again
     if (!library_.recent().empty()) selected_ = extras_.size();
     if (library_.recent().empty() && extras_.empty() && library_.tabs().size() > 1) {
       tab_ = 1;
@@ -2425,6 +2426,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     element_ = 0;
     selected_ = 0;
     scroll_row_ = 0;
+    followed_row_ = SIZE_MAX;  // follow the choice again
     if (CurrentTab().items && current_item_) {
       size_t tab = 0;
       if (library_.Locate(current_item_, tab, element_, selected_) && tab != tab_) {
@@ -2439,6 +2441,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     element_ = (element_ + tab.rows.size() + delta) % tab.rows.size();
     selected_ = 0;
     scroll_row_ = 0;
+    followed_row_ = SIZE_MAX;  // follow the choice again
   }
 
   void HandleInput(const Actions& a) {
@@ -2545,6 +2548,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     choice_ = 0;
     choice_scroll_ = 0;
+    followed_choice_ = SIZE_MAX;  // follow the choice again
     state_ = State::kChoosing;
   }
 
@@ -2764,6 +2768,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     build_[0].columns.clear();
     build_[1].columns.clear();
     tab_ = element_ = selected_ = scroll_row_ = 0;
+    followed_row_ = SIZE_MAX;  // follow the choice again
     for (size_t t = 0; t < library_.tabs().size(); ++t) {
       if (library_.tabs()[t].title == title) tab_ = t;
     }
@@ -3063,6 +3068,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         element_ = 0;
         selected_ = 0;
         scroll_row_ = 0;
+        followed_row_ = SIZE_MAX;  // follow the choice again
       }
       tx = b.x + S(12);
     }
@@ -3089,9 +3095,13 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     columns_ = std::max<size_t>(1, size_t((grid1.x - area0.x + gap) / (card_w + gap)));
     const size_t rows_visible =
         std::max<size_t>(1, size_t((grid1.y - area0.y + gap) / (card_h + gap)));
-    const size_t sel_row = selected_ / columns_;
-    if (sel_row < scroll_row_) scroll_row_ = sel_row;
-    if (sel_row >= scroll_row_ + rows_visible) scroll_row_ = sel_row - rows_visible + 1;
+    // Another card in the same row brings that row back into view too.
+    if (selected_ != followed_card_) {
+      followed_card_ = selected_;
+      followed_row_ = SIZE_MAX;
+    }
+    ScrollList(scroll_row_, followed_row_, wheel_, selected_ / columns_, rows_visible,
+               (count + columns_ - 1) / columns_, state_ == State::kBrowsing);
 
     dl->PushClipRect({area0.x - S(8), area0.y - S(8)}, {grid1.x + S(8), grid1.y}, true);
     for (size_t i = scroll_row_ * columns_; i < count && i < (scroll_row_ + rows_visible) * columns_;
@@ -3172,6 +3182,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         element_ = e;
         selected_ = 0;
         scroll_row_ = 0;
+        followed_row_ = SIZE_MAX;  // follow the choice again
       }
       x = b.x + S(10);
     }
@@ -3240,7 +3251,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       return;
     }
     if (character.swapper) Pill(dl, {p0.x + S(6), p0.y + S(6)}, "SWAP", kGold, kInk);
-    if (character.sidekick && current_sidekick_ && current_sidekick_->id == shown->id) {
+    const bool on_portal =
+        character.sidekick && current_sidekick_ && current_sidekick_->id == shown->id;
+    if (on_portal) {
       const float w = PillWidth(T(Text::kOnPortal), 15);
       Pill(dl, {(p0.x + p1.x - w) / 2, p1.y - S(30)}, T(Text::kOnPortal), Rgba(60, 170, 80),
            kWhite, 15);
@@ -3250,7 +3263,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (auto trait = TraitOf(trait_sky, OwnedStats(trait_sky))) {
       DrawTraitSymbol(dl, {p1.x - S(21), p1.y - S(21)}, S(16), *trait);
     }
-    if (character.versions.size() > 1) {
+    // Not under "on the portal" (a vehicle with variants: the two pills sat on each other).
+    if (character.versions.size() > 1 && !on_portal) {
       Pill(dl, {p0.x + S(38), p1.y - S(27)},
            std::to_string(character.versions.size()) + " " + T(Text::kVersions),
            Rgba(10, 12, 30, 200), kWhite);
@@ -3544,8 +3558,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     ImVec2 a, b;
     DrawOverlayPanel(dl, area0, area1, {S(640), S(90) + visible * (row_h + S(8))}, a, b);
     Label(dl, BoldFont(), S(28), {a.x + S(28), a.y + S(22)}, kGold, T(Text::kChooseVersion));
-    if (choice_ < choice_scroll_) choice_scroll_ = choice_;
-    if (choice_ >= choice_scroll_ + visible) choice_scroll_ = choice_ - visible + 1;
+    ScrollList(choice_scroll_, followed_choice_, wheel_, choice_, visible, choices_.size(),
+               state_ == State::kChoosing);
     for (size_t i = choice_scroll_; i < choices_.size() && i < choice_scroll_ + visible; ++i) {
       const Choice& choice = choices_[i];
       const ImVec2 r0{a.x + S(24), a.y + S(78) + (i - choice_scroll_) * (row_h + S(8))};
@@ -3948,10 +3962,14 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   size_t element_ = 0;  // row of the current tab
   size_t selected_ = 0;
   size_t scroll_row_ = 0;
+  size_t followed_row_ = SIZE_MAX;  // ScrollList's, for the cards
+  size_t followed_card_ = SIZE_MAX;
   size_t columns_ = 1;
   std::vector<Choice> choices_;
   size_t choice_ = 0;
   size_t choice_scroll_ = 0;
+  size_t followed_choice_ = SIZE_MAX;  // ScrollList's, for the variants
+  float wheel_ = 0.0f;                 // ScrollList's: the open list's part of a notch
   BuildHalf build_[2];  // the top grid, the bottom grid
   int build_focus_ = 0;
   std::optional<RecentEntry> build_keep_;  // the recent entry the builder changes
