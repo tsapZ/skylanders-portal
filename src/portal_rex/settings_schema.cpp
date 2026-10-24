@@ -114,7 +114,10 @@ std::string SettingJson(const Setting& s) {
 bool SettingsSchemaRequested() { return !REXCVAR_GET(settings_schema).empty(); }
 
 void ApplyGraphicsDefaults() {
-  if (!rex::cvar::HasNonDefaultValue("anisotropic_override") &&
+  // Only when nothing set it: 4x is the SDK's own default, so a chosen 4x (anisotropic_override = 3
+  // in the settings file) counted as unset and became 16x again (a colleague's report and fix,
+  // Core of Light #21).
+  if (rex::cvar::GetFlagSource("anisotropic_override") == rex::cvar::Source::kDefault &&
       !rex::cvar::SetFlagByName("anisotropic_override", "5")) {
     REXLOG_WARN("Could not set anisotropic_override to 16x");
   }
