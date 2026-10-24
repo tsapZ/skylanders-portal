@@ -14,6 +14,7 @@ include(cmake/game_icon.cmake)
 # without the SDK such as the Core of Light launcher. On Windows it needs no SDK tree: AES and MD5
 # come from Windows (CNG). Built whenever REXSDK_DIR isn't set.
 set(SKYLANDERS_PORTAL_FIGURE_SOURCES
+    src/portal/data_folder.cpp
     src/portal/figure_catalog.cpp
     src/portal/figure_crypto.cpp
     src/portal/figure_file.cpp
@@ -28,13 +29,14 @@ if(NOT REXSDK_DIR)
     add_library(skylanders_portal_figures STATIC ${SKYLANDERS_PORTAL_FIGURE_SOURCES})
     target_include_directories(skylanders_portal_figures PUBLIC src)
     target_compile_definitions(skylanders_portal_figures PRIVATE SKYLANDERS_PORTAL_CRYPTO_CNG)
-    target_link_libraries(skylanders_portal_figures PRIVATE bcrypt)
+    target_link_libraries(skylanders_portal_figures PRIVATE bcrypt shell32 ole32)
     target_compile_features(skylanders_portal_figures PUBLIC cxx_std_23)
     return()
 endif()
 
 add_library(skylanders_portal_core STATIC
     src/portal/audio.cpp
+    src/portal/data_folder.cpp
     src/portal/figure_catalog.cpp
     src/portal/figure_crypto.cpp
     src/portal/figure_file.cpp
@@ -55,6 +57,10 @@ target_include_directories(skylanders_portal_core PRIVATE
     "${REXSDK_DIR}/thirdparty/aes_128"
     "${REXSDK_DIR}/thirdparty/libmspack/cabextract")
 target_compile_features(skylanders_portal_core PUBLIC cxx_std_23)
+if(WIN32)
+    # data_folder.cpp: the Documents and AppData known folders.
+    target_link_libraries(skylanders_portal_core PUBLIC shell32 ole32)
+endif()
 
 option(SKYLANDERS_PORTAL_TESTS "Build skylanders-portal unit tests" ON)
 if(SKYLANDERS_PORTAL_TESTS)

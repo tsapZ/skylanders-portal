@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include <rex/cvar.h>
 
@@ -40,10 +41,20 @@ namespace skylanders {
 // if it doesn't exist yet) so the overlay has somewhere to look without the user passing a flag.
 void InstallPortal(const std::filesystem::path& default_figures_dir);
 
+// For a game's OnConfigurePaths: its user data in the one data folder of every game
+// (portal/data_folder.h), <data folder>\<game> ("Spyro's Adventure", ...), unless --user_data_root
+// names a folder. The first time, the game's old folder in Documents (what `user_data_root` holds on
+// the way in, Documents\ssarecomp) is copied there and keeps a note; if that fails the old folder
+// stays in use. The shader cache goes along unless --cache_root names one. Logging starts after
+// OnConfigurePaths: SharedFiguresDir logs what this did.
+void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem::path& cache_root,
+                         std::string_view game);
+
 // The figure folder every game shares, as the real figures lie next to the portal whichever game
-// runs: "Skylanders\Figures" next to the game's own data folder (Documents\swapforcerecomp ->
-// Documents\Skylanders\Figures). A run with a copied --user_data_root gets its own one next to the
-// copy, so tests never touch the real figures. The first time a game uses it, the files of its old
+// runs: Figures in the data folder (Documents\Skylanders\Giants -> Documents\Skylanders\Figures),
+// or for an old per-game folder "Skylanders\Figures" next to it (portal/data_folder.h SharedBase). A
+// run with a copied --user_data_root gets its own one next to the copy, so tests never touch the
+// real figures. The first time a game uses it, the files of its old
 // per-game folder (<user_data_root>\figures) are copied in, never over a file the shared folder
 // already has, and a note is left in the old folder, which then stays as a backup and is no longer
 // used. Pass the result to InstallPortal.

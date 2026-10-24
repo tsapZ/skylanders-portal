@@ -18,7 +18,9 @@
 #include <rex/kernel/xam/noncontroller.h>
 #include <rex/ui/keybinds.h>
 #include <rex/logging.h>
+#include <rex/runtime.h>
 
+#include "portal/data_folder.h"
 #include "portal/figure_file.h"
 #include "portal_rex/settings_menu.h"
 #include "portal/hybrid/real_portal_bridge.h"
@@ -426,11 +428,49 @@ void SwitchPortalMode(std::string_view mode_text) {
 
 namespace skylanders {
 
+namespace {
+// What UseSharedDataFolder did, for the log (it runs before logging starts).
+std::string g_data_folder_note;
+}  // namespace
+
+void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem::path& cache_root,
+                         std::string_view game) {
+  namespace fs = std::filesystem;
+  if (!REXCVAR_GET(user_data_root).empty()) {
+    g_data_folder_note = "Data folder: " + Utf8Path(user_data_root) + " (--user_data_root)";
+    return;
+  }
+  const fs::path old_dir = user_data_root;
+  const fs::path target = DataFolder() / fs::path(std::u8string(game.begin(), game.end()));
+  std::error_code ec;
+  if (!fs::exists(target, ec) && fs::is_directory(old_dir, ec) && !fs::is_empty(old_dir, ec)) {
+    const CopyResult copy = CopyFolderVerified(old_dir, target);
+    if (!copy.ok) {
+      g_data_folder_note = "Data folder: could not copy " + Utf8Path(old_dir) + " to " + Utf8Path(target) +
+                           " (" + copy.error + "); the old folder stays in use";
+      return;
+    }
+    WriteMovedNote(old_dir, target);
+    g_data_folder_note = "Data folder: " + Utf8Path(target) + ", copied from " + Utf8Path(old_dir) + " (" +
+                         std::to_string(copy.files) + " files, " + std::to_string(copy.bytes / 1024) +
+                         " KB); the old folder stays until Core of Light asks";
+  } else {
+    g_data_folder_note = "Data folder: " + Utf8Path(target);
+  }
+  fs::create_directories(target, ec);
+  user_data_root = target;
+  if (REXCVAR_GET(cache_root).empty()) cache_root = target / "cache";
+}
+
 std::filesystem::path SharedFiguresDir(const std::filesystem::path& user_data_root) {
   namespace fs = std::filesystem;
+  if (!g_data_folder_note.empty()) {
+    REXLOG_INFO("{}", g_data_folder_note);
+    g_data_folder_note.clear();
+  }
   const fs::path old_dir = user_data_root / "figures";
   if (user_data_root.parent_path().empty()) return old_dir;
-  const fs::path shared = user_data_root.parent_path() / "Skylanders" / "Figures";
+  const fs::path shared = SharedBase(user_data_root) / "Figures";
   std::error_code ec;
   fs::create_directories(shared, ec);
   if (ec) {

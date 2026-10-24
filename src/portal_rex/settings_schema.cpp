@@ -12,6 +12,8 @@
 #include <rex/runtime.h>
 #include <rex/system/gpu_plugin.h>
 
+#include "portal/data_folder.h"
+
 REXCVAR_DEFINE_STRING(settings_schema, "", "Launcher",
                       "Write the settings menu's pages to this file (JSON) and quit; for the "
                       "Core of Light launcher");
@@ -121,10 +123,8 @@ void ApplyGraphicsDefaults() {
 void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game) {
   if (rex::cvar::HasNonDefaultValue("texture_replace_dir")) return;
   // Where SharedPicturesDir (portal_menu.h) puts the pictures, with Textures for Pictures.
-  const std::filesystem::path base =
-      user_data_root.parent_path().empty() ? user_data_root : user_data_root.parent_path() / "Skylanders";
   const std::filesystem::path dir =
-      base / "Textures" / std::filesystem::path(std::u8string(game.begin(), game.end()));
+      SharedBase(user_data_root) / "Textures" / std::filesystem::path(std::u8string(game.begin(), game.end()));
   std::error_code ec;
   if (!std::filesystem::is_directory(dir, ec)) return;
   const std::u8string u8 = dir.u8string();

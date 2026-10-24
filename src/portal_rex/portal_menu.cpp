@@ -36,6 +36,7 @@
 #include <rex/ui/keybinds.h>
 #include <rex/ui/windowed_app_context.h>
 
+#include "portal/data_folder.h"
 #include "portal/figure_catalog.h"
 #include "portal/figure_file.h"
 #include "portal/figure_info.h"
@@ -4459,9 +4460,7 @@ void SetFigureImageProvider(FigureImageProvider provider) {
 }
 
 std::filesystem::path SharedPicturesDir(const std::filesystem::path& user_data_root, std::string_view game) {
-  const std::filesystem::path base =
-      user_data_root.parent_path().empty() ? user_data_root : user_data_root.parent_path() / "Skylanders";
-  return base / "Pictures" / std::filesystem::path(std::u8string(game.begin(), game.end()));
+  return SharedBase(user_data_root) / "Pictures" / std::filesystem::path(std::u8string(game.begin(), game.end()));
 }
 
 // One line of the upgrade cache's text: no tabs or line breaks inside a field.
