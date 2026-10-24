@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -53,7 +54,9 @@ struct CopyResult {
 };
 // Copies every file under `from` to `to`, which must not exist yet: first into `to` + ".partial",
 // renamed to `to` once each file is there with its size, so `to` is either complete or absent.
-CopyResult CopyFolderVerified(const std::filesystem::path& from, const std::filesystem::path& to);
+// `on_file` (optional) hears each file before it is copied, for a progress display.
+CopyResult CopyFolderVerified(const std::filesystem::path& from, const std::filesystem::path& to,
+                              const std::function<void(const std::filesystem::path&)>& on_file = {});
 // Whether each file under `old_dir` is under `new_dir` too (before the old one may be deleted).
 bool AllFilesThere(const std::filesystem::path& old_dir, const std::filesystem::path& new_dir);
 // Leaves the note in `old_dir` that it was copied to `new_dir`.

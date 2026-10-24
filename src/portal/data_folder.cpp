@@ -118,7 +118,8 @@ fs::path SharedBase(const fs::path& user_data_root) {
   return user_data_root.parent_path() / "Skylanders";
 }
 
-CopyResult CopyFolderVerified(const fs::path& from, const fs::path& to) {
+CopyResult CopyFolderVerified(const fs::path& from, const fs::path& to,
+                              const std::function<void(const fs::path&)>& on_file) {
   CopyResult result;
   std::error_code ec;
   if (fs::exists(to, ec)) {
@@ -147,6 +148,7 @@ CopyResult CopyFolderVerified(const fs::path& from, const fs::path& to) {
       continue;
     }
     if (!it->is_regular_file(file_ec)) continue;
+    if (on_file) on_file(it->path());
     fs::create_directories(dest.parent_path(), file_ec);
     file_ec.clear();
     if (!fs::copy_file(it->path(), dest, fs::copy_options::overwrite_existing, file_ec) || file_ec) {
