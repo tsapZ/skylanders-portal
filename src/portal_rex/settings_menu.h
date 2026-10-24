@@ -58,6 +58,9 @@ struct Setting {
   // A bool cvar this setting needs on: while it is off the row is greyed and can't be changed (the
   // keyboard's player with the keyboard off; a colleague's wish, 2026-10-23). Empty: always.
   std::string enabled_by;
+  // The cvar holds keyboard keys in the SDK's names ("Semicolon,Space"): A (or a click) waits for
+  // the next key pressed, which becomes the value; Esc gives up, Delete puts the default back.
+  bool key_bind = false;
 };
 
 struct SettingsPage {

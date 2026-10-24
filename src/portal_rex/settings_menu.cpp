@@ -126,7 +126,9 @@ Actions ReadKeyboard() {
   a.right = key(ImGuiKey_RightArrow) || key(ImGuiKey_D);
   a.accept = once(ImGuiKey_Enter) || once(ImGuiKey_KeypadEnter) || once(ImGuiKey_Space);
   a.back = once(ImGuiKey_Escape) || once(ImGuiKey_Backspace);
-  a.save = once(ImGuiKey_Y);
+  // The keys arrive by their place on a US keyboard: on a German one the key printed Y is ImGui's Z
+  // (found 2026-10-24: Y didn't save there). Both save; the menu has no other use for Z.
+  a.save = once(ImGuiKey_Y) || once(ImGuiKey_Z);
   a.prev_page = once(ImGuiKey_Q) || once(ImGuiKey_1);
   a.next_page = once(ImGuiKey_E) || once(ImGuiKey_3);
   return a;
@@ -294,6 +296,126 @@ constexpr GameKey kGameKeys[] = {
 };
 constexpr ImU32 kGameKeyColour = IM_COL32(178, 188, 224, 255);
 
+// The "Tastatur" page (SwapForceRecomp #63 part 2): a row per button of the keyboard's controller
+// emulation, its key changeable (Setting::key_bind). Added to the in-game menu only; the launcher
+// shows the controller pages of the game's card.
+struct KeyRow {
+  const char* cvar;
+  const char* en;
+  const char* de;
+};
+constexpr KeyRow kKeyRows[] = {
+    {"keybind_a", "A button", "A-Taste"},
+    {"keybind_b", "B button", "B-Taste"},
+    {"keybind_x", "X button", "X-Taste"},
+    {"keybind_y", "Y button", "Y-Taste"},
+    {"keybind_lstick_up", "Move up", "Laufen: hoch"},
+    {"keybind_lstick_down", "Move down", "Laufen: runter"},
+    {"keybind_lstick_left", "Move left", "Laufen: links"},
+    {"keybind_lstick_right", "Move right", "Laufen: rechts"},
+    {"keybind_rstick_up", "Camera up", "Kamera: hoch"},
+    {"keybind_rstick_down", "Camera down", "Kamera: runter"},
+    {"keybind_rstick_left", "Camera left", "Kamera: links"},
+    {"keybind_rstick_right", "Camera right", "Kamera: rechts"},
+    {"keybind_left_trigger", "Left trigger (LT)", "Linker Trigger (LT)"},
+    {"keybind_right_trigger", "Right trigger (RT)", "Rechter Trigger (RT)"},
+    {"keybind_left_shoulder", "Left shoulder (LB)", "Linke Schultertaste (LB)"},
+    {"keybind_right_shoulder", "Right shoulder (RB)", "Rechte Schultertaste (RB)"},
+    {"keybind_lstick_press", "Left stick press (L3)", "Linken Stick dr\xC3\xBC" "cken (L3)"},
+    {"keybind_rstick_press", "Right stick press (R3)", "Rechten Stick dr\xC3\xBC" "cken (R3)"},
+    {"keybind_dpad_up", "D-pad up", "Steuerkreuz hoch"},
+    {"keybind_dpad_down", "D-pad down", "Steuerkreuz runter"},
+    {"keybind_dpad_left", "D-pad left", "Steuerkreuz links"},
+    {"keybind_dpad_right", "D-pad right", "Steuerkreuz rechts"},
+    {"keybind_back", "Back", "Back"},
+    {"keybind_start", "Start", "Start"},
+};
+
+SettingsPage KeyboardPage() {
+  SettingsPage page{"Keyboard", "Tastatur", {}};
+  for (const KeyRow& row : kKeyRows) {
+    if (!rex::cvar::GetFlagInfo(row.cvar)) continue;
+    Setting s;
+    s.cvar = row.cvar;
+    s.en = row.en;
+    s.de = row.de;
+    s.help_en = "The key that plays this controller button. A (or a click) and then the key you want; "
+                "Esc keeps the old one, Delete puts the default back. Y saves.";
+    s.help_de = "Die Taste, die diese Controller-Taste spielt. A (oder ein Klick) und dann die gew\xC3\xBC"
+                "nschte Taste dr\xC3\xBC" "cken; Esc l\xC3\xA4sst die alte, Entf holt die Standardtaste "
+                "zur\xC3\xBC" "ck. Y speichert.";
+    s.key_bind = true;
+    s.enabled_by = "mnk_mode";  // greyed while the keyboard doesn't play
+    page.settings.push_back(std::move(s));
+  }
+  return page;
+}
+
+// A key setting's value as shown: "Semicolon,Space" -> "Semicolon / Leertaste".
+std::string KeysLabel(const std::string& value) {
+  std::string out;
+  for (const std::string& key : SplitKeys(value)) {
+    std::string name = key;
+    if (key == "Space") name = Tr("Space", "Leertaste");
+    else if (key == "Return") name = "Enter";
+    else if (key == "Escape") name = "Esc";
+    else if (key == "Delete") name = Tr("Delete", "Entf");
+    else if (key == "Up") name = Tr("Up", "Pfeil hoch");
+    else if (key == "Down") name = Tr("Down", "Pfeil runter");
+    else if (key == "Left") name = Tr("Left", "Pfeil links");
+    else if (key == "Right") name = Tr("Right", "Pfeil rechts");
+    else if (key == "Control") name = Tr("Ctrl", "Strg");
+    out += (out.empty() ? "" : " / ") + name;
+  }
+  return out.empty() ? std::string(Tr("none", "keine")) : out;
+}
+
+// The SDK's key for an ImGui key (as its own settings overlay maps them), or kNone.
+rex::ui::VirtualKey VirtualKeyOf(ImGuiKey key) {
+  using VK = rex::ui::VirtualKey;
+  if (key >= ImGuiKey_A && key <= ImGuiKey_Z) return VK(uint16_t(VK::kA) + (key - ImGuiKey_A));
+  if (key >= ImGuiKey_0 && key <= ImGuiKey_9) return VK(uint16_t(VK::k0) + (key - ImGuiKey_0));
+  if (key >= ImGuiKey_F1 && key <= ImGuiKey_F24) return VK(uint16_t(VK::kF1) + (key - ImGuiKey_F1));
+  if (key >= ImGuiKey_Keypad0 && key <= ImGuiKey_Keypad9) {
+    return VK(uint16_t(VK::kNumpad0) + (key - ImGuiKey_Keypad0));
+  }
+  switch (key) {
+    case ImGuiKey_Space: return VK::kSpace;
+    case ImGuiKey_Enter: case ImGuiKey_KeypadEnter: return VK::kReturn;
+    case ImGuiKey_Tab: return VK::kTab;
+    case ImGuiKey_Backspace: return VK::kBack;
+    case ImGuiKey_Insert: return VK::kInsert;
+    case ImGuiKey_Home: return VK::kHome;
+    case ImGuiKey_End: return VK::kEnd;
+    case ImGuiKey_PageUp: return VK::kPrior;
+    case ImGuiKey_PageDown: return VK::kNext;
+    case ImGuiKey_LeftArrow: return VK::kLeft;
+    case ImGuiKey_RightArrow: return VK::kRight;
+    case ImGuiKey_UpArrow: return VK::kUp;
+    case ImGuiKey_DownArrow: return VK::kDown;
+    case ImGuiKey_LeftShift: case ImGuiKey_RightShift: return VK::kShift;
+    case ImGuiKey_LeftCtrl: case ImGuiKey_RightCtrl: return VK::kControl;
+    case ImGuiKey_LeftAlt: case ImGuiKey_RightAlt: return VK::kMenu;
+    case ImGuiKey_CapsLock: return VK::kCapital;
+    case ImGuiKey_GraveAccent: return VK::kOem3;
+    case ImGuiKey_Minus: return VK::kOemMinus;
+    case ImGuiKey_Equal: return VK::kOemPlus;
+    case ImGuiKey_LeftBracket: return VK::kOem4;
+    case ImGuiKey_RightBracket: return VK::kOem6;
+    case ImGuiKey_Backslash: return VK::kOem5;
+    case ImGuiKey_Semicolon: return VK::kOem1;
+    case ImGuiKey_Apostrophe: return VK::kOem7;
+    case ImGuiKey_Comma: return VK::kOemComma;
+    case ImGuiKey_Period: return VK::kOemPeriod;
+    case ImGuiKey_Slash: return VK::kOem2;
+    case ImGuiKey_KeypadAdd: return VK::kAdd;
+    case ImGuiKey_KeypadSubtract: return VK::kSubtract;
+    case ImGuiKey_KeypadMultiply: return VK::kMultiply;
+    case ImGuiKey_KeypadDivide: return VK::kDivide;
+    default: return VK::kNone;
+  }
+}
+
 // One colour per button setting (or entry) on the controls page's pictures.
 constexpr ImU32 kColours[] = {IM_COL32(244, 196, 84, 255), IM_COL32(90, 200, 255, 255),
                               IM_COL32(120, 220, 130, 255), IM_COL32(240, 120, 200, 255)};
@@ -313,7 +435,7 @@ bool IsOverview(const Setting& s) { return s.buttons && s.cvar.empty() && !s.act
 
 const std::vector<SettingOption>& OptionsOf(const Setting& s) {
   static const std::vector<SettingOption> kNone;
-  if (IsOverview(s)) return kNone;
+  if (IsOverview(s) || s.key_bind) return kNone;
   return s.options.empty() && !s.action ? BoolOptions() : s.options;
 }
 
@@ -330,6 +452,12 @@ bool SameValue(const std::string& a, const std::string& b) {
 std::string SavedValue(const std::string& cvar) {
   if (auto it = g_state.stored.find(cvar); it != g_state.stored.end()) return it->second;
   return rex::cvar::GetFlagByName(cvar);
+}
+
+// A changed value: applied now (where the setting allows it), saved only with Y.
+void EditSetting(const std::string& cvar, const std::string& value) {
+  if (!g_state.before.contains(cvar)) g_state.before[cvar] = SavedValue(cvar);
+  if (StoreSetting({}, cvar, value)) g_state.edits[cvar] = value;
 }
 
 // The value the menu shows: an unsaved change first.
@@ -414,7 +542,11 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       Start();
     }
     SetScale(io.DisplaySize.y / 1080.0f);
-    HandleInput(ReadActions());
+    if (!listen_cvar_.empty()) {
+      ListenForKey();
+    } else {
+      HandleInput(ReadActions());
+    }
     if (done_) return;
 
     ImGui::SetNextWindowPos({0, 0});
@@ -611,8 +743,40 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       return;
     }
     if (!Enabled(s)) return;  // greyed: its enabled_by setting is off
+    if (s.key_bind) {
+      if (a.accept || a.left || a.right) listen_cvar_ = s.cvar;
+      return;
+    }
     if (a.left) Change(s, -1);
     if (a.right || a.accept) Change(s, +1);
+  }
+
+  // A key row waits for its key: the first key pressed becomes the bind; Esc (or a controller's B)
+  // keeps the old one, Delete puts the default back.
+  void ListenForKey() {
+    const Actions a = ReadActions();
+    for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+      const ImGuiKey key = ImGuiKey(k);
+      if (!ImGui::IsKeyPressed(key, false)) continue;
+      if (key == ImGuiKey_Escape) {
+        listen_cvar_.clear();
+        return;
+      }
+      if (key == ImGuiKey_Delete) {
+        if (const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(listen_cvar_)) {
+          EditSetting(listen_cvar_, info->default_value);
+        }
+        listen_cvar_.clear();
+        return;
+      }
+      const std::string name = rex::ui::VirtualKeyToString(VirtualKeyOf(key));
+      if (name.empty()) continue;  // a controller's or the mouse's, or one the SDK can't bind
+      EditSetting(listen_cvar_, name);
+      REXLOG_INFO("Settings menu: {} = {}", listen_cvar_, name);
+      listen_cvar_.clear();
+      return;
+    }
+    if (a.back) listen_cvar_.clear();
   }
 
   static bool Enabled(const Setting& s) { return s.enabled_by.empty() || CvarOn(s.enabled_by.c_str()); }
@@ -635,14 +799,10 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     const int next = index < 0 ? 0 : (index + delta + n) % n;
     const std::string& value = options[size_t(next)].value;
     // Applied now (where the setting allows it) but saved only with Y.
-    auto edit = [](const std::string& cvar, const std::string& v) {
-      if (!g_state.before.contains(cvar)) g_state.before[cvar] = SavedValue(cvar);
-      if (StoreSetting({}, cvar, v)) g_state.edits[cvar] = v;
-    };
     if (s.preset) {
-      for (const auto& [cvar, v] : s.preset(value)) edit(cvar, v);
+      for (const auto& [cvar, v] : s.preset(value)) EditSetting(cvar, v);
     } else {
-      edit(s.cvar, value);
+      EditSetting(s.cvar, value);
     }
   }
 
@@ -795,7 +955,9 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       const auto& options = OptionsOf(s);
       const int index = IndexOf(s);
       const std::string value =
-          index >= 0 ? Tr(options[size_t(index)].en, options[size_t(index)].de)
+          s.key_bind ? (listen_cvar_ == s.cvar ? std::string(Tr("Press a key ...", "Taste dr\xC3\xBC" "cken ..."))
+                                               : KeysLabel(CurrentValue(s)))
+          : index >= 0 ? Tr(options[size_t(index)].en, options[size_t(index)].de)
           : s.current ? std::string(Tr("Custom", "Eigene"))
                       : CurrentValue(s);
       const float box_w = S(270);
@@ -814,9 +976,14 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       const ImU32 arrow = active ? kGold : Rgba(255, 255, 255, 90);
       Label(dl, BoldFont(), S(24), {v0.x + S(12), v0.y + S(5)}, arrow, "<");
       Label(dl, BoldFont(), S(24), {v1.x - S(26), v0.y + S(5)}, arrow, ">");
-      if (!confirm_ && !ask_ && ImGui::IsMouseHoveringRect(v0, v1) && ImGui::IsMouseClicked(0)) {
+      if (!confirm_ && !ask_ && listen_cvar_.empty() && ImGui::IsMouseHoveringRect(v0, v1) &&
+          ImGui::IsMouseClicked(0)) {
         row_ = i;
-        Change(s, ImGui::GetIO().MousePos.x < (v0.x + v1.x) / 2 ? -1 : +1);
+        if (s.key_bind) {
+          listen_cvar_ = s.cvar;
+        } else {
+          Change(s, ImGui::GetIO().MousePos.x < (v0.x + v1.x) / 2 ? -1 : +1);
+        }
       }
     }
     const size_t total = page->settings.size();
@@ -1100,6 +1267,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
   bool confirm_ = false;           // asking about unsaved changes
   int confirm_choice_ = 0;
   bool ask_ = false;               // an action row's question (Setting::confirm_en)
+  std::string listen_cvar_;        // a key row waiting for its key (Setting::key_bind)
   int ask_choice_ = 1;
   std::string ask_en_, ask_de_;
   std::function<void()> ask_action_;
@@ -1146,6 +1314,12 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
   RegisterProblemNote(drawer, app_context);
   g_state.pages = std::move(pages);
   g_state.config_path = std::move(config_path);
+  // The keyboard's keys after the controls page (or at the end), where the SDK has its keyboard.
+  if (SettingsPage keys = KeyboardPage(); !keys.settings.empty()) {
+    auto controls = std::find_if(g_state.pages.begin(), g_state.pages.end(),
+                                 [](const SettingsPage& p) { return p.en == "Controls"; });
+    g_state.pages.insert(controls == g_state.pages.end() ? g_state.pages.end() : controls + 1, std::move(keys));
+  }
   if (REXCVAR_GET(started_by_launcher)) {
     // The launcher has these on the game's card (settings_menu.h). Action rows and the controls
     // overview stay; a page left without rows goes.

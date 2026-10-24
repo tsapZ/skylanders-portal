@@ -780,13 +780,35 @@ float DrawPortalOfPower(ImDrawList* dl, ImVec2 c, float w, ImU32 glow) {
     dl->AddEllipseFilled({c.x, c.y + h}, {rx * (1.0f + 0.35f * k), ry * (1.0f + 0.35f * k)},
                          tint(0.3f, int((14 * (1.0f - k) + 4) * pulse)));
   }
+  // Rings of light running out over the "floor", one every 2.2 s, as the portal sends out its
+  // power (the owner's wish for a portal more like the game's, SwapForceRecomp #57).
+  for (int k = 0; k < 2; ++k) {
+    float phase = t / 2.2f + float(k) * 0.5f;
+    phase -= std::floor(phase);
+    const float grow = 1.0f + 0.55f * phase;
+    dl->AddEllipse({c.x, c.y + h}, {rx * grow, ry * grow}, tint(0.5f, int(110 * (1.0f - phase) * pulse)), 0, 48,
+                   std::max(1.0f, w * 0.01f * (1.0f - 0.5f * phase)));
+  }
   // The base: its side, then the top.
   const ImU32 side = IM_COL32(22, 24, 40, 255);
   dl->AddEllipseFilled({c.x, c.y + h}, {rx, ry}, side);
   dl->AddRectFilled({c.x - rx, c.y}, {c.x + rx, c.y + h}, side);
+  // The band of light round its side under the rim, as the real portal glows all round: the side's
+  // front half, a wide soft stroke and a thin bright one.
+  dl->PathEllipticalArcTo({c.x, c.y + h * 0.45f}, {rx * 0.995f, ry}, 0, 0.0f, 3.14159265f, 40);
+  dl->PathStroke(tint(0.25f, int(70 * pulse)), 0, h * 0.5f);
+  dl->PathEllipticalArcTo({c.x, c.y + h * 0.45f}, {rx * 0.995f, ry}, 0, 0.0f, 3.14159265f, 40);
+  dl->PathStroke(tint(0.6f, int(170 * pulse)), 0, std::max(1.0f, h * 0.12f));
   dl->PathEllipticalArcTo({c.x, c.y + h}, {rx, ry}, 0, 0, 3.14159265f, 32);
   dl->PathStroke(IM_COL32(90, 100, 140, 220), 0, std::max(1.0f, w * 0.008f));
   dl->AddEllipseFilled(c, {rx, ry}, IM_COL32(52, 58, 86, 255));
+  // The rim's ridges.
+  for (int i = 0; i < 32; ++i) {
+    const float a = float(i) / 32.0f * 6.2831853f;
+    const float ca = std::cos(a), sa = std::sin(a);
+    dl->AddLine({c.x + ca * rx * 0.9f, c.y + sa * ry * 0.9f}, {c.x + ca * rx * 0.985f, c.y + sa * ry * 0.985f},
+                IM_COL32(120, 132, 168, 200), std::max(1.0f, w * 0.006f));
+  }
   dl->AddEllipse(c, {rx, ry}, IM_COL32(190, 200, 225, 255), 0, 48, std::max(1.5f, w * 0.014f));
   dl->AddEllipse(c, {rx * 0.88f, ry * 0.88f}, IM_COL32(96, 106, 140, 255), 0, 48,
                  std::max(1.0f, w * 0.008f));
