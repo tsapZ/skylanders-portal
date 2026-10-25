@@ -9,6 +9,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -39,6 +40,32 @@ REXCVAR_DEFINE_STRING(player_menu_buttons, "ls+rs", "Input",
 REXCVAR_DEFINE_STRING(settings_menu_buttons, "back+rb", "Input",
                       "Controller buttons that open the settings menu; same format as "
                       "portal_menu_open_buttons, empty for none");
+// A controller button doing another button's job (F4 > Controller; SwapForceRecomp #71).
+REXCVAR_DEFINE_STRING(pad_map_a, "", "Input",
+                      "What the A button does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+REXCVAR_DEFINE_STRING(pad_map_b, "", "Input",
+                      "What the B button does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+REXCVAR_DEFINE_STRING(pad_map_x, "", "Input",
+                      "What the X button does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+REXCVAR_DEFINE_STRING(pad_map_y, "", "Input",
+                      "What the Y button does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+REXCVAR_DEFINE_STRING(pad_map_lb, "", "Input",
+                      "What the left shoulder button does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+REXCVAR_DEFINE_STRING(pad_map_rb, "", "Input",
+                      "What the right shoulder button does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+REXCVAR_DEFINE_STRING(pad_map_lt, "", "Input",
+                      "What the left trigger does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+REXCVAR_DEFINE_STRING(pad_map_rt, "", "Input",
+                      "What the right trigger does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+REXCVAR_DEFINE_STRING(pad_map_ls, "", "Input",
+                      "What the left stick press does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+REXCVAR_DEFINE_STRING(pad_map_rs, "", "Input",
+                      "What the right stick press does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
+// How strongly each player's controller vibrates (F4 > Controller; SwapForceRecomp #73).
+REXCVAR_DEFINE_INT32(pad_rumble_p1, 100, "Input", "How strongly player 1's controller vibrates, 0-100 %")
+    .range(0, 100);
+REXCVAR_DEFINE_INT32(pad_rumble_p2, 100, "Input", "How strongly player 2's controller vibrates, 0-100 %")
+    .range(0, 100);
 REXCVAR_DEFINE_INT32(portal_menu_hold_ms, 600, "Portal",
                      "How long a hold_<button> entry of the *_buttons settings must be held")
     .range(100, 5000);
@@ -302,6 +329,65 @@ std::optional<ButtonAction> ObserveLocked(DeviceRecord& record, const X_INPUT_GA
   return fired;
 }
 
+// The buttons pad_map_* can give another job, and what each one stands for.
+struct PadSource {
+  const char* name;
+  uint16_t bit;  // 0 for a trigger
+  int trigger;   // 1 left, 2 right
+};
+constexpr PadSource kPadSources[] = {
+    {"a", rex::input::X_INPUT_GAMEPAD_A, 0},
+    {"b", rex::input::X_INPUT_GAMEPAD_B, 0},
+    {"x", rex::input::X_INPUT_GAMEPAD_X, 0},
+    {"y", rex::input::X_INPUT_GAMEPAD_Y, 0},
+    {"lb", rex::input::X_INPUT_GAMEPAD_LEFT_SHOULDER, 0},
+    {"rb", rex::input::X_INPUT_GAMEPAD_RIGHT_SHOULDER, 0},
+    {"lt", 0, 1},
+    {"rt", 0, 2},
+    {"ls", rex::input::X_INPUT_GAMEPAD_LEFT_THUMB, 0},
+    {"rs", rex::input::X_INPUT_GAMEPAD_RIGHT_THUMB, 0},
+};
+
+const PadSource* FindPadSource(const std::string& name) {
+  for (const PadSource& s : kPadSources) {
+    if (name == s.name) return &s;
+  }
+  return nullptr;
+}
+
+// Gives the buttons the jobs pad_map_* says, in the state the game gets: each pressed button
+// sends its mapped button instead of its own (so two can do one job, and "off" none). Untouched
+// when nothing is mapped, so the triggers keep their exact values.
+void RemapPad(X_INPUT_GAMEPAD& pad) {
+  const PadSource* target[std::size(kPadSources)] = {};
+  bool any = false;
+  for (size_t i = 0; i < std::size(kPadSources); ++i) {
+    std::string value = rex::cvar::GetFlagByName(std::string("pad_map_") + kPadSources[i].name);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    target[i] = &kPadSources[i];
+    if (value.empty() || value == kPadSources[i].name) continue;
+    any = true;
+    target[i] = value == "off" ? nullptr : FindPadSource(value);
+  }
+  if (!any) return;
+  uint16_t buttons = uint16_t(pad.buttons);
+  uint8_t left = 0, right = 0;
+  for (const PadSource& s : kPadSources) buttons = uint16_t(buttons & ~s.bit);
+  for (size_t i = 0; i < std::size(kPadSources); ++i) {
+    const PadSource& s = kPadSources[i];
+    const uint8_t analog = s.trigger == 1 ? pad.left_trigger : s.trigger == 2 ? pad.right_trigger : 0;
+    const bool down = s.trigger ? analog > 30 : (uint16_t(pad.buttons) & s.bit) != 0;
+    if (!down || !target[i]) continue;
+    const uint8_t strength = s.trigger ? analog : 255;  // a button on a trigger pulls it fully
+    if (target[i]->trigger == 1) left = std::max(left, strength);
+    else if (target[i]->trigger == 2) right = std::max(right, strength);
+    else buttons = uint16_t(buttons | target[i]->bit);
+  }
+  pad.buttons = buttons;
+  pad.left_trigger = left;
+  pad.right_trigger = right;
+}
+
 uint32_t UserOfLocked(const DeviceRecord& record) {
   if (record.forced_user) {
     return *record.forced_user;
@@ -361,6 +447,8 @@ class MenuInputDriver final : public InputDriver {
     WatchOtherDevices(id);
     state.gamepad.buttons =
         uint16_t(visible & uint16_t(~uint16_t(rex::input::X_INPUT_GAMEPAD_GUIDE)));
+    // The jobs F4 > Controller gave the buttons; the keyboard has its own keys page.
+    if (!keyboard_) RemapPad(state.gamepad);
     if (hide) {
       std::memset(&state.gamepad, 0, sizeof(state.gamepad));
     }
@@ -385,9 +473,27 @@ class MenuInputDriver final : public InputDriver {
     return inner_->GetDeviceCapabilities(id, flags, out_caps);
   }
 
+  // The game's vibration, at the strength the player chose (pad_rumble_p*).
   X_RESULT SetDeviceVibration(DeviceId id, rex::input::X_INPUT_VIBRATION* vibration) override {
+    if (!vibration) return inner_->SetDeviceVibration(id, vibration);
+    uint32_t user = 0;
+    {
+      std::lock_guard lock(g_mutex);
+      user = UserOfLocked(g_devices[uint64_t(id)]);
+    }
+    const int percent = std::clamp(user == 0 ? REXCVAR_GET(pad_rumble_p1) : REXCVAR_GET(pad_rumble_p2), 0, 100);
+    rex::input::X_INPUT_VIBRATION scaled = *vibration;
+    scaled.left_motor_speed = uint16_t(uint32_t(vibration->left_motor_speed) * uint32_t(percent) / 100);
+    scaled.right_motor_speed = uint16_t(uint32_t(vibration->right_motor_speed) * uint32_t(percent) / 100);
+    return inner_->SetDeviceVibration(id, &scaled);
+  }
+
+  // A vibration as given, without the player's strength (RumbleTest).
+  X_RESULT SetVibrationAsIs(DeviceId id, rex::input::X_INPUT_VIBRATION* vibration) {
     return inner_->SetDeviceVibration(id, vibration);
   }
+
+  bool keyboard() const { return keyboard_; }
 
   X_RESULT GetDeviceKeystroke(DeviceId id, uint32_t flags,
                               rex::input::X_INPUT_KEYSTROKE* out_keystroke) override {
@@ -637,6 +743,33 @@ std::optional<PlayerDevice> DeviceForUser(uint32_t user) {
     }
   }
   return keyboard;
+}
+
+void RumbleTest(uint32_t user, int percent) {
+  // A short buzz at the strength just chosen, on that player's controllers.
+  std::vector<std::pair<MenuInputDriver*, DeviceId>> targets;
+  {
+    std::lock_guard lock(g_mutex);
+    for (auto& [key, record] : g_devices) {
+      if (!record.driver || record.driver->keyboard() || UserOfLocked(record) != user) continue;
+      targets.emplace_back(record.driver, DeviceId(key));
+    }
+  }
+  if (targets.empty()) return;
+  const uint16_t speed = uint16_t(65535u * uint32_t(std::clamp(percent, 0, 100)) / 100u);
+  for (auto& [driver, id] : targets) {
+    rex::input::X_INPUT_VIBRATION v{};
+    v.left_motor_speed = speed;
+    v.right_motor_speed = speed;
+    driver->SetVibrationAsIs(id, &v);
+  }
+  std::thread([targets] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    for (auto& [driver, id] : targets) {
+      rex::input::X_INPUT_VIBRATION off{};
+      driver->SetVibrationAsIs(id, &off);
+    }
+  }).detach();
 }
 
 std::vector<DeviceId> PadsOfUser(uint32_t user) {

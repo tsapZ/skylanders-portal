@@ -351,6 +351,65 @@ SettingsPage KeyboardPage() {
   return page;
 }
 
+// The controller page: what each button does in the game (pad_map_*, portal_menu_input.cpp;
+// SwapForceRecomp #71, e.g. a shoulder button for the ability on B).
+struct PadRow {
+  const char* cvar;
+  const char* en;
+  const char* de;
+};
+constexpr PadRow kPadRows[] = {
+    {"pad_map_a", "A button", "A-Taste"},
+    {"pad_map_b", "B button", "B-Taste"},
+    {"pad_map_x", "X button", "X-Taste"},
+    {"pad_map_y", "Y button", "Y-Taste"},
+    {"pad_map_lb", "Left shoulder (LB)", "Linke Schultertaste (LB)"},
+    {"pad_map_rb", "Right shoulder (RB)", "Rechte Schultertaste (RB)"},
+    {"pad_map_lt", "Left trigger (LT)", "Linker Trigger (LT)"},
+    {"pad_map_rt", "Right trigger (RT)", "Rechter Trigger (RT)"},
+    {"pad_map_ls", "Left stick press (L3)", "Linken Stick dr\xC3\xBC" "cken (L3)"},
+    {"pad_map_rs", "Right stick press (R3)", "Rechten Stick dr\xC3\xBC" "cken (R3)"},
+};
+
+SettingsPage ControllerPage() {
+  SettingsPage page{"Controller", "Controller", {}};
+  for (const PadRow& row : kPadRows) {
+    if (!rex::cvar::GetFlagInfo(row.cvar)) continue;
+    Setting s;
+    s.cvar = row.cvar;
+    s.en = row.en;
+    s.de = row.de;
+    s.help_en = "What this button does in the game. For example the right shoulder button on B: it then "
+                "does what B does (an ability), and B keeps its own job too.";
+    s.help_de = "Was diese Taste im Spiel macht. Zum Beispiel die rechte Schultertaste auf B: Sie macht "
+                "dann, was B macht (eine F\xC3\xA4higkeit), und B beh\xC3\xA4lt seine eigene Aufgabe.";
+    s.options = {{"", "As printed", "Wie aufgedruckt"}, {"a", "A", "A"}, {"b", "B", "B"},
+                 {"x", "X", "X"}, {"y", "Y", "Y"}, {"lb", "LB", "LB"}, {"rb", "RB", "RB"},
+                 {"lt", "LT", "LT"}, {"rt", "RT", "RT"}, {"ls", "L3", "L3"}, {"rs", "R3", "R3"},
+                 {"off", "Nothing", "Nichts"}};
+    page.settings.push_back(std::move(s));
+  }
+  // How strongly each player's controller vibrates, felt at once when changed (SwapForceRecomp #73).
+  for (int player = 1; player <= 2; ++player) {
+    const std::string cvar = "pad_rumble_p" + std::to_string(player);
+    if (!rex::cvar::GetFlagInfo(cvar)) continue;
+    Setting s;
+    s.cvar = cvar;
+    s.en = "Vibration, player " + std::to_string(player);
+    s.de = "Vibration, Spieler " + std::to_string(player);
+    s.help_en = "How strongly this player's controller vibrates. The controller buzzes briefly at each "
+                "change, so you feel the new strength.";
+    s.help_de = "Wie stark der Controller dieses Spielers vibriert. Bei jeder \xC3\x84nderung vibriert er "
+                "kurz, so sp\xC3\xBCrst du die neue St\xC3\xA4rke.";
+    for (int p = 0; p <= 100; p += 10) {
+      const std::string label = p == 0 ? std::string("Aus") : std::to_string(p) + " %";
+      s.options.push_back({std::to_string(p), p == 0 ? std::string("Off") : std::to_string(p) + " %", label});
+    }
+    page.settings.push_back(std::move(s));
+  }
+  return page;
+}
+
 // A key setting's value as shown: "Semicolon,Space" -> "Semicolon / Leertaste".
 std::string KeysLabel(const std::string& value) {
   std::string out;
@@ -804,6 +863,10 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       for (const auto& [cvar, v] : s.preset(value)) EditSetting(cvar, v);
     } else {
       EditSetting(s.cvar, value);
+    }
+    // The vibration strength: felt at once on that player's controller.
+    if (s.cvar.rfind("pad_rumble_p", 0) == 0) {
+      menu_input::RumbleTest(uint32_t(s.cvar.back() - '1'), std::atoi(value.c_str()));
     }
   }
 
@@ -1323,6 +1386,12 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
     auto controls = std::find_if(g_state.pages.begin(), g_state.pages.end(),
                                  [](const SettingsPage& p) { return p.en == "Controls"; });
     g_state.pages.insert(controls == g_state.pages.end() ? g_state.pages.end() : controls + 1, std::move(keys));
+  }
+  // The controller's buttons next to them.
+  if (SettingsPage pads = ControllerPage(); !pads.settings.empty()) {
+    auto keyboard = std::find_if(g_state.pages.begin(), g_state.pages.end(),
+                                 [](const SettingsPage& p) { return p.en == "Keyboard"; });
+    g_state.pages.insert(keyboard == g_state.pages.end() ? g_state.pages.end() : keyboard + 1, std::move(pads));
   }
   if (REXCVAR_GET(started_by_launcher)) {
     // The launcher has these on the game's card (settings_menu.h). Action rows and the controls

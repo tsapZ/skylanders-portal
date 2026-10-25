@@ -101,6 +101,10 @@ std::optional<PlayerDevice> DeviceForUser(uint32_t user);
 // All controllers the menu can poll that play as this player.
 std::vector<rex::input::DeviceId> PadsOfUser(uint32_t user);
 
+// Buzzes the player's controllers for a moment at `percent` of full strength (F4 > Controller,
+// when the vibration strength changes; SwapForceRecomp #73).
+void RumbleTest(uint32_t user, int percent);
+
 // Makes a device play as `user` (nullopt: back to its slot). For test scripts that act as a
 // second player.
 void SetDevicePlayer(rex::input::DeviceId device, std::optional<uint32_t> user);
