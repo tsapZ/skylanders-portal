@@ -195,6 +195,12 @@ enum class Text {
   kTrapsTab,
   kVehiclesTab,
   kTerrain,
+  kOverviewTitle,
+  kOverviewHint,
+  kOverviewEmpty,
+  kOverviewTook,
+  kTrap,
+  kVehicle,
   kCount,
 };
 
@@ -293,6 +299,12 @@ constexpr const char* kEnglish[] = {
     "Traps",
     "Vehicles",
     "Terrain",
+    "On the portal",
+    "Take single figures off without the portal menu: your Skylander stays where it is.",
+    "Nothing is on the portal.",
+    "%s taken off",
+    "Trap",
+    "Vehicle",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -392,6 +404,12 @@ constexpr const char* kGerman[] = {
     "Fallen",
     "Fahrzeuge",
     "Gel\xC3\xA4nde",
+    "Auf dem Portal",
+    "Nimm einzelne Figuren runter, ohne das Portal-Men\xC3\xBC: Dein Skylander bleibt stehen.",
+    "Auf dem Portal steht nichts.",
+    "%s runtergenommen",
+    "Falle",
+    "Fahrzeug",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -4577,21 +4595,230 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
 
 std::unique_ptr<PortalCheckDialog> g_check;  // UI thread only
 
+// The portal overview (SwapForceRecomp #70; Back + Y, F5): everything on the emulated portal as
+// cards above a big Portal of Power. A takes the chosen one off at once, without the portal menu,
+// so no Skylander is lifted (a trap taken off through the menu had the game introduce the
+// Skylander again). B or the buttons again close it. Taking off a player's Skylander closes it:
+// the game asks for one, and the portal menu comes up as usual. The game runs on meanwhile.
+class PortalOverviewDialog final : public rex::ui::ImGuiDialog {
+ public:
+  PortalOverviewDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> on_done)
+      : ImGuiDialog(drawer), on_done_(std::move(on_done)) {
+    g_german = menu_draw::GermanText();
+    menu_input::SetMenuOpen(true);
+    menu_input::SetMenuCloser([this] { Close(); });
+    entries_ = PortalEntries();
+    REXLOG_INFO("Portal overview: opened, {} figure(s) on the portal", entries_.size());
+  }
+
+  ~PortalOverviewDialog() override {
+    if (!done_) menu_input::SetMenuOpen(false);
+  }
+
+  void Close() {
+    if (done_) return;
+    done_ = true;
+    menu_input::SetMenuOpen(false);
+    if (on_done_) on_done_();
+  }
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    if (done_) return;
+    SetScale(io.DisplaySize.y / 1080.0f);
+    HandleInput(ReadActions());
+    if (done_) return;
+    ImGui::SetNextWindowPos({0, 0});
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    if (first_frame_) {
+      ImGui::SetNextWindowFocus();
+      first_frame_ = false;
+    }
+    ImGui::Begin("##portal_overview", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const int first_vertex = dl->VtxBuffer.Size;
+    Draw(dl, io.DisplaySize);
+    FadeVertices(dl, first_vertex,
+                 std::chrono::duration<float>(Clock::now() - open_time_).count() / 0.15f);
+    ImGui::End();
+  }
+
+ private:
+  static std::string NameOf(const PortalEntry& e) {
+    std::vector<const SkylanderInfo*> known;
+    for (const SkylanderInfo* sky : e.figures) {
+      if (sky) known.push_back(sky);
+    }
+    return known.empty() ? std::string("?") : ComboName(known);
+  }
+
+  // What a card is: whose Skylander, a trap / vehicle / sidekick, a magic item or adventure pack.
+  static std::string KindOf(const PortalEntry& e) {
+    char text[64];
+    switch (e.kind) {
+      case PortalEntry::Kind::kItem:
+        return !e.figures.empty() && IsAdventurePack(e.figures.front()) ? AdventurePackName()
+                                                                        : T(Text::kCheckItem);
+      case PortalEntry::Kind::kSidekick:
+        switch (GameCompanionKind()) {
+          case CompanionKind::kTrap: return T(Text::kTrap);
+          case CompanionKind::kVehicle: return T(Text::kVehicle);
+          default: return T(Text::kCheckSidekick);
+        }
+      default:
+        if (!e.player) return T(Text::kCheckStraySkylander);
+        std::snprintf(text, sizeof(text), T(Text::kCheckPlayerSkylander), *e.player + 1);
+        return text;
+    }
+  }
+
+  Actions ReadActions() {
+    Actions actions;
+    bool released = true;
+    for (const menu_input::ConnectedDevice& device : menu_input::ConnectedDevices()) {
+      if (!device.pollable) continue;
+      const auto pad = menu_input::ReadPad(device.id);
+      if (!pad) continue;
+      PadReader& reader = pads_[uint64_t(device.id)];
+      released = released && reader.Released(*pad);
+      const Actions read = reader.Read(*pad);
+      if (!waiting_for_release_) Merge(actions, read);
+    }
+    if (waiting_for_release_) {
+      if (released && !ImGui::IsKeyDown(ImGuiKey_F5)) waiting_for_release_ = false;
+      return {};
+    }
+    Merge(actions, ReadKeyboard());
+    // The overview's own buttons again close it: F5, and Y (Back + Y opened it).
+    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) actions.back = true;
+    return actions;
+  }
+
+  void HandleInput(const Actions& a) {
+    const size_t n = entries_.size();
+    if (n && (a.left || a.up)) cursor_ = (cursor_ + n - 1) % n;
+    if (n && (a.right || a.down)) cursor_ = (cursor_ + 1) % n;
+    if (a.back || a.take_off) {
+      REXLOG_INFO("Portal overview: closed");
+      Close();
+      return;
+    }
+    if (a.accept && n) TakeOff(cursor_);
+  }
+
+  void TakeOff(size_t index) {
+    const PortalEntry e = entries_[index];
+    for (int slot : e.slots) {
+      RemoveFigureFromSlot(slot);
+      if (slot == g_item_slot) g_item_slot = -1;
+      if (slot == g_sidekick_slot) g_sidekick_slot = -1;
+      for (int& vehicle : g_vehicle_slots) {
+        if (slot == vehicle) vehicle = -1;
+      }
+      for (auto& slots : g_player_slots) {
+        slots.erase(std::remove(slots.begin(), slots.end(), slot), slots.end());
+      }
+    }
+    const std::string name = NameOf(e);
+    REXLOG_INFO("Portal overview: took off {}", name);
+    char text[160];
+    std::snprintf(text, sizeof(text), T(Text::kOverviewTook), name.c_str());
+    ShowToast(text);
+    entries_.erase(entries_.begin() + std::ptrdiff_t(index));
+    if (cursor_ >= entries_.size() && cursor_ > 0) --cursor_;
+    // A player's Skylander gone: the game asks for one and the portal menu takes over.
+    if (e.kind == PortalEntry::Kind::kSkylander && e.player) Close();
+  }
+
+  void Draw(ImDrawList* dl, ImVec2 size) {
+    dl->AddRectFilled({0, 0}, size, Rgba(6, 10, 30, 150));
+    const float w = std::min(S(1400), size.x - S(80));
+    const float h = std::min(S(860), size.y - S(60));
+    const ImVec2 a{(size.x - w) / 2, (size.y - h) / 2}, b{a.x + w, a.y + h};
+    DrawPanel(dl, a, b);
+    OutlinedLabel(dl, TitleFont(), S(38), {a.x + S(36), a.y + S(26)}, kGold, T(Text::kOverviewTitle), S(2));
+    Label(dl, BoldFont(), S(21), {a.x + S(36), a.y + S(88)}, kDim, T(Text::kOverviewHint), w - S(72));
+
+    // The portal, lit in the chosen figure's element colour.
+    const SkylanderInfo* chosen =
+        cursor_ < entries_.size() && !entries_[cursor_].figures.empty() ? entries_[cursor_].figures[0] : nullptr;
+    const Element element = chosen ? ElementOf(*chosen) : Element::kNone;
+    const float portal_w = std::min(S(620), w * 0.55f);
+    const ImVec2 portal_c{(a.x + b.x) / 2, b.y - S(150)};
+    DrawPortalOfPower(dl, portal_c, portal_w, ElementColor(element, 1.0f, 255));
+
+    // The figures as cards above it.
+    if (entries_.empty()) {
+      const char* none = T(Text::kOverviewEmpty);
+      const ImVec2 ts = TextSize(BoldFont(), S(28), none);
+      Label(dl, BoldFont(), S(28), {(a.x + b.x - ts.x) / 2, a.y + S(260)}, kWhite, none);
+    }
+    const float gap = S(22);
+    float card_w = S(210), card_h = S(270);
+    const float avail = w - S(72);
+    const float n = float(entries_.size());
+    if (n * card_w + (n - 1) * gap > avail) card_w = (avail - (n - 1) * gap) / std::max(1.0f, n);
+    float x = (a.x + b.x) / 2 - (n * card_w + (n - 1) * gap) / 2;
+    const float y = a.y + S(140);
+    for (size_t i = 0; i < entries_.size(); ++i) {
+      const PortalEntry& e = entries_[i];
+      const ImVec2 c0{x, y}, c1{x + card_w, y + card_h};
+      if (ImGui::IsMouseHoveringRect(c0, c1)) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) cursor_ = i;
+        if (ImGui::IsMouseClicked(0)) {
+          cursor_ = i;
+          TakeOff(i);
+          return;  // the list changed
+        }
+      }
+      const bool active = i == cursor_;
+      const SkylanderInfo* sky = e.figures.empty() ? nullptr : e.figures[0];
+      const Element el = sky ? ElementOf(*sky) : Element::kNone;
+      dl->AddRectFilled(c0, c1, active ? ElementColor(el, 0.55f, 245) : ElementColor(el, 0.28f, 225), S(16));
+      dl->AddRect(c0, c1, active ? kGold : Rgba(255, 255, 255, 50), S(16), 0, active ? S(3) : S(1.5f));
+      const float pic = std::min(card_w - S(28), S(150));
+      DrawFigurePicture(dl, {(c0.x + c1.x - pic) / 2, c0.y + S(16)}, {(c0.x + c1.x + pic) / 2, c0.y + S(16) + pic}, sky,
+                        S(12));
+      const std::string name = NameOf(e);
+      Label(dl, BoldFont(), S(20), {c0.x + S(12), c0.y + S(28) + pic}, kWhite, name, card_w - S(24));
+      Label(dl, BoldFont(), S(16), {c0.x + S(12), c1.y - S(30)}, kDim, KindOf(e), card_w - S(24));
+      x += card_w + gap;
+    }
+
+    float hx = a.x + S(36);
+    const float hy = b.y - S(56);
+    if (!entries_.empty()) hx += Hint(dl, {hx, hy}, "A", kAcceptGreen, T(Text::kTakeOff), true, "Enter");
+    Hint(dl, {hx, hy}, "B", kBackRed, T(Text::kClose), true, "Esc");
+  }
+
+  std::function<void()> on_done_;
+  std::vector<PortalEntry> entries_;
+  size_t cursor_ = 0;
+  bool done_ = false;
+  bool first_frame_ = true;
+  bool waiting_for_release_ = true;
+  Clock::time_point open_time_ = Clock::now();
+  std::unordered_map<uint64_t, PadReader> pads_;  // by device
+};
+
+std::unique_ptr<PortalOverviewDialog> g_overview;  // UI thread only
+
+void ShowPortalOverview() {
+  if (g_overview || g_check || g_menu || !g_drawer || menu_input::MenuOpen() || !GetSoftwarePortal()) return;
+  g_overview = std::make_unique<PortalOverviewDialog>(g_drawer, [] {
+    g_app_context->CallInUIThreadDeferred([] { g_overview.reset(); });
+  });
+}
+
 void ShowToast(std::string text) {
   if (!g_drawer || !g_app_context) return;
   g_toast = std::make_unique<Toast>(g_drawer, std::move(text), [] {
     g_app_context->CallInUIThreadDeferred([] { g_toast.reset(); });
   });
-}
-
-// portal_item_off_buttons / bind_portal_item_off: takes the item off without opening the menu and
-// without lifting anyone's Skylander. With the menu open, its own Y does that.
-void TakeItemOff() {
-  if (g_menu || !PortalItem()) return;
-  g_german = menu_draw::GermanText();
-  REXLOG_INFO("Portal menu: item taken off with the item button");
-  SetPortalItem(0, std::nullopt);
-  ShowToast(T(Text::kItemTakenOff));
 }
 
 }  // namespace
@@ -5200,15 +5427,17 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
     if (!g_app_context) return;
     g_app_context->CallInUIThread([device, user] { OpenMenu(device, user, false); });
   });
+  // Back + Y (portal_item_off_buttons): the portal overview, where the item comes off too
+  // (SwapForceRecomp #70).
   menu_input::SetButtonHandler(menu_input::ButtonAction::kItemOff, [](DeviceId, uint32_t) {
-    if (g_app_context) g_app_context->CallInUIThread(TakeItemOff);
+    if (g_app_context) g_app_context->CallInUIThread(ShowPortalOverview);
   });
   SetRealFigureArrivedHandler([](int slot) {
     if (g_app_context) g_app_context->CallInUIThread([slot] { RealFigureArrived(slot); });
   });
   rex::ui::RegisterBind("bind_portal_item_off", "F5",
-                        "Take the item (magic item, adventure pack) off the portal", [] {
-                          if (!menu_input::MenuOpen()) TakeItemOff();
+                        "The portal overview: take single figures off the portal", [] {
+                          if (!menu_input::MenuOpen()) ShowPortalOverview();
                         });
   rex::ui::RegisterBind("bind_portal_menu", "F6",
                         "Open or close the portal menu for the keyboard's player", [] {
