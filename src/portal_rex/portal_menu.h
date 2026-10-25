@@ -205,6 +205,11 @@ void AutoOpenPortalMenuForPlayerWithoutFigure();
 // traps or vehicles, on the row of `element` (kNone: the first), and puts the chosen one on at
 // once. Callable from any thread.
 void AutoOpenPortalMenuForCompanion(uint32_t user, portal::Element element);
+// The same for a vehicle of one terrain (1 land, 2 sky, 3 sea, as the games' vehicle toy data
+// numbers them; 0: any): the vehicles' tab opens on that terrain's row, on its first card of
+// `element` if one is asked for too (an elemental gate), e.g. at SuperChargers' "place a land
+// vehicle" or its "wrong vehicle type" screen. Callable from any thread.
+void AutoOpenPortalMenuForVehicle(uint32_t user, int terrain, portal::Element element);
 // The game stopped asking: a menu it opened closes again if nothing was chosen yet.
 void CompanionRequestEnded();
 

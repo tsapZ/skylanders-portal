@@ -1046,10 +1046,18 @@ Element ElementOf(const SkylanderInfo& sky) {
 // capture of 2026-10-25), starts on the companions and puts the chosen one on at once.
 std::mutex g_request_mutex;
 std::optional<Element> g_companion_request;  // the element asked for, kNone if any will do
+// A vehicle's terrain asked for (AutoOpenPortalMenuForVehicle): its trait picture, "vehicle:land",
+// "vehicle:sky" or "vehicle:sea"; empty if any will do.
+std::string g_companion_terrain;
 
 std::optional<Element> CompanionRequest() {
   std::lock_guard lock(g_request_mutex);
   return g_companion_request;
+}
+
+std::string CompanionTerrain() {
+  std::lock_guard lock(g_request_mutex);
+  return g_companion_terrain;
 }
 
 // The Nintendo characters and their vehicles: their toys work only on Nintendo's consoles, the
@@ -2481,15 +2489,35 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   }
 
   // The companions' tab (Library::AddCompanionTab), on the row of the element the game asks for
-  // if it has one.
+  // if it has one; vehicles on the row of the terrain asked for, on its first card of that element.
   void OpenCompanionTab(Element wanted) {
     const std::optional<size_t> index = library_.AddCompanionTab();
     if (!index) return;
     tab_ = *index;
     element_ = selected_ = scroll_row_ = 0;
     followed_row_ = SIZE_MAX;  // follow the choice again
-    if (wanted == Element::kNone) return;  // any will do: the first row
     const Tab& tab = library_.tabs()[tab_];
+    if (const std::string terrain = CompanionTerrain(); !terrain.empty()) {
+      // The rows are sorted by the terrains' names, so the row is found by its cards' trait.
+      for (size_t r = 0; r < tab.rows.size(); ++r) {
+        const auto& row = tab.rows[r];
+        const auto trait = row.empty() ? std::nullopt : TraitOf(library_.characters()[row.front()].versions.front().sky);
+        if (!trait || trait->image != terrain) continue;
+        element_ = r;
+        for (size_t c = 0; wanted != Element::kNone && c < row.size(); ++c) {
+          const Character& character = library_.characters()[row[c]];
+          const Element element = character.element != Element::kNone ? character.element
+                                                                       : ElementOf(*character.versions.front().sky);
+          if (element == wanted) {
+            selected_ = c;
+            break;
+          }
+        }
+        return;
+      }
+      return;
+    }
+    if (wanted == Element::kNone) return;  // any will do: the first row
     for (size_t e = 0; e < tab.elements.size(); ++e) {
       if (tab.elements[e] == wanted) {
         element_ = e;
@@ -4994,6 +5022,16 @@ void AutoOpenPortalMenuForCompanion(uint32_t user, portal::Element element) {
   {
     std::lock_guard lock(g_request_mutex);
     g_companion_request = element;
+    g_companion_terrain.clear();
+  }
+  AutoOpenPortalMenu(user);
+}
+
+void AutoOpenPortalMenuForVehicle(uint32_t user, int terrain, portal::Element element) {
+  {
+    std::lock_guard lock(g_request_mutex);
+    g_companion_request = element;
+    g_companion_terrain = terrain == 1 ? "vehicle:land" : terrain == 2 ? "vehicle:sky" : terrain == 3 ? "vehicle:sea" : "";
   }
   AutoOpenPortalMenu(user);
 }
@@ -5018,6 +5056,7 @@ void CompanionRequestEnded() {
     std::lock_guard lock(g_request_mutex);
     if (!g_companion_request) return;
     g_companion_request.reset();
+    g_companion_terrain.clear();
   }
   CloseAutoOpenedPortalMenu();
 }

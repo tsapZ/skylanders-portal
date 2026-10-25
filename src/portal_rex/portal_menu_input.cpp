@@ -124,6 +124,8 @@ std::mutex g_mutex;
 std::unordered_map<uint64_t, DeviceRecord> g_devices;  // by DeviceId
 std::array<std::function<void(DeviceId, uint32_t)>, kActionCount> g_handlers;
 std::atomic<bool> g_menu_open{false};
+// The controller that pressed a button last (a DeviceId), for the hints' button pictures.
+std::atomic<uint64_t> g_last_pad{0};
 std::function<void()> g_menu_closer;  // UI thread only
 std::atomic<bool> g_menu_closable{false};
 std::optional<DeviceId> g_keyboard;
@@ -437,6 +439,7 @@ class MenuInputDriver final : public InputDriver {
       return result;
     }
     bool hide = !is_active() || g_menu_open.load();
+    if (!keyboard_ && state.gamepad.buttons) g_last_pad.store(uint64_t(id));
     uint16_t visible = state.gamepad.buttons;
     if (Observe(id, state.gamepad, &hide, &visible)) {
       hide = true;
@@ -577,6 +580,7 @@ class MenuInputDriver final : public InputDriver {
     if (inner_->GetDeviceState(id, &state) != X_ERROR_SUCCESS) {
       return std::nullopt;
     }
+    if (!keyboard_ && state.gamepad.buttons) g_last_pad.store(uint64_t(id));
     return state.gamepad;
   }
 
@@ -819,6 +823,14 @@ bool IsActionChord(ButtonAction action, uint16_t buttons) {
 }
 
 bool IsOpenChord(uint16_t buttons) { return IsActionChord(ButtonAction::kPortalMenu, buttons); }
+
+std::string LastPadName() {
+  const uint64_t id = g_last_pad.load();
+  if (!id) return {};
+  std::lock_guard lock(g_mutex);
+  auto it = g_devices.find(id);
+  return it == g_devices.end() ? std::string() : it->second.name;
+}
 
 std::vector<ConnectedDevice> ConnectedDevices() {
   std::lock_guard lock(g_mutex);

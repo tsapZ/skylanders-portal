@@ -13,6 +13,8 @@
 #include <imgui_internal.h>
 
 #include "portal_rex/game_font.h"
+#include "portal_rex/input_pictures.h"
+#include "portal_rex/portal_menu_input.h"
 
 namespace skylanders {
 namespace {
@@ -336,9 +338,59 @@ ImU32 Faded(ImU32 col, float alpha) {
   return (col & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
 }
 
+// The kind of controller the hints draw (Core of Light #29): the one that pressed a button last,
+// looked up once a frame; Xbox before any, and for a pad with an Xbox-like layout.
+input_pictures::PadKind HintPadKind() {
+  static int frame = -1;
+  static std::string name;
+  static input_pictures::PadKind kind = input_pictures::PadKind::kXbox;
+  if (ImGui::GetFrameCount() != frame) {
+    frame = ImGui::GetFrameCount();
+    if (std::string now = menu_input::LastPadName(); now != name) {
+      name = std::move(now);
+      kind = name.empty() ? input_pictures::PadKind::kXbox : input_pictures::PadKindOf(name);
+      if (kind == input_pictures::PadKind::kGeneric) kind = input_pictures::PadKind::kXbox;
+    }
+  }
+  return kind;
+}
+
+// A face button's settings name for a round glyph ("A" -> "a"), empty for anything else.
+std::string FaceButton(std::string_view glyph) {
+  if (glyph == "A" || glyph == "B" || glyph == "X" || glyph == "Y") return std::string(1, char(glyph[0] - 'A' + 'a'));
+  return {};
+}
+
+// A pill's text as the controller in use prints it: "LB / RB" -> "L1 / R1" or "L / R", "Start" ->
+// "Options" or "+"; other words ("< / >", "Up / Down") stay.
+std::string PadGlyph(std::string_view glyph) {
+  const input_pictures::PadKind kind = HintPadKind();
+  if (kind == input_pictures::PadKind::kXbox) return std::string(glyph);
+  static const std::pair<std::string_view, std::string_view> kButtons[] = {
+      {"LB", "lb"}, {"RB", "rb"}, {"LT", "lt"}, {"RT", "rt"}, {"L3", "ls"}, {"R3", "rs"},
+      {"Back", "back"}, {"Start", "start"}, {"A", "a"}, {"B", "b"}, {"X", "x"}, {"Y", "y"}};
+  std::string out;
+  size_t start = 0;
+  while (start <= glyph.size()) {
+    size_t end = glyph.find(" / ", start);
+    if (end == std::string_view::npos) end = glyph.size();
+    std::string_view word = glyph.substr(start, end - start);
+    std::string shown(word);
+    for (const auto& [printed, button] : kButtons) {
+      if (word != printed) continue;
+      if (const char* name = input_pictures::PadButtonName(kind, button, GermanText())) shown = name;
+    }
+    out += shown;
+    if (end == glyph.size()) break;
+    out += " / ";
+    start = end + 3;
+  }
+  return out;
+}
+
 float PadGlyphWidth(std::string_view glyph, bool round) {
   const float h = S(30);
-  return round ? h : std::max(h, TextSize(BoldFont(), S(18), glyph).x + S(16));
+  return round ? h : std::max(h, TextSize(BoldFont(), S(18), PadGlyph(glyph)).x + S(16));
 }
 
 float KeyCapWidth(std::string_view key) { return std::max(S(30), TextSize(BoldFont(), S(17), key).x + S(18)); }
@@ -367,15 +419,22 @@ float Hint(ImDrawList* dl, ImVec2 pos, std::string_view glyph, ImU32 glyph_col,
   const float t = key.empty() ? 0.0f : g_keyboard_shown;
   const float pad_w = PadGlyphWidth(glyph, round);
   const float glyph_w = GlyphWidth(glyph, round, key);
-  if (t < 1.0f) {
+  const std::string face = round ? FaceButton(glyph) : std::string();
+  if (t < 1.0f && !face.empty() && HintPadKind() != input_pictures::PadKind::kXbox) {
+    // A PlayStation or Nintendo pad: its own face button (symbol or letter in its place).
+    const int first = dl->VtxBuffer.Size;
+    input_pictures::DrawPadFaceButton(dl, HintPadKind(), face, {pos.x + h / 2, pos.y + h / 2}, h / 2);
+    FadeVertices(dl, first, 1.0f - t);
+  } else if (t < 1.0f) {
     if (round) {
       dl->AddCircleFilled({pos.x + h / 2, pos.y + h / 2}, h / 2, Faded(glyph_col, 1.0f - t));
     } else {
       dl->AddRectFilled(pos, {pos.x + pad_w, pos.y + h}, Faded(glyph_col, 1.0f - t), S(8));
     }
-    ImVec2 gs = TextSize(BoldFont(), S(18), glyph);
+    const std::string shown = round ? std::string(glyph) : PadGlyph(glyph);
+    ImVec2 gs = TextSize(BoldFont(), S(18), shown);
     Label(dl, BoldFont(), S(18), {pos.x + (pad_w - gs.x) / 2, CapCentredY(pos.y + h / 2, S(18))},
-          Faded(kWhite, 1.0f - t), glyph);
+          Faded(kWhite, 1.0f - t), shown);
   }
   if (t > 0.0f) {
     // The key cap: dark with a light edge, as Core of Light draws it.

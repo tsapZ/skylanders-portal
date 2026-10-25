@@ -35,6 +35,10 @@ void DrawController(ImDrawList* dl, ImVec2 a, ImVec2 b, PadKind kind,
 // "LB" / "L1" / "L", ...; nullptr for a name the settings don't use.
 const char* PadButtonName(PadKind kind, std::string_view button, bool german);
 
+// A face button ("a", "b", "x", "y") as that controller has it, a circle of radius `r` at `c`:
+// the Xbox colours and letters, PlayStation's symbols, Nintendo's letters in their places.
+void DrawPadFaceButton(ImDrawList* dl, PadKind kind, std::string_view button, ImVec2 c, float r);
+
 // A mark on a key, by the SDK's key name ("F6", "W", "Semicolon", "Space", "Up"); `label` is
 // printed small on the key under its own legend (e.g. the controller button it stands for).
 struct KeyMark {

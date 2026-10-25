@@ -138,5 +138,9 @@ struct ConnectedDevice {
 // Controllers, the keyboard and other wrapped devices (a test script), in connection order.
 std::vector<ConnectedDevice> ConnectedDevices();
 
+// The name of the controller that pressed a button last ("PS4 Controller"), empty before any: the
+// menus' hints show that controller's buttons (Core of Light #29). Any thread.
+std::string LastPadName();
+
 }  // namespace menu_input
 }  // namespace skylanders

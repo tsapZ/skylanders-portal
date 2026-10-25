@@ -100,6 +100,10 @@ void DrawFaceButton(ImDrawList* dl, PadKind kind, std::string_view button, ImVec
 
 }  // namespace
 
+void DrawPadFaceButton(ImDrawList* dl, PadKind kind, std::string_view button, ImVec2 c, float r) {
+  DrawFaceButton(dl, kind, button, c, r);
+}
+
 PadKind PadKindOf(std::string_view device_name) {
   const std::string n = Lower(device_name);
   if (Has(n, "xbox") || Has(n, "xinput") || Has(n, "x-box")) return PadKind::kXbox;
