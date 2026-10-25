@@ -28,6 +28,10 @@ enum class Element {
 // unreleased entries and Kaos.
 Element FigureElement(const SkylanderInfo& sky);
 
+// A trap's element, by its toy id (210 Magic to 219 Light); kNone for the Kaos traps and anything
+// that isn't a trap.
+Element TrapElement(const SkylanderInfo& sky);
+
 // The character a figure belongs to: "Chop Chop" for "Legendary Chop Chop" and "Twin Blade Chop
 // Chop (Series 3)", "Freeze Blade" for "Nitro Freeze Blade Top". Same coverage as FigureElement;
 // empty for items and figures it doesn't know.

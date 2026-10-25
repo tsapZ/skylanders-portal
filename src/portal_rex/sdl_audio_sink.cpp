@@ -28,12 +28,19 @@ std::unique_ptr<SdlPortalAudioSink> SdlPortalAudioSink::Open() {
 
 SdlPortalAudioSink::~SdlPortalAudioSink() { SDL_DestroyAudioStream(stream_); }
 
+float SdlPortalAudioSink::Level() const {
+  const double now =
+      std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  return now - last_submit_.load() > 0.25 ? 0.0f : level_.load();
+}
+
 void SdlPortalAudioSink::Submit(std::span<const int16_t> samples) {
   // The level, and a log line when a sound starts and ends (the game sends silence in between).
   int peak = 0;
   for (const int16_t s : samples) peak = std::max(peak, std::abs(int(s)));
   const double now =
       std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  last_submit_.store(now);
   const float loud = std::min(1.0f, float(peak) / 12000.0f);
   const float falling = level_.load() * 0.92f;
   level_.store(std::max(loud, falling));

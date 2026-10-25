@@ -26,7 +26,8 @@ using Block = FigureBlock;
 // Second pair, from its first block:
 //   +0x02 u8 sequence  +0x03 u16 XP (Giants part, up to 63500)  +0x05 u8 hat (Giants)
 //   +0x08 u32 XP (Swap Force part)  +0x0C u8 hat (Swap Force, Trap Team)
-//   +0x0E u8 hat (SuperChargers, its number minus 255)
+//   +0x0E u8 hat (SuperChargers on, its number minus 256: Enigma's 13 is hat 269, the game's
+//        "Gold Rusher-Zahnradkappe"; minus 255 gave its neighbour 268, SuperChargersRecomp #9)
 //   +0x56 u8 a creation crystal's battle class (Imaginators; block +5, byte 6). Found 2026-10-22
 //        from 54 premade crystals with their class in the file name: the one byte that is the
 //        same within each of the ten classes and different between them, in both copies.
@@ -169,13 +170,16 @@ std::optional<FigureStats> ParseFigureStats(const FigureData& data) {
     if (crystal) {
       // (no hat slot known on a crystal)
     } else if (extra[0x0E]) {
-      stats.hat = uint16_t(extra[0x0E] + 255);
+      stats.hat = uint16_t(extra[0x0E] + 256);
     } else if (extra[0x0C]) {
       stats.hat = extra[0x0C];
     } else if (extra[0x05]) {
       stats.hat = extra[0x05];
     }
   }
+  // Vehicles wear no hat: those bytes mean something else on them (Shield Striker showed a
+  // "Kampfhut", SuperChargersRecomp #9).
+  if (sky && (sky->category == "Vehicles" || sky->category == "Vehicle Variants")) stats.hat = 0;
   stats.xp = xp;
   stats.level = LevelForXp(xp);
   stats.level_xp = kLevelXpTable[stats.level - 1];

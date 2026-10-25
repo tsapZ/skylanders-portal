@@ -203,6 +203,23 @@ Element FigureElement(const SkylanderInfo& sky) {
   return character ? character->element : Element::kNone;
 }
 
+Element TrapElement(const SkylanderInfo& sky) {
+  if (sky.category != "Traps") return Element::kNone;
+  switch (sky.id) {
+    case 210: return Element::kMagic;
+    case 211: return Element::kWater;
+    case 212: return Element::kAir;
+    case 213: return Element::kUndead;
+    case 214: return Element::kTech;
+    case 215: return Element::kFire;
+    case 216: return Element::kEarth;
+    case 217: return Element::kLife;
+    case 218: return Element::kDark;
+    case 219: return Element::kLight;
+    default: return Element::kNone;  // 220: the Kaos traps
+  }
+}
+
 std::string_view CharacterName(const SkylanderInfo& sky) {
   const CharacterElement* character = FindCharacter(sky);
   return character ? character->name : std::string_view();

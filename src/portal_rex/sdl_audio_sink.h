@@ -18,14 +18,16 @@ class SdlPortalAudioSink final : public portal::PortalAudioSink {
   void Submit(std::span<const int16_t> samples) override;
   void SetVolume(float volume) { volume_.store(volume); }
   // How loud the speaker plays right now, 0..1 (its peak, falling over about a quarter second),
-  // for a "who is talking" picture.
-  float Level() const { return level_.load(); }
+  // for a "who is talking" picture. 0 once nothing came for a quarter second: with the trap off
+  // the portal the game stops sending at all, and the last level stayed (TrapTeamRecomp #14).
+  float Level() const;
 
  private:
   explicit SdlPortalAudioSink(SDL_AudioStream* stream) : stream_(stream) {}
   SDL_AudioStream* stream_;
   std::atomic<float> volume_{1.0f};
   std::atomic<float> level_{0.0f};
+  std::atomic<double> last_submit_{0.0};  // steady clock seconds of the last Submit
   // A sound is playing (a trapped villain talking): since when, and when it was last loud.
   bool sounding_ = false;
   double sound_start_ = 0, last_loud_ = 0;

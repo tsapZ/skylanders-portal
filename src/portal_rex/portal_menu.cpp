@@ -192,6 +192,9 @@ enum class Text {
   kCheckToys,
   kChangeHalves,
   kVariant,
+  kTrapsTab,
+  kVehiclesTab,
+  kTerrain,
   kCount,
 };
 
@@ -287,6 +290,9 @@ constexpr const char* kEnglish[] = {
     "%u toys: the game takes only one.",
     "Change top / bottom",
     "Version",
+    "Traps",
+    "Vehicles",
+    "Terrain",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -383,6 +389,9 @@ constexpr const char* kGerman[] = {
     "%u Spielzeuge: Das Spiel nimmt nur eins.",
     "Oben / Unten tauschen",
     "Variante",
+    "Fallen",
+    "Fahrzeuge",
+    "Gel\xC3\xA4nde",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -903,6 +912,7 @@ struct Tab {
   std::string game;  // game tabs: every character with a version from this game
   bool recent = false;
   bool items = false;
+  bool titled = false;                   // rows named by row_titles (items: games; vehicles: terrain)
   std::vector<Element> elements;         // game tabs: the element of each row
   std::vector<std::string> row_titles;   // items tab: the game of each row
   std::vector<std::vector<size_t>> rows;  // character indices per row
@@ -972,6 +982,25 @@ bool IsCompanion(const SkylanderInfo* sky) {
     case CompanionKind::kVehicle: return sky->category == "Vehicles" || sky->category == "Vehicle Variants";
   }
   return false;
+}
+
+// The element a figure is drawn with: its character's, a trap's by its toy id (the trap cards in
+// their element's colour, TrapTeamRecomp #13). The traps still form a group of their own.
+Element ElementOf(const SkylanderInfo& sky) {
+  const Element element = portal::FigureElement(sky);
+  return element != Element::kNone ? element : portal::TrapElement(sky);
+}
+
+// The game asks for a companion instead of a Skylander (AutoOpenPortalMenuForCompanion): Trap
+// Team's trap, a vehicle from SuperChargers on. A menu that opens meanwhile doesn't lift the
+// player's Skylander (that made the game forget its request and ask for a Skylander, the owner's
+// capture of 2026-10-25), starts on the companions and puts the chosen one on at once.
+std::mutex g_request_mutex;
+std::optional<Element> g_companion_request;  // the element asked for, kNone if any will do
+
+std::optional<Element> CompanionRequest() {
+  std::lock_guard lock(g_request_mutex);
+  return g_companion_request;
 }
 
 // The Nintendo characters and their vehicles: their toys work only on Nintendo's consoles, the
@@ -1053,6 +1082,8 @@ void AddRecent(uint32_t user, const std::vector<std::filesystem::path>& paths) {
     out << "\n";
   }
 }
+
+std::optional<FigureTrait> TraitOf(const SkylanderInfo* sky, const portal::FigureStats* stats = nullptr);
 
 class Library {
  public:
@@ -1214,6 +1245,15 @@ class Library {
         };
         std::stable_sort(chars.begin(), chars.end(),
                          [&](size_t a, size_t b) { return rank(a) < rank(b); });
+        // The group without an element (the traps) by their own elements, in the game's order,
+        // the Kaos traps last (TrapTeamRecomp #13).
+        if (tab.elements[i] == Element::kNone) {
+          auto trap_rank = [&](size_t c) {
+            return ElementRank(ElementOf(*characters_[c].versions.front().sky));
+          };
+          std::stable_sort(chars.begin(), chars.end(),
+                           [&](size_t a, size_t b) { return trap_rank(a) < trap_rank(b); });
+        }
         sorted.rows.push_back(std::move(chars));
       }
       if (!sorted.elements.empty()) tabs_.push_back(std::move(sorted));
@@ -1223,6 +1263,7 @@ class Library {
     Tab item_tab;
     item_tab.title = T(Text::kItems);
     item_tab.items = true;
+    item_tab.titled = true;
     for (const std::string& game : shown) {
       std::vector<size_t> row;
       for (size_t i : items) {
@@ -1240,6 +1281,67 @@ class Library {
   std::string CharacterOf(const SkylanderInfo& sky) const {
     auto it = known_ids_.find(sky.id);
     return it == known_ids_.end() ? std::string() : it->second;
+  }
+
+  // The game's companions (its traps or vehicles) as a tab of their own, a row per element, for
+  // when the game asks for one (CompanionRequest). Its index; nullopt where the companions are
+  // sidekicks or there are none.
+  std::optional<size_t> AddCompanionTab() {
+    const CompanionKind kind = GameCompanionKind();
+    if (kind == CompanionKind::kSidekick) return std::nullopt;
+    // Traps by element; vehicles by terrain, as the game asks for them ("Bitte platziere ein
+    // Landfahrzeug"), named by the game's trait ("Landfahrzeug", SetFigureTraitProvider).
+    const bool by_terrain = kind == CompanionKind::kVehicle;
+    Tab tab;
+    tab.title = T(kind == CompanionKind::kTrap ? Text::kTrapsTab : Text::kVehiclesTab);
+    tab.titled = by_terrain;
+    std::vector<std::string> keys;
+    for (size_t i = 0; i < characters_.size(); ++i) {
+      const Character& character = characters_[i];
+      if (!character.sidekick || character.versions.empty()) continue;
+      const Element element = character.element != Element::kNone
+                                  ? character.element
+                                  : ElementOf(*character.versions.front().sky);
+      std::string key(ElementLabel(element));
+      if (by_terrain) {
+        const std::optional<FigureTrait> trait = TraitOf(character.versions.front().sky);
+        key = trait ? trait->name : std::string("?");
+      }
+      auto k = std::find(keys.begin(), keys.end(), key);
+      if (k == keys.end()) {
+        keys.push_back(key);
+        tab.elements.push_back(by_terrain ? Element::kNone : element);
+        tab.rows.emplace_back();
+        k = keys.end() - 1;
+      }
+      tab.rows[size_t(k - keys.begin())].push_back(i);
+    }
+    if (tab.rows.empty()) return std::nullopt;
+    // Rows in the game's element order (by name for terrains), cards by element within a row.
+    std::vector<size_t> order(tab.rows.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+      return by_terrain ? keys[a] < keys[b] : ElementRank(tab.elements[a]) < ElementRank(tab.elements[b]);
+    });
+    auto element_of = [&](size_t c) {
+      const Character& character = characters_[c];
+      return character.element != Element::kNone ? character.element
+                                                 : ElementOf(*character.versions.front().sky);
+    };
+    Tab sorted;
+    sorted.title = tab.title;
+    sorted.titled = tab.titled;
+    for (size_t i : order) {
+      std::vector<size_t> row = std::move(tab.rows[i]);
+      std::stable_sort(row.begin(), row.end(), [&](size_t a, size_t b) {
+        return ElementRank(element_of(a)) < ElementRank(element_of(b));
+      });
+      sorted.elements.push_back(tab.elements[i]);
+      if (by_terrain) sorted.row_titles.push_back(keys[i]);
+      sorted.rows.push_back(std::move(row));
+    }
+    tabs_.push_back(std::move(sorted));
+    return tabs_.size() - 1;
   }
 
   const std::vector<Tab>& tabs() const { return tabs_; }
@@ -1425,6 +1527,30 @@ ImTextureID ArtTexture(const std::string& key) {
   return id;
 }
 
+// A hat's picture from another game's picture folder (OtherGameHatPicture, below) as a texture;
+// null while there is none.
+std::shared_ptr<const FigureImage> OtherGameHatPicture(uint16_t hat);
+ImTextureID OtherGameHatTexture(uint16_t hat) {
+  if (!g_immediate_drawer) return ImTextureID{};
+  const std::string key = "other-game-hat:" + std::to_string(hat);
+  if (auto it = g_art_textures.find(key); it != g_art_textures.end()) {
+    return reinterpret_cast<ImTextureID>(it->second.get());
+  }
+  std::shared_ptr<const FigureImage> image = OtherGameHatPicture(hat);
+  if (!image || image->width <= 0 || image->height <= 0 ||
+      image->rgba.size() < size_t(image->width) * image->height * 4) {
+    return ImTextureID{};
+  }
+  auto texture = g_immediate_drawer->CreateTexture(uint32_t(image->width),
+                                                   uint32_t(image->height),
+                                                   rex::ui::ImmediateTextureFilter::kLinear, false,
+                                                   image->rgba.data());
+  if (!texture) return ImTextureID{};
+  ImTextureID id = reinterpret_cast<ImTextureID>(texture.get());
+  g_art_textures.emplace(key, std::move(texture));
+  return id;
+}
+
 std::shared_ptr<const HatInfo> HatInfoFor(uint16_t hat) {
   HatInfoProvider provider;
   {
@@ -1541,7 +1667,7 @@ void DrawFigurePicture(ImDrawList* dl, ImVec2 a, ImVec2 b, const SkylanderInfo* 
     dl->AddImageRounded(texture, a, b, {0, 0}, {1, 1}, IM_COL32_WHITE, rounding);
     return;
   }
-  const Element element = sky ? portal::FigureElement(*sky) : Element::kNone;
+  const Element element = sky ? ElementOf(*sky) : Element::kNone;
   dl->AddRectFilled(a, b, ElementColor(element, 0.38f, 255), rounding);
   DrawElementIcon(dl, {(a.x + b.x) / 2, (a.y + b.y) / 2}, (b.x - a.x) * 0.32f, element,
                   ElementColor(element, 1.2f, 150));
@@ -1614,7 +1740,7 @@ bool IsAdventurePack(const SkylanderInfo* sky) {
 
 // The figure's trait, if the game names one: from its file's stats when there is one
 // (SetFigureStatsTraitProvider), else from the toy (SetFigureTraitProvider).
-std::optional<FigureTrait> TraitOf(const SkylanderInfo* sky, const portal::FigureStats* stats = nullptr) {
+std::optional<FigureTrait> TraitOf(const SkylanderInfo* sky, const portal::FigureStats* stats) {
   if (!sky) return std::nullopt;
   FigureTraitProvider provider;
   FigureStatsTraitProvider stats_provider;
@@ -2091,9 +2217,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     // The hints start with what opened the menu.
     menu_draw::UseKeyboardHints(keyboard_, true);
     software_ = GetSoftwarePortal() != nullptr;
+    companion_request_ = CompanionRequest();
     if (software_) {
       library_.Build(user_);
-      lifted_ = LiftPlayer(user_);
+      // Asked for a trap or a vehicle: the Skylander stays on (lifting it made the game forget the
+      // request); it comes off only if the player picks another Skylander after all.
+      if (!companion_request_) lifted_ = LiftPlayer(user_);
       lift_time_ = Clock::now();
       for (const auto& [owner, sky] : OtherPlayersFigures(user_)) {
         const std::string name = library_.CharacterOf(*sky);
@@ -2106,6 +2235,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         if (auto index = library_.CharacterIndex(extra)) extras_.push_back(*index);
       }
       OpenFirstTab();
+      if (companion_request_) OpenCompanionTab(*companion_request_);
     }
     // Opened with a button, the figure was just lifted: the menu stays hidden while the game
     // reacts (the camera zooms out to the portal) and comes up with the game's own portal screen.
@@ -2113,7 +2243,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     revealed_ = auto_opened_ || !software_ || lifted_.empty();
     if (revealed_) reveal_time_ = Clock::now();
     REXLOG_INFO("Portal menu: opened for player {}{}", user_ + 1,
-                auto_opened_ ? " (the game asks for a Skylander)" : "");
+                companion_request_ ? " (the game asks for a trap or a vehicle)"
+                : auto_opened_     ? " (the game asks for a Skylander)"
+                                   : "");
   }
 
   ~PortalMenuDialog() override {
@@ -2168,7 +2300,13 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
           PlaceForPlayer(user_, pending_paths_, preferred);
         }
         if (item_change_) ScheduleItemChange(user_, item_path_);
-        if (sidekick_change_) ScheduleSidekickChange(user_, sidekick_path_);
+        // The companion the game asks for goes on at once: the game waits for it, so waiting until
+        // it isn't busy held the vehicle back for 10 s (SuperChargersRecomp #8).
+        if (sidekick_change_ && companion_request_) {
+          SetPortalSidekick(user_, sidekick_path_);
+        } else if (sidekick_change_) {
+          ScheduleSidekickChange(user_, sidekick_path_);
+        }
         // The game's own way out: "leave the game" on its portal screen for this player.
         if (leave_) menu_input::TapButton(user_, LeaveButton());
         Finish();
@@ -2178,6 +2316,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (state_ == State::kDone) return;
 
     Actions actions = ReadActions();
+    // Opened by the game: an A meant for its own dialog doesn't pick a card (the owner's Chop Chop
+    // on 2026-10-25, picked 0.9 s after the menu came up; SwapForceRecomp #72).
+    if (auto_opened_ && Clock::now() - reveal_time_ < std::chrono::milliseconds(1000)) {
+      actions.accept = false;
+    }
     if (!revealed_) {
       // B or the open button again: never mind, the figure goes back.
       if (actions.back) {
@@ -2247,6 +2390,24 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       busy = g_game_busy;
     }
     return busy && !busy();
+  }
+
+  // The companions' tab (Library::AddCompanionTab), on the row of the element the game asks for
+  // if it has one.
+  void OpenCompanionTab(Element wanted) {
+    const std::optional<size_t> index = library_.AddCompanionTab();
+    if (!index) return;
+    tab_ = *index;
+    element_ = selected_ = scroll_row_ = 0;
+    followed_row_ = SIZE_MAX;  // follow the choice again
+    if (wanted == Element::kNone) return;  // any will do: the first row
+    const Tab& tab = library_.tabs()[tab_];
+    for (size_t e = 0; e < tab.elements.size(); ++e) {
+      if (tab.elements[e] == wanted) {
+        element_ = e;
+        break;
+      }
+    }
   }
 
   // Recent opens first, on its first Skylander (the item and sidekick cards before it are there
@@ -2477,8 +2638,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       }
       if (a.up) choice_ = (choice_ + choices_.size() - 1) % choices_.size();
       if (a.down) choice_ = (choice_ + 1) % choices_.size();
-      if (a.back) state_ = State::kBrowsing;
-      if (a.accept) Confirm(choices_[choice_].figures);
+      if (a.back) {
+        choosing_companion_ = false;
+        state_ = State::kBrowsing;
+      }
+      if (a.accept) ConfirmChoice(choices_[choice_]);
       return;
     }
     if (a.back) {
@@ -2531,7 +2695,22 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       return;
     }
     if (character->sidekick) {
-      ToggleSidekick(*ShownVersion(*character).sky);
+      // The one on the portal comes off; else, with versions to choose from, which one
+      // (SuperChargersRecomp #10: Shield Striker's two went on as the first).
+      const bool on_portal =
+          current_sidekick_ &&
+          std::any_of(character->versions.begin(), character->versions.end(),
+                      [&](const Version& v) { return v.sky->id == current_sidekick_->id; });
+      choices_ = on_portal ? std::vector<Choice>{} : ChoicesFor(*character);
+      if (choices_.size() > 1) {
+        choosing_companion_ = true;
+        choice_ = 0;
+        choice_scroll_ = 0;
+        followed_choice_ = SIZE_MAX;  // follow the choice again
+        state_ = State::kChoosing;
+        return;
+      }
+      ToggleSidekick(on_portal ? *current_sidekick_ : *ShownVersion(*character).sky);
       return;
     }
     if (TakenBy(*character)) return;
@@ -2541,6 +2720,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       OpenBuilder(v.sky, v.bottom, 0, nullptr);
       return;
     }
+    choosing_companion_ = false;
     choices_ = ChoicesFor(*character);
     if (choices_.size() == 1) {
       Confirm(choices_[0].figures);
@@ -2910,6 +3090,17 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     StartCancel();
   }
 
+  // A version picked in the version list: a companion's goes on next to the Skylander, else the
+  // figures are placed.
+  void ConfirmChoice(const Choice& choice) {
+    if (choosing_companion_) {
+      choosing_companion_ = false;
+      if (!choice.figures.empty() && choice.figures.front()) ToggleSidekick(*choice.figures.front());
+      return;
+    }
+    Confirm(choice.figures);
+  }
+
   // Each figure's file: the one `keep` (a recent entry) has for it, else the one played last, else
   // a new one.
   void Confirm(const std::vector<const SkylanderInfo*>& figures,
@@ -2951,6 +3142,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     AddRecent(user_, paths);
     pending_paths_ = paths;
     restore_ = false;
+    // Opened while the game asked for a companion, the Skylander is still on: off now, and the
+    // new one follows after the usual wait.
+    if (companion_request_ && lifted_.empty()) {
+      lifted_ = LiftPlayer(user_);
+      lift_time_ = Clock::now();
+    }
     state_ = State::kWaiting;
     REXLOG_INFO("Portal menu: player {} places {}", user_ + 1,
                 figures.empty() ? std::string("?") : ComboName(figures));
@@ -3027,7 +3224,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     } else if (state_ == State::kBrowsing) {
       x += Hint(dl, {x, y}, "LT / RT", grey, T(Text::kCategory), false, "Q / E");
       if (!CurrentTab().recent) {
-        x += Hint(dl, {x, y}, "LB / RB", grey, CurrentTab().items ? T(Text::kGame) : T(Text::kElement), false,
+        x += Hint(dl, {x, y}, "LB / RB", grey, CurrentTab().items ? T(Text::kGame) : CurrentTab().titled ? T(Text::kTerrain) : T(Text::kElement), false,
                   "1 / 3");
       } else if (SelectedRecentSwapper()) {
         x += Hint(dl, {x, y}, "LB / RB", grey, T(Text::kChangeHalves), false, "1 / 3");
@@ -3148,18 +3345,24 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   void DrawRowSelector(ImDrawList* dl, ImVec2 a, float right, const Tab& tab) {
     const float h = S(58);
     auto label_of = [&](size_t e) -> std::string {
-      return tab.items ? tab.row_titles[e] : std::string(ElementLabel(tab.elements[e]));
+      if (tab.titled) return tab.row_titles[e];
+      // A game tab's row without an element is its traps' (Trap Team on): named so, not "-".
+      if (tab.elements[e] == Element::kNone && !tab.rows[e].empty() &&
+          library_.characters()[tab.rows[e].front()].versions.front().sky->category == "Traps") {
+        return T(Text::kTrapsTab);
+      }
+      return std::string(ElementLabel(tab.elements[e]));
     };
     auto width_of = [&](size_t e, bool with_label) {
-      const float icon = tab.items ? S(20) : S(62);
+      const float icon = tab.titled ? S(20) : S(62);
       return with_label ? icon + TextSize(BoldFont(), S(21), label_of(e)).x + S(22) : S(62);
     };
     float total = 0;
     for (size_t e = 0; e < tab.rows.size(); ++e) total += width_of(e, true) + S(10);
-    const bool all_labels = tab.items || total <= right - a.x;
+    const bool all_labels = tab.titled || total <= right - a.x;
     float x = a.x;
     for (size_t e = 0; e < tab.rows.size(); ++e) {
-      const Element element = tab.items ? Element::kNone : tab.elements[e];
+      const Element element = tab.titled ? Element::kNone : tab.elements[e];
       const bool active = e == element_;
       const bool with_label = all_labels || active;
       const float w = width_of(e, with_label);
@@ -3169,12 +3372,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                                             : ElementColor(element, 0.40f, 210),
                         h / 2);
       if (active) dl->AddRect({x, a.y}, b, kGold, h / 2, 0, S(3));
-      if (!tab.items) {
+      if (!tab.titled) {
         DrawElementBadge(dl, {x + h / 2, a.y + h / 2}, S(23), element, active ? 255 : 215);
       }
       if (with_label) {
         Label(dl, BoldFont(), S(21),
-              {x + (tab.items ? S(20) : S(60)), CapCentredY(a.y + h / 2, S(21))},
+              {x + (tab.titled ? S(20) : S(60)), CapCentredY(a.y + h / 2, S(21))},
               active ? kInk : kWhite, label_of(e));
       }
       if (ImGui::IsMouseHoveringRect({x, a.y}, b) && ImGui::IsMouseClicked(0) &&
@@ -3240,8 +3443,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const Version& version = ShownVersion(character);
     const SkylanderInfo* shown = version.sky;
     const std::string name = character.item ? FigureName(*shown) : character.name;
+    const Element element = character.element != Element::kNone ? character.element : ElementOf(*shown);
     const auto [p0, p1] =
-        DrawTile(dl, a, b, character.element, selected, shown, name, ShortBadge(*shown));
+        DrawTile(dl, a, b, element, selected, shown, name, ShortBadge(*shown));
     if (character.item) {
       if (current_item_ == character.versions.front().sky) {
         const float w = PillWidth(T(Text::kOnPortal), 15);
@@ -3280,7 +3484,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   void DrawRecentCard(ImDrawList* dl, ImVec2 a, ImVec2 b, const RecentEntry& entry,
                       bool selected) {
-    const Element element = portal::FigureElement(*entry.figures[0]);
+    const Element element = ElementOf(*entry.figures[0]);
     const auto [p0, p1] =
         DrawTile(dl, a, b, element, selected, entry.figures[0], ComboName(entry.figures));
     // A swapper combination: the bottom's character small in the corner.
@@ -3392,11 +3596,14 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const float pic = compact ? S(52) : S(70);
     auto info = HatInfoFor(hat);
     dl->AddRectFilled(a, {a.x + pic, a.y + pic}, Rgba(255, 255, 255, 26), S(10));
-    if (ImTextureID t = info ? ArtTexture(info->image) : ImTextureID{}) {
+    ImTextureID t = info ? ArtTexture(info->image) : ImTextureID{};
+    // None on this disc (Imaginators shows its hats as 3D models): another game's of the same hat.
+    if (!t) t = OtherGameHatTexture(hat);
+    if (t) {
       dl->AddImageRounded(t, {a.x + S(3), a.y + S(3)}, {a.x + pic - S(3), a.y + pic - S(3)}, {0, 0},
                           {1, 1}, IM_COL32_WHITE, S(8));
     } else {
-      // No picture on this disc (Imaginators shows its hats as 3D models): a plain top hat.
+      // No picture anywhere: a plain top hat.
       const ImU32 c = Rgba(255, 255, 255, 110);
       const float cx = a.x + pic * 0.5f;
       dl->AddRectFilled({cx - pic * 0.18f, a.y + pic * 0.24f}, {cx + pic * 0.18f, a.y + pic * 0.64f}, c,
@@ -3431,7 +3638,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     const SkylanderInfo* main = figures[0];
     const bool item = IsItem(main);
-    const Element element = portal::FigureElement(*main);
+    const Element element = ElementOf(*main);
     GradientRect(dl, a, b, ElementColor(element, 0.50f, 245), ElementColor(element, 0.18f, 245),
                  S(20));
     dl->AddRect(a, b, Rgba(255, 255, 255, 40), S(20), 0, S(1.5f));
@@ -3491,7 +3698,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         const SkylanderInfo* half = figures[i];
         const float bh = S(56);
         dl->AddRectFilled({a.x + S(22), y}, {b.x - S(22), y + bh},
-                          ElementColor(portal::FigureElement(*half), 0.62f, 240), S(12));
+                          ElementColor(ElementOf(*half), 0.62f, 240), S(12));
         Label(dl, BoldFont(), S(15), {a.x + S(36), y + S(5)}, Rgba(232, 232, 245),
               T(i == 0 ? Text::kTop : Text::kBottom));
         Label(dl, BoldFont(), S(21), {a.x + S(36), y + S(25)}, kWhite,
@@ -3568,7 +3775,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       if (state_ == State::kChoosing) {
         if (MouseSelects(r0, r1)) choice_ = i;
         if (ImGui::IsMouseHoveringRect(r0, r1) && ImGui::IsMouseClicked(0)) {
-          Confirm(choice.figures);
+          ConfirmChoice(choice);
           return;
         }
       }
@@ -3723,7 +3930,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                      a, b);
 
     // Header: picture, name, version / element / game, the halves.
-    const Element element = portal::FigureElement(*sky);
+    const Element element = ElementOf(*sky);
     DrawFigurePicture(dl, {a.x + S(26), a.y + S(22)}, {a.x + S(110), a.y + S(106)}, sky, S(14));
     OutlinedLabel(dl, TitleFont(), S(34), {a.x + S(126), a.y + S(26)}, kWhite, FigureName(*sky),
                   S(2));
@@ -3922,6 +4129,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   uint32_t user_;
   bool keyboard_;
   bool auto_opened_;
+  std::optional<Element> companion_request_;  // the game asked for a companion when it opened
+  bool choosing_companion_ = false;           // the version list is a companion's
   bool keyboard_controls_ = false;
   bool software_ = false;
   bool revealed_ = true;
@@ -4445,6 +4654,23 @@ void AutoOpenPortalMenu(uint32_t user) {
   });
 }
 
+void AutoOpenPortalMenuForCompanion(uint32_t user, portal::Element element) {
+  {
+    std::lock_guard lock(g_request_mutex);
+    g_companion_request = element;
+  }
+  AutoOpenPortalMenu(user);
+}
+
+void CompanionRequestEnded() {
+  {
+    std::lock_guard lock(g_request_mutex);
+    if (!g_companion_request) return;
+    g_companion_request.reset();
+  }
+  CloseAutoOpenedPortalMenu();
+}
+
 void AutoOpenPortalMenuForPlayerWithoutFigure() {
   if (!g_app_context) return;
   g_app_context->CallInUIThread([] {
@@ -4688,6 +4914,37 @@ std::shared_ptr<const FigureImage> OtherGamePicture(uint16_t id, uint16_t varian
   g_other_pictures.emplace(key, found);
   return found;
 }
+
+namespace {
+
+// "hat-<number>.png" from the other games' picture folders (SuperChargers first: it has a picture
+// of every hat; the numbers are the series' own, the same in every game). Looked up once per hat.
+std::map<uint16_t, std::shared_ptr<const FigureImage>> g_other_hat_pictures;  // also the misses
+
+std::shared_ptr<const FigureImage> OtherGameHatPicture(uint16_t hat) {
+  if (g_own_pictures_dir.empty()) return nullptr;
+  if (auto it = g_other_hat_pictures.find(hat); it != g_other_hat_pictures.end()) return it->second;
+  static constexpr std::string_view kGames[] = {"SuperChargers", "Imaginators", "Trap Team",
+                                                "Swap Force", "Giants", "Spyro's Adventure"};
+  const std::string name = "hat-" + std::to_string(hat) + ".png";
+  std::shared_ptr<const FigureImage> found;
+  for (const std::string_view game : kGames) {
+    const std::filesystem::path dir =
+        g_own_pictures_dir.parent_path() / std::filesystem::path(std::u8string(game.begin(), game.end()));
+    if (dir == g_own_pictures_dir) continue;
+    std::error_code ec;
+    if (!std::filesystem::exists(dir / name, ec)) continue;
+    auto image = std::make_shared<FigureImage>();
+    if (ReadPng(dir / name, image->width, image->height, image->rgba)) {
+      found = image;
+      break;
+    }
+  }
+  g_other_hat_pictures.emplace(hat, found);
+  return found;
+}
+
+}  // namespace
 
 namespace {
 void RunFigurePictureCache(std::filesystem::path dir);

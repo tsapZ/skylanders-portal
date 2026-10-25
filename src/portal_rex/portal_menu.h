@@ -27,6 +27,7 @@
 
 #include <rex/cvar.h>
 
+#include "portal/figure_info.h"
 #include "portal/figure_stats.h"
 
 struct ImFontAtlas;
@@ -196,6 +197,16 @@ void AutoOpenPortalMenu(uint32_t user);
 // the emulated portal, the order in which the game itself hands figures to players. So player 2's
 // prompt while player 1 plays opens player 2's menu. Callable from any thread.
 void AutoOpenPortalMenuForPlayerWithoutFigure();
+
+// For a game integration that knows when the game asks for a companion instead of a Skylander:
+// Trap Team's trap ("Stecke eine Wasser-Falle ins Portal"), the vehicle from SuperChargers on.
+// Until CompanionRequestEnded, a menu that opens (by itself here, or with the button) doesn't lift
+// the player's Skylander (that made the game forget its request), starts on a tab of the game's
+// traps or vehicles, on the row of `element` (kNone: the first), and puts the chosen one on at
+// once. Callable from any thread.
+void AutoOpenPortalMenuForCompanion(uint32_t user, portal::Element element);
+// The game stopped asking: a menu it opened closes again if nothing was chosen yet.
+void CompanionRequestEnded();
 
 // For the settings menu's Problem melden (problem_note.h), UI thread: the game's picture as it is
 // now (the guest output, without the menus over it) as RGBA, false without one; the figures on the
