@@ -367,11 +367,18 @@ SettingsPage KeyboardPage() {
     s.cvar = row.cvar;
     s.en = row.en;
     s.de = row.de;
-    s.help_en = "The key that plays this controller button. A (or a click) and then the key you want; "
-                "Esc keeps the old one, Delete puts the default back. Y saves.";
-    s.help_de = "Die Taste, die diese Controller-Taste spielt. A (oder ein Klick) und dann die gew\xC3\xBC"
-                "nschte Taste dr\xC3\xBC" "cken; Esc l\xC3\xA4sst die alte, Entf holt die Standardtaste "
-                "zur\xC3\xBC" "ck. Y speichert.";
+    s.help_en = "The key that plays this controller button.\n"
+                "A (or a click), then the key you want.\n"
+                "Esc: keeps the old one.\n"
+                "Delete: puts the default back.\n"
+                "\n"
+                "Y saves.";
+    s.help_de = "Die Taste, die diese Controller-Taste spielt.\n"
+                "A (oder ein Klick), dann die gew\xC3\xBC" "nschte Taste dr\xC3\xBC" "cken.\n"
+                "Esc: l\xC3\xA4sst die alte.\n"
+                "Entf: holt die Standardtaste zur\xC3\xBC" "ck.\n"
+                "\n"
+                "Y speichert.";
     s.key_bind = true;
     s.enabled_by = "mnk_mode";  // greyed while the keyboard doesn't play
     page.settings.push_back(std::move(s));
@@ -424,10 +431,15 @@ SettingsPage ControllerPage() {
     s.cvar = row.cvar;
     s.en = row.en;
     s.de = row.de;
-    s.help_en = "What this button does in the game. For example the right shoulder button on B: it then "
-                "does what B does (an ability), and B keeps its own job too.";
-    s.help_de = "Was diese Taste im Spiel macht. Zum Beispiel die rechte Schultertaste auf B: Sie macht "
-                "dann, was B macht (eine F\xC3\xA4higkeit), und B beh\xC3\xA4lt seine eigene Aufgabe.";
+    s.help_en = "What this button does in the game.\n"
+                "As printed: its own job.\n"
+                "Another button: that button's job, e.g. RB on B for the ability; B keeps its own.\n"
+                "Nothing: the button does nothing.";
+    s.help_de = "Was diese Taste im Spiel macht.\n"
+                "Wie aufgedruckt: ihre eigene Aufgabe.\n"
+                "Eine andere Taste: deren Aufgabe, z. B. RB auf B f\xC3\xBCr die F\xC3\xA4higkeit; B "
+                "beh\xC3\xA4lt seine eigene.\n"
+                "Nichts: Die Taste macht nichts.";
     s.options = {{"", "As printed", "Wie aufgedruckt"}, {"a", "A", "A"}, {"b", "B", "B"},
                  {"x", "X", "X"}, {"y", "Y", "Y"}, {"lb", "LB", "LB"}, {"rb", "RB", "RB"},
                  {"lt", "LT", "LT"}, {"rt", "RT", "RT"}, {"ls", "L3", "L3"}, {"rs", "R3", "R3"},
@@ -442,10 +454,12 @@ SettingsPage ControllerPage() {
     s.cvar = cvar;
     s.en = "Vibration, player " + std::to_string(player);
     s.de = "Vibration, Spieler " + std::to_string(player);
-    s.help_en = "How strongly this player's controller vibrates. The controller buzzes briefly at each "
-                "change, so you feel the new strength.";
-    s.help_de = "Wie stark der Controller dieses Spielers vibriert. Bei jeder \xC3\x84nderung vibriert er "
-                "kurz, so sp\xC3\xBCrst du die neue St\xC3\xA4rke.";
+    s.help_en = "How strongly this player's controller vibrates.\n"
+                "\n"
+                "It buzzes briefly at each change, so you feel the new strength.";
+    s.help_de = "Wie stark der Controller dieses Spielers vibriert.\n"
+                "\n"
+                "Bei jeder \xC3\x84nderung vibriert er kurz, so sp\xC3\xBCrst du die neue St\xC3\xA4rke.";
     for (int p = 0; p <= 100; p += 10) {
       const std::string label = p == 0 ? std::string("Aus") : std::to_string(p) + " %";
       s.options.push_back({std::to_string(p), p == 0 ? std::string("Off") : std::to_string(p) + " %", label});
@@ -1587,9 +1601,12 @@ void AddQuitSettings(SettingsPage& page) {
   volume.cvar = "game_volume";
   volume.en = "Volume";
   volume.de = "Lautst\xC3\xA4rke";
-  volume.help_en = "How loud the game is, heard while you change it. Windows' own volume stays as it is.";
-  volume.help_de = "Wie laut das Spiel ist, schon beim Verstellen zu h\xC3\xB6ren. Die Lautst\xC3\xA4rke von "
-                   "Windows bleibt, wie sie ist.";
+  volume.help_en = "How loud the game is, heard while you change it.\n"
+                   "\n"
+                   "Windows' own volume stays as it is.";
+  volume.help_de = "Wie laut das Spiel ist, schon beim Verstellen zu h\xC3\xB6ren.\n"
+                   "\n"
+                   "Die Lautst\xC3\xA4rke von Windows bleibt, wie sie ist.";
   for (int p = 0; p <= 100; p += 10) {
     const std::string label = p == 0 ? std::string() : std::to_string(p) + " %";
     volume.options.push_back({std::to_string(p), p == 0 ? "Off" : label, p == 0 ? "Aus" : label});
@@ -1608,10 +1625,14 @@ void AddQuitSettings(SettingsPage& page) {
   report.de = "Problem melden";
   report.help_en =
       "Keeps the picture of this moment and what kind of problem it is (and a few words typed on the "
-      "keyboard if you like). Report a problem in Core of Light sends it along with the logs.";
+      "keyboard if you like).\n"
+      "\n"
+      "Report a problem in Core of Light sends it along with the logs.";
   report.help_de =
       "Speichert das Bild von genau jetzt und welche Art Problem es ist (auf Wunsch mit ein paar "
-      "Worten von der Tastatur). Problem melden im Hub schickt es mit den Logs mit.";
+      "Worten von der Tastatur).\n"
+      "\n"
+      "Problem melden im Hub schickt es mit den Logs mit.";
   report.action = [] { OpenProblemNote(); };
   page.settings.push_back(std::move(report));
   Setting quit;
