@@ -4826,8 +4826,13 @@ class PortalOverviewDialog final : public rex::ui::ImGuiDialog {
     ShowToast(text);
     entries_.erase(entries_.begin() + std::ptrdiff_t(index));
     if (cursor_ >= entries_.size() && cursor_ > 0) --cursor_;
-    // A player's Skylander gone: the game asks for one and the portal menu takes over.
-    if (e.kind == PortalEntry::Kind::kSkylander && e.player) Close();
+    // A player's Skylander or vehicle gone: the game asks for one and the portal menu takes over.
+    // The overview holds the game still, so it closes for that (left open, the game couldn't ask,
+    // and the next A took the Skylander off as well; the owner, 2026-10-25).
+    if ((e.kind == PortalEntry::Kind::kSkylander && e.player) ||
+        (e.kind == PortalEntry::Kind::kSidekick && GameCompanionKind() == CompanionKind::kVehicle)) {
+      Close();
+    }
   }
 
   void Draw(ImDrawList* dl, ImVec2 size) {

@@ -61,6 +61,9 @@ struct Setting {
   // The cvar holds keyboard keys in the SDK's names ("Semicolon,Space"): A (or a click) waits for
   // the next key pressed, which becomes the value; Esc gives up, Delete puts the default back.
   bool key_bind = false;
+  // With an action: it runs with the menu left open, and what it changes is saved with Y like the
+  // other rows (F4 > Tastatur's "put every key back").
+  bool keep_open = false;
 };
 
 struct SettingsPage {

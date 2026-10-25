@@ -23,6 +23,7 @@
 #endif
 
 #include <imgui.h>
+#include <rex/audio/downmix.h>
 #include <rex/cvar.h>
 #include <rex/input/device.h>
 #include <rex/input/input.h>
@@ -37,6 +38,31 @@
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/problem_note.h"
 #include "portal_rex/settings_file.h"
+
+// The game's volume, 0-100 % (SwapForceRecomp #68: only Windows' mixer could turn a game down): the
+// SDK's output gain (rexglue-sdk downmix.h SetOutputGain, which nothing else sets), applied at the
+// start and while the row changes.
+REXCVAR_DEFINE_INT32(game_volume, 100, "Audio", "The game's volume, 0-100 %").range(0, 100);
+// The SDK's frame rate window (its debug overlay, F3) open from the start (Core of Light #28).
+REXCVAR_DEFINE_BOOL(show_fps, false, "UI", "Shows the game's frame rate in the top left corner (F3 switches it too)");
+
+namespace {
+
+void ApplyGameVolume(int percent) {
+  rex::audio::SetOutputGain(float(std::clamp(percent, 0, 100)) / 100.0f);
+}
+
+// The frame rate window on or off: the SDK's own key bind for it (bind_debug_overlay, F3 unless
+// changed), pressed as a key press in the window would.
+void ToggleFpsWindow() {
+  std::string key = rex::cvar::GetFlagByName("bind_debug_overlay");
+  if (key.empty()) key = "F3";
+  if (const auto comma = key.find(','); comma != std::string::npos) key.resize(comma);
+  rex::ui::KeyEvent event(nullptr, rex::ui::ParseVirtualKey(key), 1, false, false, false, false, false);
+  rex::ui::ProcessKeyEvent(event);
+}
+
+}  // namespace
 
 REXCVAR_DEFINE_UINT32(restart_wait_pid, 0, "Launcher",
                       "Set by F4's \"Spiel neu starten\": the new game waits for this process to end first");
@@ -331,6 +357,8 @@ constexpr KeyRow kKeyRows[] = {
     {"keybind_start", "Start", "Start"},
 };
 
+void EditSetting(const std::string& cvar, const std::string& value);  // below
+
 SettingsPage KeyboardPage() {
   SettingsPage page{"Keyboard", "Tastatur", {}};
   for (const KeyRow& row : kKeyRows) {
@@ -348,6 +376,23 @@ SettingsPage KeyboardPage() {
     s.enabled_by = "mnk_mode";  // greyed while the keyboard doesn't play
     page.settings.push_back(std::move(s));
   }
+  if (page.settings.empty()) return page;
+  // Every key back to its default at once (SwapForceRecomp #66), saved with Y like a single one.
+  Setting reset;
+  reset.en = "Put every key back";
+  reset.de = "Alle Tasten zur\xC3\xBC" "cksetzen";
+  reset.help_en = "Every key on this page back to the one it had at first. Y saves, B leaves them as they were.";
+  reset.help_de = "Alle Tasten dieser Seite wieder auf die, die sie am Anfang hatten. Y speichert, B l\xC3\xA4sst "
+                  "sie, wie sie waren.";
+  reset.keep_open = true;
+  reset.action = [] {
+    for (const KeyRow& row : kKeyRows) {
+      if (const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(row.cvar)) {
+        EditSetting(row.cvar, info->default_value);
+      }
+    }
+  };
+  page.settings.push_back(std::move(reset));
   return page;
 }
 
@@ -410,20 +455,54 @@ SettingsPage ControllerPage() {
   return page;
 }
 
-// A key setting's value as shown: "Semicolon,Space" -> "Semicolon / Leertaste".
+// A key that prints a character, named as this PC's keyboard prints it: the settings keep the SDK's
+// names, which go by the key's place on a US keyboard, so on a German one the key printed "\xC3\x96" was
+// shown as "Semicolon" (the owner, SwapForceRecomp #66). The US layout gives the key's scan code,
+// Windows' active layout its name. Empty for other keys (Space, F1, ...), which keep their names.
+std::string LayoutKeyName(const std::string& sdk_name) {
+  const uint16_t vk = uint16_t(rex::ui::ParseVirtualKey(sdk_name));
+  const bool printable = (vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z') || (vk >= 0xBA && vk <= 0xC0) ||
+                         (vk >= 0xDB && vk <= 0xDF) || vk == 0xE2;
+  if (!printable) return {};
+  static HKL us = LoadKeyboardLayoutW(L"00000409", KLF_NOTELLSHELL);
+  const UINT scan = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC, us ? us : GetKeyboardLayout(0));
+  wchar_t text[32] = {};
+  const int length = scan ? GetKeyNameTextW(LONG(scan) << 16, text, 32) : 0;
+  if (length <= 0) return {};
+  if (length == 1) CharUpperBuffW(text, 1);  // a letter as printed on the key: a capital
+  char utf8[96] = {};
+  const int n = WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8, sizeof(utf8), nullptr, nullptr);
+  return n > 1 ? std::string(utf8) : std::string();
+}
+
+// One key as shown.
+std::string KeyLabel(const std::string& key) {
+  if (const std::string printed = LayoutKeyName(key); !printed.empty()) return printed;
+  if (key == "Space") return Tr("Space", "Leertaste");
+  if (key == "Return") return "Enter";
+  if (key == "Escape") return "Esc";
+  if (key == "Backspace" || key == "Back") return Tr("Backspace", "R\xC3\xBC" "cktaste");
+  if (key == "Delete") return Tr("Delete", "Entf");
+  if (key == "Up") return Tr("Up", "Pfeil hoch");
+  if (key == "Down") return Tr("Down", "Pfeil runter");
+  if (key == "Left") return Tr("Left", "Pfeil links");
+  if (key == "Right") return Tr("Right", "Pfeil rechts");
+  if (key == "Control") return Tr("Ctrl", "Strg");
+  if (key == "Shift") return Tr("Shift", "Umschalt");
+  return key;
+}
+
+// A key setting's value as shown: "Semicolon,Space" -> "\xC3\x96 / Leertaste" on a German keyboard,
+// "Shift+Up" -> "Umschalt+Pfeil hoch".
 std::string KeysLabel(const std::string& value) {
   std::string out;
   for (const std::string& key : SplitKeys(value)) {
-    std::string name = key;
-    if (key == "Space") name = Tr("Space", "Leertaste");
-    else if (key == "Return") name = "Enter";
-    else if (key == "Escape") name = "Esc";
-    else if (key == "Delete") name = Tr("Delete", "Entf");
-    else if (key == "Up") name = Tr("Up", "Pfeil hoch");
-    else if (key == "Down") name = Tr("Down", "Pfeil runter");
-    else if (key == "Left") name = Tr("Left", "Pfeil links");
-    else if (key == "Right") name = Tr("Right", "Pfeil rechts");
-    else if (key == "Control") name = Tr("Ctrl", "Strg");
+    std::string name;
+    size_t start = 0;
+    for (size_t plus; (plus = key.find('+', start)) != std::string::npos; start = plus + 1) {
+      name += KeyLabel(key.substr(start, plus - start)) + "+";
+    }
+    name += KeyLabel(key.substr(start));
     out += (out.empty() ? "" : " / ") + name;
   }
   return out.empty() ? std::string(Tr("none", "keine")) : out;
@@ -868,11 +947,19 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     if (s.cvar.rfind("pad_rumble_p", 0) == 0) {
       menu_input::RumbleTest(uint32_t(s.cvar.back() - '1'), std::atoi(value.c_str()));
     }
+    // The volume: heard at once. The frame rate display: shown or hidden at once.
+    if (s.cvar == "game_volume") ApplyGameVolume(std::atoi(value.c_str()));
+    if (s.cvar == "show_fps") ToggleFpsWindow();
   }
 
   // Actions run with the menu closed, after this frame (one may open another overlay); unsaved
   // changes are asked about first.
   void RunAction(const Setting& s) {
+    // Changes rows: runs here, the menu stays, Y saves them.
+    if (s.keep_open) {
+      s.action();
+      return;
+    }
     if (!s.confirm_en.empty()) {
       ask_ = true;
       ask_choice_ = 1;  // "No" first: A twice by mistake doesn't quit the game
@@ -1381,6 +1468,9 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
   RegisterProblemNote(drawer, app_context);
   g_state.pages = std::move(pages);
   g_state.config_path = std::move(config_path);
+  // The volume and the frame rate display as saved (the launcher writes them too).
+  ApplyGameVolume(REXCVAR_GET(game_volume));
+  if (REXCVAR_GET(show_fps) && app_context) app_context->CallInUIThreadDeferred([] { ToggleFpsWindow(); });
   // The game's page first (the owner, 2026-10-25: F4 is mostly opened to leave or restart the
   // game; the frame rate is changed seldom), the others in their order.
   if (auto game = std::find_if(g_state.pages.begin(), g_state.pages.end(),
@@ -1489,7 +1579,29 @@ void RestartGame() {
 
 }  // namespace
 
+
 void AddQuitSettings(SettingsPage& page) {
+  // The game's volume and the frame rate display, on every game's "Spiel" page (they come before
+  // the rows below, which every game adds last).
+  Setting volume;
+  volume.cvar = "game_volume";
+  volume.en = "Volume";
+  volume.de = "Lautst\xC3\xA4rke";
+  volume.help_en = "How loud the game is, heard while you change it. Windows' own volume stays as it is.";
+  volume.help_de = "Wie laut das Spiel ist, schon beim Verstellen zu h\xC3\xB6ren. Die Lautst\xC3\xA4rke von "
+                   "Windows bleibt, wie sie ist.";
+  for (int p = 0; p <= 100; p += 10) {
+    const std::string label = p == 0 ? std::string() : std::to_string(p) + " %";
+    volume.options.push_back({std::to_string(p), p == 0 ? "Off" : label, p == 0 ? "Aus" : label});
+  }
+  page.settings.push_back(std::move(volume));
+  Setting fps;
+  fps.cvar = "show_fps";
+  fps.en = "Frame rate display";
+  fps.de = "FPS-Anzeige";
+  fps.help_en = "Shows the game's frame rate in the top left corner. F3 switches it in the game too.";
+  fps.help_de = "Zeigt oben links die Bildrate des Spiels. F3 schaltet sie im Spiel auch um.";
+  page.settings.push_back(std::move(fps));
   // Problem melden (problem_note.h): the picture of this moment, the kind of problem, a few words.
   Setting report;
   report.en = "Report a problem";
