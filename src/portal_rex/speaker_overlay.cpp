@@ -73,7 +73,9 @@ class SpeakerOverlay final : public rex::ui::ImGuiDialog {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const int first = dl->VtxBuffer.Size;
     const float r = S(54);
-    const ImVec2 c{S(96), io.DisplaySize.y - S(190)};
+    // Above the game's HUD in the bottom left (lower down it ran into Trap Team's health bar, the
+    // owner, 2026-10-25).
+    const ImVec2 c{S(96), io.DisplaySize.y - S(360)};
     // The ring: green like a voice chat's, wider and brighter with the voice.
     const float ring = S(4) + pulse_ * S(7);
     dl->AddCircle(c, r + S(6) + pulse_ * S(10), Rgba(67, 181, 129, int(70 + 120 * pulse_)), 64,

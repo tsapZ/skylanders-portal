@@ -208,6 +208,12 @@ void AutoOpenPortalMenuForCompanion(uint32_t user, portal::Element element);
 // The game stopped asking: a menu it opened closes again if nothing was chosen yet.
 void CompanionRequestEnded();
 
+// The game says player `user`'s Skylander is out of health (Swap Force's and the later games' Dead
+// state, the older games' "this Skylander needs a break"): its card in the menu gets a red cross
+// until it has been on the portal a while again without the game saying so (a new level). It
+// stays pickable. Any thread.
+void PlayerSkylanderTired(uint32_t user);
+
 // For the settings menu's Problem melden (problem_note.h), UI thread: the game's picture as it is
 // now (the guest output, without the menus over it) as RGBA, false without one; the figures on the
 // emulated portal ("Chop Chop (player 1), ..."); and a short message at the top of the screen.

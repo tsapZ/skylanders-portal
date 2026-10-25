@@ -30,6 +30,7 @@
 #include <rex/input/device.h>
 #include <rex/input/input.h>
 #include <rex/logging.h>
+#include <rex/system/frame_gate.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
 #include <rex/ui/immediate_drawer.h>
@@ -201,6 +202,7 @@ enum class Text {
   kOverviewTook,
   kTrap,
   kVehicle,
+  kTired,
   kCount,
 };
 
@@ -305,6 +307,7 @@ constexpr const char* kEnglish[] = {
     "%s taken off",
     "Trap",
     "Vehicle",
+    "Needs a break",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -410,6 +413,7 @@ constexpr const char* kGerman[] = {
     "%s runtergenommen",
     "Falle",
     "Fahrzeug",
+    "Braucht eine Pause",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -824,11 +828,28 @@ float DrawPortalOfPower(ImDrawList* dl, ImVec2 c, float w, ImU32 glow) {
   dl->AddEllipseFilled({c.x, c.y + h}, {rx, ry}, side);
   dl->AddRectFilled({c.x - rx, c.y}, {c.x + rx, c.y + h}, side);
   // The band of light round its side under the rim, as the real portal glows all round: the side's
-  // front half, a wide soft stroke and a thin bright one.
-  dl->PathEllipticalArcTo({c.x, c.y + h * 0.45f}, {rx * 0.995f, ry}, 0, 0.0f, 3.14159265f, 40);
-  dl->PathStroke(tint(0.25f, int(70 * pulse)), 0, h * 0.5f);
-  dl->PathEllipticalArcTo({c.x, c.y + h * 0.45f}, {rx * 0.995f, ry}, 0, 0.0f, 3.14159265f, 40);
-  dl->PathStroke(tint(0.6f, int(170 * pulse)), 0, std::max(1.0f, h * 0.12f));
+  // front half, a wide soft band and a thin bright one. Filled between two arcs, so both end flush
+  // with the side's left and right edge and seem to run on round the back (as strokes they ended
+  // in a flat cut that stuck out past the side, the owner, 2026-10-25).
+  auto band = [&](float middle, float half, ImU32 col) {
+    constexpr int kSegments = 48;
+    // Without the anti-aliased fringe, which would show as a brighter seam between the pieces.
+    const ImDrawListFlags flags = dl->Flags;
+    dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+    struct Restore {
+      ImDrawList* dl;
+      ImDrawListFlags flags;
+      ~Restore() { dl->Flags = flags; }
+    } restore{dl, flags};
+    for (int i = 0; i < kSegments; ++i) {
+      const float a0 = 3.14159265f * float(i) / kSegments, a1 = 3.14159265f * float(i + 1) / kSegments;
+      const ImVec2 p0{c.x + std::cos(a0) * rx, c.y + middle + std::sin(a0) * ry};
+      const ImVec2 p1{c.x + std::cos(a1) * rx, c.y + middle + std::sin(a1) * ry};
+      dl->AddQuadFilled({p0.x, p0.y - half}, {p1.x, p1.y - half}, {p1.x, p1.y + half}, {p0.x, p0.y + half}, col);
+    }
+  };
+  band(h * 0.45f, h * 0.25f, tint(0.25f, int(70 * pulse)));
+  band(h * 0.45f, std::max(0.5f, h * 0.06f), tint(0.6f, int(170 * pulse)));
   dl->PathEllipticalArcTo({c.x, c.y + h}, {rx, ry}, 0, 0, 3.14159265f, 32);
   dl->PathStroke(IM_COL32(90, 100, 140, 220), 0, std::max(1.0f, w * 0.008f));
   dl->AddEllipseFilled(c, {rx, ry}, IM_COL32(52, 58, 86, 255));
@@ -848,11 +869,21 @@ float DrawPortalOfPower(ImDrawList* dl, ImVec2 c, float w, ImU32 glow) {
     dl->AddEllipseFilled(c, {rx * (0.80f - 0.55f * k), ry * (0.80f - 0.55f * k)},
                          tint(0.15f + 0.85f * k, int((150 + 90 * k) * (0.9f + 0.1f * pulse))));
   }
-  // A swirl turning on the top: two bright arcs opposite each other.
+  // A swirl turning on the top: a faint full ring, and two bright arcs opposite each other running
+  // round it, brightest in the middle and fading at both ends (the owner: the arcs ended abruptly,
+  // SwapForceRecomp #67).
+  const float swirl_width = std::max(1.0f, w * 0.012f);
+  dl->AddEllipse(c, {rx * 0.6f, ry * 0.6f}, tint(0.8f, 45), 0, 48, swirl_width);
   for (int k = 0; k < 2; ++k) {
     const float a0 = t * 1.7f + float(k) * 3.14159265f;
-    dl->PathEllipticalArcTo(c, {rx * 0.6f, ry * 0.6f}, 0, a0, a0 + 1.3f, 16);
-    dl->PathStroke(tint(0.8f, 150), 0, std::max(1.0f, w * 0.012f));
+    constexpr int kPieces = 14;
+    constexpr float kLength = 1.6f;
+    for (int i = 0; i < kPieces; ++i) {
+      const float s0 = a0 + kLength * float(i) / kPieces, s1 = a0 + kLength * float(i + 1) / kPieces;
+      const float fade = std::sin(3.14159265f * (float(i) + 0.5f) / kPieces);
+      dl->PathEllipticalArcTo(c, {rx * 0.6f, ry * 0.6f}, 0, s0, s1, 3);
+      dl->PathStroke(tint(0.8f, int(45 + 150 * fade)), 0, swirl_width);
+    }
   }
   // Sparks rising from the top and fading out, each on its own path and time.
   constexpr int kSparks = 14;
@@ -1596,6 +1627,14 @@ std::shared_ptr<const FigureUpgrades> UpgradesFor(const SkylanderInfo& sky) {
   return provider ? provider(sky.id, sky.variant) : nullptr;
 }
 
+// Whether this game knows the hat (its hat table has a name for it). A hat from a later game isn't
+// worn here (Trap Team showed "Hut Nr. 269" for Enigma's SuperChargers hat; the owner, 2026-10-25:
+// show it only in a game where the figure really wears it), so it isn't shown.
+bool HatKnown(uint16_t hat) {
+  auto info = HatInfoFor(hat);
+  return info && !info->name.empty();
+}
+
 // The hat's name in the game's language, else its number.
 std::string HatName(uint16_t hat) {
   if (auto info = HatInfoFor(hat); info && !info->name.empty()) return info->name;
@@ -1894,6 +1933,32 @@ int FreeSlot(uint32_t user, const std::vector<int>& preferred, const std::vector
   return -1;
 }
 
+// Skylanders out of health in this level (the owner, 2026-10-25: one that died stays out until
+// the level ends): the game says so (Swap Force's and the later games' Dead state, the older games'
+// "this Skylander needs a break"), and its card gets a red cross. It stays pickable, so a wrong
+// mark never keeps a figure from being played: put on again, the mark goes once it has been on a
+// while without the game saying so again (a new level), and stays if the game refuses it at once.
+// UI thread only.
+std::set<uint32_t> g_tired;  // Key(id, variant)
+struct TiredCheck {
+  uint32_t key;
+  Clock::time_point since;
+};
+std::vector<TiredCheck> g_tired_checks;
+constexpr auto kTiredCheckTime = std::chrono::seconds(10);
+
+bool IsTired(const SkylanderInfo* sky) {
+  if (!sky || g_tired.empty()) return false;
+  // Put on again and not refused in time: rested (another level).
+  const auto now = Clock::now();
+  std::erase_if(g_tired_checks, [&](const TiredCheck& check) {
+    if (now - check.since < kTiredCheckTime) return false;
+    if (g_tired.erase(check.key)) REXLOG_INFO("Portal menu: a Skylander marked as tired is back in play");
+    return true;
+  });
+  return g_tired.contains(Key(*sky));
+}
+
 void PlaceForPlayer(uint32_t user, const std::vector<std::filesystem::path>& paths,
                     const std::vector<int>& preferred) {
   if (!GetSoftwarePortal()) return;
@@ -1904,7 +1969,12 @@ void PlaceForPlayer(uint32_t user, const std::vector<std::filesystem::path>& pat
       REXLOG_WARN("Portal menu: no free portal slot for player {}", user + 1);
       return;
     }
-    if (PlaceFigureFromFile(slot, path)) slots.push_back(slot);
+    if (PlaceFigureFromFile(slot, path)) {
+      slots.push_back(slot);
+      if (const SkylanderInfo* sky = FigureIn(slot); sky && g_tired.contains(Key(*sky))) {
+        g_tired_checks.push_back({Key(*sky), Clock::now()});
+      }
+    }
   }
 }
 
@@ -3498,6 +3568,22 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
     }
     if (auto owner = TakenBy(character)) DrawTaken(dl, a, b, *owner);
+    if (IsTired(shown)) DrawTired(dl, a, b);
+  }
+
+  // A Skylander out of health in this level: a red cross over its picture and the game's words.
+  void DrawTired(ImDrawList* dl, ImVec2 a, ImVec2 b) {
+    dl->AddRectFilled(a, b, Rgba(30, 6, 10, 120), S(12));
+    const float pad = S(26), w = b.x - a.x;
+    const ImVec2 c0{a.x + pad, a.y + pad}, c1{b.x - pad, a.y + w - pad};
+    dl->AddLine(c0, c1, Rgba(230, 50, 50, 230), S(7));
+    dl->AddLine({c1.x, c0.y}, {c0.x, c1.y}, Rgba(230, 50, 50, 230), S(7));
+    const char* text = T(Text::kTired);
+    const ImVec2 ts = TextSize(BoldFont(), S(16), text);
+    const ImVec2 c{(a.x + b.x) / 2, a.y + w * 0.5f};
+    const ImVec2 q0{c.x - ts.x / 2 - S(10), c.y - S(13)}, q1{c.x + ts.x / 2 + S(10), c.y + S(13)};
+    dl->AddRectFilled(q0, q1, Rgba(150, 25, 30, 235), S(13));
+    Label(dl, BoldFont(), S(16), {c.x - ts.x / 2, c.y - ts.y / 2}, kWhite, text);
   }
 
   void DrawRecentCard(ImDrawList* dl, ImVec2 a, ImVec2 b, const RecentEntry& entry,
@@ -3731,7 +3817,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       const portal::FigureStats& stats = *owned->stats;
       const float width = b.x - a.x - S(44);
       y = DrawLevelBar(dl, {a.x + S(22), y}, width, stats);
-      if (stats.hat) y = DrawHat(dl, {a.x + S(22), y}, width, stats.hat, true);
+      if (stats.hat && HatKnown(stats.hat)) y = DrawHat(dl, {a.x + S(22), y}, width, stats.hat, true);
       // The upgrades bought, as the game's icons in a row.
       if (auto upgrades = UpgradesFor(*main)) {
         const float size = S(46), gap = S(7);
@@ -4007,7 +4093,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const float lx = a.x + S(28);
     if (stats) {
       y = DrawLevelBar(dl, {lx, y}, left_w - S(20), *stats, 0.95f);
-      if (stats->hat) y = DrawHat(dl, {lx, y}, left_w - S(20), stats->hat, false);
+      if (stats->hat && HatKnown(stats->hat)) y = DrawHat(dl, {lx, y}, left_w - S(20), stats->hat, false);
       for (const std::string& text : StatsLines(*stats)) {
         Label(dl, BoldFont(), S(17), {lx, y}, kDim, text, left_w - S(20));
         y += TextSize(BoldFont(), S(17), text, left_w - S(20)).y + S(8);
@@ -4248,8 +4334,14 @@ class Toast final : public rex::ui::ImGuiDialog {
   Clock::time_point start_ = Clock::now();
 };
 
+void CloseOverviewIfOpen();  // below, with the overview
+
 void OpenMenu(DeviceId device, uint32_t user, bool keyboard, bool auto_opened = false) {
   if (g_menu || !g_drawer) return;
+  // The portal overview closes first: taking a vehicle or trap off there makes the game ask for
+  // another, the menu opened for it, and the overview behind it went on reading the buttons (A on
+  // a vehicle also took the Skylander off, the owner, 2026-10-25).
+  CloseOverviewIfOpen();
   g_menu = std::make_unique<PortalMenuDialog>(
       g_drawer,
       [] {
@@ -4608,16 +4700,21 @@ class PortalOverviewDialog final : public rex::ui::ImGuiDialog {
     menu_input::SetMenuOpen(true);
     menu_input::SetMenuCloser([this] { Close(); });
     entries_ = PortalEntries();
-    REXLOG_INFO("Portal overview: opened, {} figure(s) on the portal", entries_.size());
+    // The game holds still while the overview is open (the owner, 2026-10-25): its next frame
+    // waits until the overview closes (rexglue-sdk frame_gate.h).
+    rex::system::SetGuestFramesHeld(true);
+    REXLOG_INFO("Portal overview: opened, {} figure(s) on the portal, game paused", entries_.size());
   }
 
   ~PortalOverviewDialog() override {
     if (!done_) menu_input::SetMenuOpen(false);
+    rex::system::SetGuestFramesHeld(false);
   }
 
   void Close() {
     if (done_) return;
     done_ = true;
+    rex::system::SetGuestFramesHeld(false);
     menu_input::SetMenuOpen(false);
     if (on_done_) on_done_();
   }
@@ -4762,7 +4859,8 @@ class PortalOverviewDialog final : public rex::ui::ImGuiDialog {
     const float n = float(entries_.size());
     if (n * card_w + (n - 1) * gap > avail) card_w = (avail - (n - 1) * gap) / std::max(1.0f, n);
     float x = (a.x + b.x) / 2 - (n * card_w + (n - 1) * gap) / 2;
-    const float y = a.y + S(140);
+    // Standing just above the portal's back rim, not high up in the air (the owner, 2026-10-25).
+    const float y = std::max(a.y + S(140), portal_c.y - portal_w * 0.15f - card_h + S(10));
     for (size_t i = 0; i < entries_.size(); ++i) {
       const PortalEntry& e = entries_[i];
       const ImVec2 c0{x, y}, c1{x + card_w, y + card_h};
@@ -4806,6 +4904,12 @@ class PortalOverviewDialog final : public rex::ui::ImGuiDialog {
 };
 
 std::unique_ptr<PortalOverviewDialog> g_overview;  // UI thread only
+
+void CloseOverviewIfOpen() {
+  if (!g_overview) return;
+  REXLOG_INFO("Portal overview: closed for the portal menu");
+  g_overview->Close();
+}
 
 void ShowPortalOverview() {
   if (g_overview || g_check || g_menu || !g_drawer || menu_input::MenuOpen() || !GetSoftwarePortal()) return;
@@ -4887,6 +4991,21 @@ void AutoOpenPortalMenuForCompanion(uint32_t user, portal::Element element) {
     g_companion_request = element;
   }
   AutoOpenPortalMenu(user);
+}
+
+void PlayerSkylanderTired(uint32_t user) {
+  if (!g_app_context || user >= rex::input::kMaxGuestUsers) return;
+  g_app_context->CallInUIThread([user] {
+    for (int slot : g_player_slots[user]) {
+      const SkylanderInfo* sky = FigureIn(slot);
+      if (!sky) continue;
+      const uint32_t key = Key(*sky);
+      std::erase_if(g_tired_checks, [&](const TiredCheck& check) { return check.key == key; });
+      if (g_tired.insert(key).second) {
+        REXLOG_INFO("Portal menu: {} is out of health for this level (marked)", FigureName(*sky));
+      }
+    }
+  });
 }
 
 void CompanionRequestEnded() {

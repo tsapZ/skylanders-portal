@@ -1381,6 +1381,13 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
   RegisterProblemNote(drawer, app_context);
   g_state.pages = std::move(pages);
   g_state.config_path = std::move(config_path);
+  // The game's page first (the owner, 2026-10-25: F4 is mostly opened to leave or restart the
+  // game; the frame rate is changed seldom), the others in their order.
+  if (auto game = std::find_if(g_state.pages.begin(), g_state.pages.end(),
+                               [](const SettingsPage& p) { return p.en == "Game"; });
+      game != g_state.pages.end()) {
+    std::rotate(g_state.pages.begin(), game, game + 1);
+  }
   // The keyboard's keys after the controls page (or at the end), where the SDK has its keyboard.
   if (SettingsPage keys = KeyboardPage(); !keys.settings.empty()) {
     auto controls = std::find_if(g_state.pages.begin(), g_state.pages.end(),
