@@ -5431,7 +5431,59 @@ void StartFigurePictureCache(std::filesystem::path dir) {
 
 namespace {
 
-// The cache's work, on its own thread: the figures' pictures, the hats, the upgrade trees.
+// The element symbols the menu shows ("element:<name>" from the art provider), as
+// element-<name>.png for the launcher's figure library. Asked for a few rounds (some games read
+// them on demand once asked); the ones a game doesn't have (Light and Dark before Trap Team) never
+// come. A file once there is kept.
+void WriteElementPictures(const std::filesystem::path& dir) {
+  namespace fs = std::filesystem;
+  using namespace std::chrono_literals;
+  static constexpr std::string_view kElements[] = {"magic", "earth",  "water", "fire",  "tech",
+                                                   "undead", "life", "air",   "light", "dark"};
+  std::error_code ec;
+  std::vector<std::string> missing;
+  for (const std::string_view element : kElements) {
+    if (!fs::exists(dir / ("element-" + std::string(element) + ".png"), ec)) missing.emplace_back(element);
+  }
+  size_t written = 0;
+  for (int round = 0; round < 6 && !missing.empty() && !g_picture_cache_stop; ++round) {
+    using Found = std::vector<std::pair<std::string, std::shared_ptr<const FigureImage>>>;
+    auto found = std::make_shared<std::promise<Found>>();
+    auto result = found->get_future();
+    auto batch = std::make_shared<std::vector<std::string>>(missing);
+    if (!g_app_context) return;
+    g_app_context->CallInUIThread([found, batch] {
+      ArtImageProvider art_provider;
+      {
+        std::lock_guard lock(g_provider_mutex);
+        art_provider = g_art_provider;
+      }
+      Found out;
+      for (const std::string& element : *batch) {
+        if (auto image = art_provider ? art_provider("element:" + element) : nullptr) out.emplace_back(element, image);
+      }
+      found->set_value(std::move(out));
+    });
+    if (result.wait_for(10s) != std::future_status::ready) continue;
+    const Found images = result.get();
+    // Done once a round adds none while the game has given some (in this run or an earlier one):
+    // the rest it doesn't have.
+    if (images.empty() && missing.size() < std::size(kElements)) break;
+    for (const auto& [element, image] : images) {
+      if (image->width > 0 && image->height > 0 &&
+          image->rgba.size() >= size_t(image->width) * image->height * 4 &&
+          WritePng(dir / ("element-" + element + ".png"), image->width, image->height, image->rgba.data())) {
+        ++written;
+      }
+      std::erase(missing, element);
+    }
+    for (int i = 0; i < 4 && !missing.empty() && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
+  }
+  if (written) REXLOG_INFO("Portal menu: {} element symbols for the launcher", written);
+}
+
+// The cache's work, on its own thread: the figures' pictures, the element symbols, the hats, the
+// upgrade trees.
 void RunFigurePictureCache(std::filesystem::path dir) {
     namespace fs = std::filesystem;
     using namespace std::chrono_literals;
@@ -5487,6 +5539,7 @@ void RunFigurePictureCache(std::filesystem::path dir) {
       for (int i = 0; i < 4 && !g_picture_cache_stop; ++i) std::this_thread::sleep_for(500ms);
     }
     if (written) REXLOG_INFO("Portal menu: {} figure pictures for the launcher in {}", written, PathUtf8(dir));
+    WriteElementPictures(dir);
     // The hats, once: asked until three rounds in a row add none (the game's hat table loads in the
     // background; numbers it doesn't have never come).
     if (fs::exists(dir / "hats.txt", ec)) {
