@@ -5003,6 +5003,38 @@ void ShowPortalToast(std::string text) { ShowToast(std::move(text)); }
 
 ImTextureID menu_draw::GameArtTexture(const std::string& key) { return ArtTexture(key); }
 
+namespace {
+
+// Whether the player has a Skylander on the emulated portal that isn't out of health (the same
+// figures LiftPlayer would take off).
+bool PlayerHasFreshSkylander(uint32_t user) {
+  portal::SoftwarePortal* software = GetSoftwarePortal();
+  if (!software) return false;
+  const auto& slots = g_player_slots[user];
+  for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
+    if (!software->HasFigure(slot) || IsExtraSlot(slot)) continue;
+    const SkylanderInfo* sky = FigureIn(slot);
+    if (!sky || IsItem(sky) || IsCompanion(sky) || IsTired(sky)) continue;
+    const bool mine = std::find(slots.begin(), slots.end(), slot) != slots.end() ||
+                      (user == 0 && !OwnedByOther(slot, user));
+    if (mine) return true;
+  }
+  return false;
+}
+
+// Bumped by CloseAutoOpenedPortalMenu: a deferred open (below) from before it is dropped.
+std::atomic<uint32_t> g_auto_open_generation{0};
+// How long the game must keep asking although the player's Skylander is on the portal.
+constexpr auto kAutoOpenWithFigureDelay = std::chrono::milliseconds(1500);
+
+void OpenAutoMenu(uint32_t user) {
+  // The player's controller steers it; without one, the keyboard.
+  const auto device = menu_input::DeviceForUser(user);
+  OpenMenu(device ? device->id : DeviceId::kInvalid, user, !device || device->keyboard, true);
+}
+
+}  // namespace
+
 void AutoOpenPortalMenu(uint32_t user) {
   if (!g_app_context || user >= rex::input::kMaxGuestUsers) return;
   g_app_context->CallInUIThread([user] {
@@ -5012,9 +5044,27 @@ void AutoOpenPortalMenu(uint32_t user) {
       return;
     }
     if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal()) return;
-    // The player's controller steers it; without one, the keyboard.
-    const auto device = menu_input::DeviceForUser(user);
-    OpenMenu(device ? device->id : DeviceId::kInvalid, user, !device || device->keyboard, true);
+    // The player's Skylander already on the portal (put on before the game asked, or left on):
+    // the game is in its prompt state for a moment only (about 0.1 s in Imaginators) and then
+    // loads it. Opening now lifted the figure while it loaded, the game asked again, and so on
+    // (seen 2026-10-26 with a figure on from the start). So the menu waits; if the game still
+    // asks after that (it didn't take the figure), it opens as usual. A trap or vehicle request
+    // keeps the Skylander on anyway.
+    if (!CompanionRequest() && PlayerHasFreshSkylander(user)) {
+      const uint32_t generation = g_auto_open_generation.load();
+      std::thread([user, generation] {
+        std::this_thread::sleep_for(kAutoOpenWithFigureDelay);
+        if (!g_app_context || g_auto_open_generation.load() != generation) return;
+        g_app_context->CallInUIThread([user, generation] {
+          if (g_menu || g_auto_open_generation.load() != generation) return;
+          if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal()) return;
+          REXLOG_INFO("Portal menu: the game still asks player {} although a Skylander is on", user + 1);
+          OpenAutoMenu(user);
+        });
+      }).detach();
+      return;
+    }
+    OpenAutoMenu(user);
   });
 }
 
@@ -5133,6 +5183,7 @@ void ClosePortalCheck() {
 
 void CloseAutoOpenedPortalMenu() {
   if (!g_app_context) return;
+  ++g_auto_open_generation;  // the game stopped asking: a deferred open doesn't come
   g_app_context->CallInUIThread([] {
     if (g_menu && g_menu->auto_opened()) g_menu->Cancel();
   });
