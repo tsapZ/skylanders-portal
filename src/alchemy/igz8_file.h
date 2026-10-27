@@ -29,7 +29,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "game/xenos_dxt.h"
+#include "alchemy/xenos_dxt.h"
 
 namespace skylanders::alchemy {
 

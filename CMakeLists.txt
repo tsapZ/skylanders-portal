@@ -32,6 +32,7 @@ if(SKYLANDERS_ALCHEMY_STB)
         src/alchemy/igz8_file.cpp
         src/alchemy/inflate.cpp
         src/alchemy/lzma_decoder.cpp
+        src/alchemy/xenos_dxt.cpp
     )
     target_include_directories(skylanders_alchemy PUBLIC src)
     target_include_directories(skylanders_alchemy PRIVATE "${SKYLANDERS_ALCHEMY_STB}")
