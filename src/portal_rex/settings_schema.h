@@ -40,9 +40,10 @@ bool SettingsSchemaRequested();
 // the flag it does nothing.
 // The graphics defaults every game uses where the owner hasn't set his own: 16x texture
 // filtering (the SDK defaults to 4x; ground and floor textures seen at a shallow angle stay sharp
-// for about 1 % of the frame rate). Call from ReXApp::OnPostSetup, once the GPU plugin's settings
-// exist; WriteSettingsSchemaIfRequested applies it too, so the launcher shows the values the game
-// starts with.
+// for about 1 % of the frame rate) and texture fetch offsets in the console's texels (the games'
+// shadow and blur kernels keep their size at any resolution scale). Call from ReXApp::OnPostSetup,
+// once the GPU plugin's settings exist; WriteSettingsSchemaIfRequested applies it too, so the
+// launcher shows the values the game starts with.
 void ApplyGraphicsDefaults();
 
 // An HD texture pack for the game: <Documents>\Skylanders\Textures\<game> (beside the figure

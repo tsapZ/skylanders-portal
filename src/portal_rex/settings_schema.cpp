@@ -121,6 +121,16 @@ void ApplyGraphicsDefaults() {
       !rex::cvar::SetFlagByName("anisotropic_override", "5")) {
     REXLOG_WARN("Could not set anisotropic_override to 16x");
   }
+  // Texture fetch offsets in the console's texels at every resolution scale (the SDK, like Xenia,
+  // divides them by the scale by default). The games blur their shadows, bloom and blur effects
+  // with fixed kernels (the later games a 9-tap one, -4..4 texels); divided, a kernel shrinks with
+  // the scale, and at scale 2 the shadows had stair-stepped edges where the console's are soft
+  // (ImaginatorsRecomp #12; the same blur in Trap Team, SuperChargers and Swap Force). Compared
+  // at scale 2 in each game, on and off. Scale 1 is the same either way. Only when nothing set it.
+  if (rex::cvar::GetFlagSource("draw_resolution_scaled_texture_offsets") == rex::cvar::Source::kDefault &&
+      !rex::cvar::SetFlagByName("draw_resolution_scaled_texture_offsets", "false")) {
+    REXLOG_WARN("Could not set draw_resolution_scaled_texture_offsets to false");
+  }
 }
 
 void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game) {
