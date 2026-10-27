@@ -61,6 +61,7 @@ struct Event {
     kRemove,
     kTrap,
     kWatch,
+    kPollWatch,
     kUnwatch,
     kDump,
     kSave,
@@ -74,7 +75,8 @@ struct Event {
   bool right_trigger = false;
   double x = 0.0, y = 0.0;
   std::string text;
-  uint32_t frames = 0;  // renderdoc: guest frames to capture; player: the player (1-4); place: slot
+  uint32_t frames = 0;  // renderdoc: guest frames to capture; player: the player (1-4); place: slot;
+                        // pollwatch: the changes to log
   std::vector<uint32_t> words;  // scan: the sequence; poke: address and value
   int hit = -1;  // watch, dump: words[0] is an offset from this hit of the last scan
   uint32_t pointer = 0;  // watch, dump: if nonzero, words[0] is an offset from the u32 stored here
@@ -253,6 +255,13 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
       while (words >> word) e.words.push_back(uint32_t(std::stoul(word, nullptr, 16)));
       ok = e.words.size() == 1 || e.words.size() == 2 || e.words.size() == 4;
       e.kind = Event::Kind::kWatch;
+    } else if (cmd == "pollwatch") {
+      std::string word;
+      ok = bool(words >> word);
+      if (ok) e.words.push_back(ParseAddress(word, e));
+      e.frames = 16;
+      if (ok && words >> e.frames) ok = e.frames > 0 && e.frames <= 256;
+      e.kind = Event::Kind::kPollWatch;
     } else if (cmd == "unwatch") {
       e.kind = Event::Kind::kUnwatch;
     } else if (cmd == "stacks") {
@@ -456,6 +465,10 @@ class ScriptInputDriver final : public rex::input::InputDriver {
                           e.words.size() > 1 ? std::optional<uint32_t>(e.words[1]) : std::nullopt,
                           e.text == "watchread", e.words.size() == 4 ? e.words[2] : 0,
                           e.words.size() == 4 ? e.words[3] : 0);
+        } else if (e.kind == Event::Kind::kPollWatch) {
+          uint32_t address;
+          if (!ResolveAddress(memory, e, address)) continue;
+          StartPollWatch(memory, address, uint32_t(e.frames));
         } else if (e.kind == Event::Kind::kUnwatch) {
           StopWriteWatch();
         } else if (e.kind == Event::Kind::kStacks) {

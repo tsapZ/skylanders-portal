@@ -15,6 +15,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <immintrin.h>
 #include <tlhelp32.h>
 #endif
 
@@ -302,9 +303,105 @@ std::string FrameName(uintptr_t address) {
   return HostFrameName(address);
 }
 
+std::thread g_poller;  // the poll watch's thread
+std::atomic<bool> g_polling{false};
+
+// Stops every other thread at once, takes their call chains, lets them go again, then logs the
+// chains of the threads that were in recompiled code (for the poll watch: the writer is among
+// them if it hasn't returned yet). Everything is allocated before the first thread is stopped: a
+// stopped thread may hold the heap lock.
+void LogGuestThreadsNow(const std::string& title) {
+  constexpr int kStackFrames = 14;
+  struct Sample {
+    DWORD id = 0;
+    HANDLE thread = nullptr;
+    bool taken = false;
+    uintptr_t frames[kStackFrames] = {};
+  };
+  const DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
+  std::vector<Sample> samples;
+  samples.reserve(512);
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) return;
+  THREADENTRY32 entry{};
+  entry.dwSize = sizeof(entry);
+  for (BOOL ok = Thread32First(snapshot, &entry); ok && samples.size() < 512;
+       ok = Thread32Next(snapshot, &entry)) {
+    if (entry.th32OwnerProcessID != pid || entry.th32ThreadID == self) continue;
+    HANDLE thread =
+        OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, entry.th32ThreadID);
+    if (!thread) continue;
+    Sample sample;
+    sample.id = entry.th32ThreadID;
+    sample.thread = thread;
+    samples.push_back(sample);
+  }
+  CloseHandle(snapshot);
+  for (Sample& s : samples) s.taken = SuspendThread(s.thread) != DWORD(-1);
+  for (Sample& s : samples) {
+    if (!s.taken) continue;
+    CONTEXT ctx{};
+    ctx.ContextFlags = CONTEXT_FULL;
+    s.taken = GetThreadContext(s.thread, &ctx) != 0;
+    if (s.taken) UnwindSafe(ctx, s.frames, kStackFrames);
+  }
+  for (Sample& s : samples) {
+    ResumeThread(s.thread);
+    CloseHandle(s.thread);
+  }
+  REXLOG_INFO("{}", title);
+  for (const Sample& s : samples) {
+    if (!s.taken) continue;
+    std::string chain;
+    bool guest = false;
+    for (uintptr_t frame : s.frames) {
+      if (!frame) break;
+      const std::string name = FrameName(frame);
+      guest = guest || name.rfind("sub_", 0) == 0;
+      chain += (chain.empty() ? "" : " <- ") + name;
+    }
+    if (guest) REXLOG_INFO("Poll watch:   {}: {}", s.id, chain);
+  }
+}
+
 #endif  // _WIN32
 
 }  // namespace
+
+void StartPollWatch(rex::memory::Memory* memory, uint32_t guest_address, uint32_t max_changes) {
+#ifdef _WIN32
+  if (!memory || g_polling.load()) return;
+  if (g_poller.joinable()) g_poller.join();
+  const auto* host = memory->TranslateVirtual<const volatile uint32_t*>(guest_address);
+  g_polling.store(true);
+  g_poller = std::thread([host, guest_address, max_changes] {
+    SetThreadDescription(GetCurrentThread(), L"Poll watch");
+    uint32_t last = *host;
+    REXLOG_INFO("Poll watch: watching guest {:08X}, now {:08X}", guest_address,
+                _byteswap_ulong(last));
+    uint32_t changes = 0;
+    while (g_polling.load() && changes < max_changes) {
+      const uint32_t now = *host;
+      if (now == last) {
+        _mm_pause();
+        continue;
+      }
+      ++changes;
+      LogGuestThreadsNow(fmt::format("Poll watch: {:08X} went {:08X} -> {:08X} (change {})",
+                                     guest_address, _byteswap_ulong(last), _byteswap_ulong(now),
+                                     changes));
+      last = now;
+    }
+    REXLOG_INFO("Poll watch: done, {} change(s) of {:08X}", changes, guest_address);
+    g_polling.store(false);
+  });
+#else
+  (void)memory;
+  (void)guest_address;
+  (void)max_changes;
+  REXLOG_WARN("Poll watch: only on Windows");
+#endif
+}
 
 void StartWriteWatch(rex::memory::Memory* memory, uint32_t guest_address,
                      std::optional<uint32_t> value, bool reads, uint32_t snapshot,
@@ -349,6 +446,8 @@ void StartWriteWatch(rex::memory::Memory* memory, uint32_t guest_address,
 
 void StopWriteWatch() {
 #ifdef _WIN32
+  g_polling.store(false);
+  if (g_poller.joinable()) g_poller.join();
   if (!g_watched.load()) return;
   g_watched.store(0);
   if (g_refresher.joinable()) g_refresher.join();

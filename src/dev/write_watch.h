@@ -26,8 +26,16 @@ void StartWriteWatch(rex::memory::Memory* memory, uint32_t guest_address,
                      std::optional<uint32_t> value = std::nullopt, bool reads = false,
                      uint32_t snapshot = 0, uint32_t snapshot_words = 0);
 
-// Removes the breakpoint and logs every writer seen since StartWriteWatch.
+// Removes the breakpoint and logs every writer seen since StartWriteWatch. Ends a poll watch too.
 void StopWriteWatch();
+
+// Watches 4 bytes at a virtual guest address by polling them instead of trapping the writes: each
+// time the value changes (up to `max_changes` times), the old and new value and the call chain of
+// every thread that is in recompiled code right then. Less exact than StartWriteWatch (the writer
+// may have moved on by the time the threads are stopped), but it takes no exception at all, for a
+// game where the debug-register trap fails (Trap Team, SwapForceRecomp #60). Keeps one CPU core
+// busy while it runs.
+void StartPollWatch(rex::memory::Memory* memory, uint32_t guest_address, uint32_t max_changes = 16);
 
 // Logs where every other thread of the process is right now, `samples` times `interval_ms` apart:
 // the thread's name and call chain, recompiled frames as guest functions, the others as module and
