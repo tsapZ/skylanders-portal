@@ -9,6 +9,34 @@ project(skylanders_portal LANGUAGES CXX C)
 
 # skylanders_game_icon(): the game's logo from its disc as the exe's icon (cmake/game_icon.cmake).
 include(cmake/game_icon.cmake)
+# skylanders_game_xex(): a game's disc check, its installer CLI and tests (cmake/game_xex.cmake).
+include(cmake/game_xex.cmake)
+
+# skylanders_alchemy: readers for the games' Alchemy files (IGA archives in their versions, IGZ
+# objects, Swap Force's IGX, the LZMA and deflate blocks inside), no SDK needed, for the games and
+# the launcher. inflate.cpp takes stb_image's zlib decoder: the SDK's copy, or without an SDK the
+# folder SKYLANDERS_STB_DIR names (the one holding stb_image.h).
+if(REXSDK_DIR)
+    set(SKYLANDERS_ALCHEMY_STB "${REXSDK_DIR}/thirdparty/stb")
+elseif(SKYLANDERS_STB_DIR)
+    set(SKYLANDERS_ALCHEMY_STB "${SKYLANDERS_STB_DIR}")
+endif()
+if(SKYLANDERS_ALCHEMY_STB)
+    add_library(skylanders_alchemy STATIC
+        src/alchemy/iga_archive.cpp
+        src/alchemy/iga8_archive.cpp
+        src/alchemy/iga11_archive.cpp
+        src/alchemy/igx_reader.cpp
+        src/alchemy/igz_file.cpp
+        src/alchemy/igz6_file.cpp
+        src/alchemy/igz8_file.cpp
+        src/alchemy/inflate.cpp
+        src/alchemy/lzma_decoder.cpp
+    )
+    target_include_directories(skylanders_alchemy PUBLIC src)
+    target_include_directories(skylanders_alchemy PRIVATE "${SKYLANDERS_ALCHEMY_STB}")
+    target_compile_features(skylanders_alchemy PUBLIC cxx_std_23)
+endif()
 
 # skylanders_portal_figures: only the figure files (catalog, names, elements, stats), for programs
 # without the SDK such as the Core of Light launcher. On Windows it needs no SDK tree: AES and MD5
@@ -103,6 +131,10 @@ if(TARGET rex::runtime)
         src/portal/usb/usb_portal.cpp
         src/portal_rex/sdl_audio_sink.cpp
         src/portal_rex/speaker_overlay.cpp
+        # Test tools: scripted input, memory watches, the crash report, GPU crash diagnostics.
+        src/dev/gpu_diagnostics.cpp
+        src/dev/input_script.cpp
+        src/dev/write_watch.cpp
     )
     target_include_directories(skylanders_portal_rex PUBLIC src)
     target_include_directories(skylanders_portal_rex PRIVATE "${REXSDK_DIR}/thirdparty/imgui")
