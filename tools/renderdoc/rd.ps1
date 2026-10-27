@@ -33,6 +33,8 @@ $QRenderDoc = Join-Path $RepoRoot "logs\toolchain\RenderDoc_1.46_64\qrenderdoc.e
 if (-not (Test-Path $QRenderDoc)) { throw "RenderDoc not found at $QRenderDoc (see docs/development.md)" }
 
 $env:RD_DIR = $PSScriptRoot
+# No __pycache__ next to the scripts (compiled files carry the local path).
+$env:PYTHONDONTWRITEBYTECODE = "1"
 $env:RD_CAP = (Resolve-Path $Capture).Path
 $env:RD_OUT = $Out
 $env:RD_ARGS = $ScriptArgs
