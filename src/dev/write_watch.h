@@ -45,7 +45,9 @@ void LogThreadStacks(int samples = 3, int interval_ms = 250);
 // When the game really crashes (an exception nothing handles, e.g. the SDK's "Unhandled guest
 // access violation"), logs the faulting thread's call chain, recompiled frames as guest functions,
 // and its guest registers, so a crash in a player's log says where in the game it happened. An
-// unhandled-exception filter, so exceptions the SDK or the game handle themselves never reach it.
+// unhandled-exception filter, so exceptions the SDK or the game handle themselves never reach it;
+// and a SIGABRT handler for the SDK's fatal errors (REX_FATAL ends with std::abort(), e.g. "Call
+// to invalid or unregistered function", SSARecomp #42).
 void InstallCrashReport(rex::memory::Memory* memory);
 
 }  // namespace skylanders::dev

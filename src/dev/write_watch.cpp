@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <chrono>
+#include <csignal>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -108,10 +109,12 @@ StackRange ThreadStackRange(HANDLE thread) {
 // Walks the stack from the exception context with the binary's own unwind data (no symbols needed).
 // Stops where the stack pointer leaves the thread's stack instead of reading there: in Trap Team
 // such a read (host FFFFFFFF7DE60010) ended the game although it was inside __try (SwapForceRecomp
-// #60).
-void Unwind(CONTEXT ctx, uintptr_t* frames, int count, StackRange stack) {
+// #60). `contexts`, if given, gets each frame's registers (for the guest registers of a frame).
+void Unwind(CONTEXT ctx, uintptr_t* frames, int count, StackRange stack,
+            CONTEXT* contexts = nullptr) {
   for (int i = 0; i < count; ++i) {
     frames[i] = uintptr_t(ctx.Rip);
+    if (contexts) contexts[i] = ctx;
     if (stack.high && (ctx.Rsp < stack.low || ctx.Rsp + 8 > stack.high)) {
       for (int k = i + 1; k < count; ++k) frames[k] = 0;
       return;
@@ -136,9 +139,10 @@ void Unwind(CONTEXT ctx, uintptr_t* frames, int count, StackRange stack) {
 }
 
 // Unwind may walk into frames without unwind data and read garbage; a fault ends the chain.
-void UnwindSafe(const CONTEXT& ctx, uintptr_t* frames, int count, StackRange stack) {
+void UnwindSafe(const CONTEXT& ctx, uintptr_t* frames, int count, StackRange stack,
+                CONTEXT* contexts = nullptr) {
   __try {
-    Unwind(ctx, frames, count, stack);
+    Unwind(ctx, frames, count, stack, contexts);
   } __except (EXCEPTION_EXECUTE_HANDLER) {
   }
 }
@@ -347,6 +351,43 @@ std::string FrameName(uintptr_t address) {
     if (guest) return fmt::format("sub_{:08X}+0x{:X}", guest, offset);
   }
   return HostFrameName(address);
+}
+
+// The SIGABRT handler of InstallCrashReport. The SDK ends the game with std::abort() on its fatal
+// errors (REX_FATAL, e.g. "Call to invalid or unregistered function"), which no exception filter
+// sees, so a player's log said what failed but not where. Logs the aborting thread's call chain
+// once, and the guest registers of the first recompiled frame in it (the guest code that made the
+// bad call), then lets the abort go on.
+void OnAbort(int) {
+  if (g_crash_logged.exchange(true)) return;
+  constexpr int kAbortFrames = 24;
+  static CONTEXT contexts[kAbortFrames];  // static: the handler may run on a small stack
+  CONTEXT ctx{};
+  RtlCaptureContext(&ctx);
+  uintptr_t frames[kAbortFrames] = {};
+  UnwindSafe(ctx, frames, kAbortFrames, CurrentStackRange(), contexts);
+  std::string chain;
+  int guest_frame = -1;
+  for (int i = 0; i < kAbortFrames && frames[i]; ++i) {
+    const std::string name = FrameName(frames[i]);
+    // Frame 0 is this handler (host code that FrameName may take for recompiled code).
+    if (guest_frame < 0 && i > 0 && name.rfind("sub_", 0) == 0) guest_frame = i;
+    chain += (chain.empty() ? "" : " <- ") + name;
+  }
+  REXLOG_ERROR("Crash: abort on thread {}; call chain: {}", GetCurrentThreadId(), chain);
+  if (guest_frame >= 0) {
+    const CONTEXT& at = contexts[guest_frame];
+    const DWORD64 regs[16] = {at.Rax, at.Rcx, at.Rdx, at.Rbx, at.Rsp, at.Rbp,
+                              at.Rsi, at.Rdi, at.R8,  at.R9,  at.R10, at.R11,
+                              at.R12, at.R13, at.R14, at.R15};
+    uint32_t guest[32] = {};
+    if (ReadGuestRegisters(regs, guest) >= 0) {
+      std::string text;
+      for (int r = 0; r < 32; ++r) text += fmt::format(" r{}={:08X}", r, guest[r]);
+      REXLOG_ERROR("Crash: guest registers{}", text);
+    }
+  }
+  rex::FlushLogging();
 }
 
 std::thread g_poller;  // the poll watch's thread
@@ -674,6 +715,7 @@ void InstallCrashReport(rex::memory::Memory* memory) {
   if (!memory || g_previous_filter) return;
   if (!g_membase) g_membase = reinterpret_cast<uint64_t>(memory->virtual_membase());
   g_previous_filter = SetUnhandledExceptionFilter(OnCrash);
+  std::signal(SIGABRT, OnAbort);
 #else
   (void)memory;
 #endif
