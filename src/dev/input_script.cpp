@@ -30,6 +30,8 @@
 #include <rex/ui/ui_event.h>
 #include <rex/ui/virtual_key.h>
 
+#include "portal_rex/png_file.h"
+#include "portal_rex/portal_menu.h"
 #include "portal_rex/portal_menu_input.h"
 #include "portal/trap_villain.h"
 #include "portal_rex/portal_rex.h"
@@ -62,6 +64,7 @@ struct Event {
     kKey,
     kPlace,
     kRemove,
+    kShot,
     kTrap,
     kWatch,
     kPollWatch,
@@ -94,6 +97,9 @@ std::vector<uint32_t> g_scan_hits;
 // Seconds the timeline has moved from the times the script gives: down when a waitfor was met
 // early, up while a registered command ran. Every event and press is due at its time plus this.
 std::atomic<double> g_timeline_shift{0.0};
+
+// The script file's folder: where `shot` puts its pictures. Set before the timeline starts.
+std::filesystem::path g_script_dir;
 
 // What the game registered (RegisterScriptCommand, RegisterScriptCondition).
 struct Registry {
@@ -345,6 +351,9 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
     } else if (cmd == "remove") {
       ok = bool(words >> e.frames) && e.frames < 16;
       e.kind = Event::Kind::kRemove;
+    } else if (cmd == "shot") {
+      ok = bool(words >> e.text);
+      e.kind = Event::Kind::kShot;
     } else if (cmd == "waitfor") {
       ok = bool(words >> e.text >> e.duration) && e.duration > 0.0 && FindCondition(e.text);
       e.kind = Event::Kind::kWaitFor;
@@ -604,6 +613,28 @@ class ScriptInputDriver final : public rex::input::InputDriver {
                           slot);
             });
           }
+        } else if (e.kind == Event::Kind::kShot) {
+          if (run_in_ui) {
+            run_in_ui([path = g_script_dir / std::filesystem::u8path(e.text + ".png")] {
+              int width = 0, height = 0;
+              std::vector<uint8_t> rgba;
+              bool saved = false;
+              if (skylanders::CaptureGamePicture(width, height, rgba)) {
+                // Every n-th pixel, so the picture is at most 960 wide.
+                const int step = (width + 959) / 960;
+                const int w = width / step, h = height / step;
+                std::vector<uint8_t> scaled(size_t(w) * h * 4);
+                for (int y = 0; y < h; ++y) {
+                  for (int x = 0; x < w; ++x) {
+                    std::memcpy(&scaled[(size_t(y) * w + x) * 4],
+                                &rgba[(size_t(y) * step * width + size_t(x) * step) * 4], 4);
+                  }
+                }
+                saved = skylanders::WritePng(path, w, h, scaled.data());
+              }
+              REXLOG_INFO("Input script: shot {}{}", path.filename().string(), saved ? "" : " (no picture)");
+            });
+          }
         } else if (e.kind == Event::Kind::kWaitFor) {
           const auto holds = FindCondition(e.text);
           const auto begin = Clock::now();
@@ -766,6 +797,7 @@ void InstallInputScript(rex::system::IInputSystem* input_system, rex::memory::Me
     REXLOG_ERROR("Input script: no input system");
     return;
   }
+  g_script_dir = std::filesystem::u8path(path).parent_path();
   auto driver = std::make_unique<ScriptInputDriver>(std::move(events), std::move(guest_frame_count),
                                                     memory, std::move(run_in_ui));
   driver->Setup();
