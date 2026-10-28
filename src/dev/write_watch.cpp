@@ -24,6 +24,8 @@
 #include <rex/ppc/func.h>
 #include <rex/system/xmemory.h>
 
+#include "dev/where.h"
+
 namespace skylanders::dev {
 namespace {
 
@@ -326,6 +328,7 @@ LONG WINAPI OnCrash(PEXCEPTION_POINTERS info) {
       for (int r = 0; r < 32; ++r) text += fmt::format(" r{}={:08X}", r, guest[r]);
       REXLOG_ERROR("Crash: guest registers{}", text);
     }
+    LogPlace("crash");
     rex::FlushLogging();
   }
   return g_previous_filter ? g_previous_filter(info) : EXCEPTION_CONTINUE_SEARCH;
@@ -387,6 +390,7 @@ void OnAbort(int) {
       REXLOG_ERROR("Crash: guest registers{}", text);
     }
   }
+  LogPlace("crash");
   rex::FlushLogging();
 }
 

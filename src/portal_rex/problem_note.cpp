@@ -22,6 +22,7 @@
 #include <windows.h>
 #endif
 
+#include "dev/where.h"
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/png_file.h"
 #include "portal_rex/portal_menu.h"
@@ -119,6 +120,7 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
     // menus anyway).
     has_picture_ = CaptureGamePicture(picture_w_, picture_h_, picture_);
     portal_ = PortalFiguresText();
+    place_ = dev::PlaceText();
     menu_input::SetMenuOpen(true);
     menu_input::SetMenuCloser([this] { Close(); });
     REXLOG_INFO("Problem note: opened ({})", has_picture_ ? "picture kept" : "no picture");
@@ -250,10 +252,13 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
         << "When: " << when << " (running for " << running << ")\n"
         << "Kind: " << kind.en << "\n"
         << "Note: " << note_ << "\n"
-        << "On the portal: " << (portal_.empty() ? "nothing" : portal_) << "\n"
-        << "Picture: " << (picture_name.empty() ? "none" : picture_name) << "\n";
+        << "On the portal: " << (portal_.empty() ? "nothing" : portal_) << "\n";
+    // Where the player was when the note opened (games that report it, dev/where.h).
+    if (!place_.empty()) out << "Where: " << place_ << "\n";
+    out << "Picture: " << (picture_name.empty() ? "none" : picture_name) << "\n";
     out.close();
     REXLOG_WARN("Problem noted by the player: {}{}{} ({}.txt)", kind.en, note_[0] ? ": " : "", note_, base);
+    if (!place_.empty()) REXLOG_INFO("Where (problem note): {}", place_);
     ShowPortalToast(Tr("Noted. Report a problem in Core of Light sends it along.",
                        "Notiert. Problem melden im Hub schickt es mit."));
     Close();
@@ -269,6 +274,7 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
   int picture_w_ = 0, picture_h_ = 0;
   std::vector<uint8_t> picture_;
   std::string portal_;
+  std::string place_;
   std::unordered_map<uint64_t, Pad> pads_;
 };
 

@@ -132,9 +132,11 @@ if(TARGET rex::runtime)
         src/portal/usb/usb_portal.cpp
         src/portal_rex/sdl_audio_sink.cpp
         src/portal_rex/speaker_overlay.cpp
-        # Test tools: scripted input, memory watches, the crash report, GPU crash diagnostics.
+        # Test tools: scripted input, memory watches, the crash report, GPU crash diagnostics,
+        # where the player is (for problem reports).
         src/dev/gpu_diagnostics.cpp
         src/dev/input_script.cpp
+        src/dev/where.cpp
         src/dev/write_watch.cpp
     )
     target_include_directories(skylanders_portal_rex PUBLIC src)
