@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 
 namespace rex::memory {
 class Memory;
@@ -41,6 +42,11 @@ void StartPollWatch(rex::memory::Memory* memory, uint32_t guest_address, uint32_
 // the thread's name and call chain, recompiled frames as guest functions, the others as module and
 // nearest export. Shows where the game hangs without a debugger (input script `stacks`).
 void LogThreadStacks(int samples = 3, int interval_ms = 250);
+
+// The calling thread's call chain, recompiled frames as guest functions ("sub_8280A123+0x40 <-
+// sub_82809DB8+0x60 <- ..."), the others as module and nearest export: for a hook that wants to
+// say who called it (a game's developer tools).
+std::string CurrentCallChain(int depth = 12);
 
 // When the game really crashes (an exception nothing handles, e.g. the SDK's "Unhandled guest
 // access violation"), logs the faulting thread's call chain, recompiled frames as guest functions,

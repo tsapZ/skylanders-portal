@@ -46,7 +46,12 @@
 //   remove <slot>            takes the figure off that slot again
 //   trap <slot> <villain>    puts a new trap holding that villain (its name, e.g. Chompy Mage)
 //                            onto the slot, as the portal developer tools (F8) make one
+//   waitfor <name> <seconds> waits until a condition the game registered (RegisterScriptCondition)
+//                            holds, at most that long; the rest of the timeline moves up by the
+//                            time not needed, so what follows starts at the event, not the clock
 //   quit                     ends the game
+//   <name> [<args>]          a command the game registered (RegisterScriptCommand), e.g. a
+//                            developer build's level loading; the timeline waits while it runs
 // Buttons: a b x y start back guide up down left right lb rb ls rs lt rt, or several pressed
 // together joined with + (tap back+y)
 
@@ -54,6 +59,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 
 namespace rex::memory {
 class Memory;
@@ -70,5 +76,12 @@ namespace skylanders::dev {
 void InstallInputScript(rex::system::IInputSystem* input_system, rex::memory::Memory* memory,
                         std::function<uint64_t()> guest_frame_count,
                         std::function<void(std::function<void()>)> run_in_ui);
+
+// Script commands and waitfor conditions from outside the library, for a game's own developer
+// tools. Register before InstallInputScript (a static initializer will do): the script is checked
+// against them when it is read. A command runs on the script thread at its time with the rest of
+// its line; a condition is asked every 50 ms while a waitfor waits for it.
+void RegisterScriptCommand(const std::string& name, std::function<void(const std::string& args)> run);
+void RegisterScriptCondition(const std::string& name, std::function<bool()> holds);
 
 }  // namespace skylanders::dev

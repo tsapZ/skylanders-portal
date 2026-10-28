@@ -7,8 +7,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <atomic>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -66,6 +69,8 @@ struct Event {
     kDump,
     kSave,
     kStacks,
+    kWaitFor,
+    kCustom,
     kQuit
   } kind;
   double start = 0.0;     // seconds since the timeline started
@@ -80,10 +85,41 @@ struct Event {
   std::vector<uint32_t> words;  // scan: the sequence; poke: address and value
   int hit = -1;  // watch, dump: words[0] is an offset from this hit of the last scan
   uint32_t pointer = 0;  // watch, dump: if nonzero, words[0] is an offset from the u32 stored here
+  std::string args;      // a registered command: the rest of its line
 };
 
 // The hits of the last scan, for hit<n> addresses. Only the script thread uses it.
 std::vector<uint32_t> g_scan_hits;
+
+// Seconds the timeline has moved from the times the script gives: down when a waitfor was met
+// early, up while a registered command ran. Every event and press is due at its time plus this.
+std::atomic<double> g_timeline_shift{0.0};
+
+// What the game registered (RegisterScriptCommand, RegisterScriptCondition).
+struct Registry {
+  std::mutex mutex;
+  std::map<std::string, std::function<void(const std::string&)>> commands;
+  std::map<std::string, std::function<bool()>> conditions;
+};
+
+Registry& GetRegistry() {
+  static Registry registry;
+  return registry;
+}
+
+std::function<void(const std::string&)> FindCommand(const std::string& name) {
+  Registry& r = GetRegistry();
+  std::lock_guard lock(r.mutex);
+  auto it = r.commands.find(name);
+  return it == r.commands.end() ? nullptr : it->second;
+}
+
+std::function<bool()> FindCondition(const std::string& name) {
+  Registry& r = GetRegistry();
+  std::lock_guard lock(r.mutex);
+  auto it = r.conditions.find(name);
+  return it == r.conditions.end() ? nullptr : it->second;
+}
 
 // Whether [address, address + size) is committed, readable guest memory: a dump or a pointer read
 // anywhere else would end the game with a guest access violation.
@@ -309,8 +345,15 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
     } else if (cmd == "remove") {
       ok = bool(words >> e.frames) && e.frames < 16;
       e.kind = Event::Kind::kRemove;
+    } else if (cmd == "waitfor") {
+      ok = bool(words >> e.text >> e.duration) && e.duration > 0.0 && FindCondition(e.text);
+      e.kind = Event::Kind::kWaitFor;
     } else if (cmd == "quit") {
       e.kind = Event::Kind::kQuit;
+    } else if (FindCommand(cmd)) {
+      e.text = cmd;
+      std::getline(words >> std::ws, e.args);
+      e.kind = Event::Kind::kCustom;
     } else {
       ok = false;
     }
@@ -443,8 +486,9 @@ class ScriptInputDriver final : public rex::input::InputDriver {
                  memory = memory_, run_in_ui = run_in_ui_] {
       for (const Event& e : events) {
         if (e.kind == Event::Kind::kPress || e.kind == Event::Kind::kStick) continue;
-        std::this_thread::sleep_until(start + std::chrono::duration_cast<Clock::duration>(
-                                                  std::chrono::duration<double>(e.start)));
+        std::this_thread::sleep_until(
+            start + std::chrono::duration_cast<Clock::duration>(
+                        std::chrono::duration<double>(e.start + g_timeline_shift.load())));
         if (e.kind == Event::Kind::kLog) {
           REXLOG_INFO("Input script: {}", e.text);
         } else if (e.kind == Event::Kind::kFps) {
@@ -560,6 +604,24 @@ class ScriptInputDriver final : public rex::input::InputDriver {
                           slot);
             });
           }
+        } else if (e.kind == Event::Kind::kWaitFor) {
+          const auto holds = FindCondition(e.text);
+          const auto begin = Clock::now();
+          auto waited = [&] { return std::chrono::duration<double>(Clock::now() - begin).count(); };
+          bool met = false;
+          while (!(met = holds()) && waited() < e.duration) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+          }
+          const double seconds = waited();
+          if (met) g_timeline_shift = g_timeline_shift.load() - std::max(0.0, e.duration - seconds);
+          REXLOG_INFO("Input script: waitfor {} {} after {:.1f} s", e.text, met ? "met" : "timed out",
+                      seconds);
+        } else if (e.kind == Event::Kind::kCustom) {
+          const auto run = FindCommand(e.text);
+          const auto begin = Clock::now();
+          run(e.args);
+          g_timeline_shift =
+              g_timeline_shift.load() + std::chrono::duration<double>(Clock::now() - begin).count();
         } else {
           REXLOG_INFO("Input script: quit");
           std::_Exit(0);
@@ -580,7 +642,8 @@ class ScriptInputDriver final : public rex::input::InputDriver {
 
   // What the script presses right now.
   void Current(uint16_t& buttons, bool& lt, bool& rt, double& x, double& y) const {
-    const double now = std::chrono::duration<double>(Clock::now() - start_).count();
+    const double now =
+        std::chrono::duration<double>(Clock::now() - start_).count() - g_timeline_shift.load();
     buttons = 0;
     lt = rt = false;
     x = y = 0.0;
@@ -709,6 +772,18 @@ void InstallInputScript(rex::system::IInputSystem* input_system, rex::memory::Me
   // Wrapped like the real controllers, so scripted runs can open and drive the portal menu.
   input->AddDriver(skylanders::WrapForPortalMenu(std::move(driver), true));
   REXLOG_INFO("Input script: playing '{}'", path);
+}
+
+void RegisterScriptCommand(const std::string& name, std::function<void(const std::string& args)> run) {
+  Registry& r = GetRegistry();
+  std::lock_guard lock(r.mutex);
+  r.commands[name] = std::move(run);
+}
+
+void RegisterScriptCondition(const std::string& name, std::function<bool()> holds) {
+  Registry& r = GetRegistry();
+  std::lock_guard lock(r.mutex);
+  r.conditions[name] = std::move(holds);
 }
 
 }  // namespace skylanders::dev

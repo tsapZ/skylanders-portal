@@ -710,6 +710,25 @@ void LogThreadStacks(int samples, int interval_ms) {
 #endif
 }
 
+std::string CurrentCallChain(int depth) {
+#ifdef _WIN32
+  depth = std::clamp(depth, 1, 31);
+  CONTEXT ctx{};
+  RtlCaptureContext(&ctx);
+  uintptr_t frames[32] = {};
+  UnwindSafe(ctx, frames, depth + 1, CurrentStackRange());
+  std::string chain;
+  // Frame 0 is this function.
+  for (int i = 1; i <= depth && frames[i]; ++i) {
+    chain += (chain.empty() ? "" : " <- ") + FrameName(frames[i]);
+  }
+  return chain;
+#else
+  (void)depth;
+  return "(only on Windows)";
+#endif
+}
+
 void InstallCrashReport(rex::memory::Memory* memory) {
 #ifdef _WIN32
   if (!memory || g_previous_filter) return;
