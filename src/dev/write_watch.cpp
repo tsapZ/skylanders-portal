@@ -42,14 +42,14 @@ struct Hit {
   uint32_t stack[256];  // big-endian words from the guest stack pointer (r1) up
 };
 
-// Copies `size` bytes from `from`, or returns false if that memory can't be read.
+// Copies `size` bytes from `from`, or returns false if that memory can't be read. Through
+// ReadProcessMemory, which fails instead of raising an exception: in Trap Team an access violation
+// inside __try ended the game anyway (SwapForceRecomp #60).
 bool SafeCopy(void* to, uint64_t from, size_t size) {
-  __try {
-    memcpy(to, reinterpret_cast<const void*>(from), size);
-    return true;
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    return false;
-  }
+  SIZE_T copied = 0;
+  return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<LPCVOID>(from), to, size,
+                           &copied) &&
+         copied == size;
 }
 std::array<Hit, kMaxHits> g_hits{};
 std::atomic<size_t> g_hit_count{0};
@@ -66,10 +66,56 @@ std::atomic<bool> g_snapshot_taken{false};
 std::thread g_refresher;  // puts the breakpoint on threads started after StartWriteWatch
 bool g_reads = false;      // debug register mode 11 (read or write) instead of 01 (write)
 
+// The stack a thread runs on, [low, high); {0, 0} if unknown (Unwind then doesn't check).
+struct StackRange {
+  uint64_t low = 0, high = 0;
+};
+
+// The calling thread's stack (for an exception handler: the thread that took the exception).
+StackRange CurrentStackRange() {
+  ULONG_PTR low = 0, high = 0;
+  GetCurrentThreadStackLimits(&low, &high);
+  return {low, high};
+}
+
+// Another thread's stack: StackBase from its TEB (NT_TIB) and the region reserved below it. The
+// handle needs THREAD_QUERY_INFORMATION.
+StackRange ThreadStackRange(HANDLE thread) {
+  using QueryFn = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+  static const auto query = reinterpret_cast<QueryFn>(
+      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
+  struct BasicInformation {  // THREAD_BASIC_INFORMATION (class 0)
+    LONG exit_status;
+    PVOID teb;
+    PVOID client_id[2];
+    ULONG_PTR affinity;
+    LONG priority, base_priority;
+  } info{};
+  if (!query || query(thread, 0, &info, sizeof(info), nullptr) < 0 || !info.teb) return {};
+  uint64_t base = 0;
+  SIZE_T copied = 0;
+  if (!ReadProcessMemory(GetCurrentProcess(),
+                         static_cast<const uint8_t*>(info.teb) + offsetof(NT_TIB, StackBase),
+                         &base, sizeof(base), &copied) ||
+      copied != sizeof(base) || !base) {
+    return {};
+  }
+  MEMORY_BASIC_INFORMATION region{};
+  if (!VirtualQuery(reinterpret_cast<LPCVOID>(base - 1), &region, sizeof(region))) return {};
+  return {reinterpret_cast<uint64_t>(region.AllocationBase), base};
+}
+
 // Walks the stack from the exception context with the binary's own unwind data (no symbols needed).
-void Unwind(CONTEXT ctx, uintptr_t* frames, int count) {
+// Stops where the stack pointer leaves the thread's stack instead of reading there: in Trap Team
+// such a read (host FFFFFFFF7DE60010) ended the game although it was inside __try (SwapForceRecomp
+// #60).
+void Unwind(CONTEXT ctx, uintptr_t* frames, int count, StackRange stack) {
   for (int i = 0; i < count; ++i) {
     frames[i] = uintptr_t(ctx.Rip);
+    if (stack.high && (ctx.Rsp < stack.low || ctx.Rsp + 8 > stack.high)) {
+      for (int k = i + 1; k < count; ++k) frames[k] = 0;
+      return;
+    }
     DWORD64 image_base = 0;
     PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &image_base, nullptr);
     if (!fn) {
@@ -90,9 +136,9 @@ void Unwind(CONTEXT ctx, uintptr_t* frames, int count) {
 }
 
 // Unwind may walk into frames without unwind data and read garbage; a fault ends the chain.
-void UnwindSafe(const CONTEXT& ctx, uintptr_t* frames, int count = kFrames) {
+void UnwindSafe(const CONTEXT& ctx, uintptr_t* frames, int count, StackRange stack) {
   __try {
-    Unwind(ctx, frames, count);
+    Unwind(ctx, frames, count, stack);
   } __except (EXCEPTION_EXECUTE_HANDLER) {
   }
 }
@@ -135,7 +181,7 @@ LONG CALLBACK OnException(PEXCEPTION_POINTERS info) {
     g_snapshot_taken.store(true);
   }
   if (i < kMaxHits) {
-    UnwindSafe(*ctx, g_hits[i].frames, kFrames);
+    UnwindSafe(*ctx, g_hits[i].frames, kFrames, CurrentStackRange());
     const DWORD64 regs[16] = {ctx->Rax, ctx->Rcx, ctx->Rdx, ctx->Rbx, ctx->Rsp, ctx->Rbp,
                               ctx->Rsi, ctx->Rdi, ctx->R8,  ctx->R9,  ctx->R10, ctx->R11,
                               ctx->R12, ctx->R13, ctx->R14, ctx->R15};
@@ -251,7 +297,7 @@ LONG WINAPI OnCrash(PEXCEPTION_POINTERS info) {
     const EXCEPTION_RECORD& record = *info->ExceptionRecord;
     const CONTEXT& ctx = *info->ContextRecord;
     uintptr_t frames[16] = {};
-    UnwindSafe(ctx, frames, 16);
+    UnwindSafe(ctx, frames, 16, CurrentStackRange());
     std::string chain;
     for (uintptr_t frame : frames) {
       if (!frame) break;
@@ -306,63 +352,106 @@ std::string FrameName(uintptr_t address) {
 std::thread g_poller;  // the poll watch's thread
 std::atomic<bool> g_polling{false};
 
-// Stops every other thread at once, takes their call chains, lets them go again, then logs the
-// chains of the threads that were in recompiled code (for the poll watch: the writer is among
-// them if it hasn't returned yet). Everything is allocated before the first thread is stopped: a
-// stopped thread may hold the heap lock.
-void LogGuestThreadsNow(const std::string& title) {
-  constexpr int kStackFrames = 14;
-  struct Sample {
+// The other threads of the process, opened ahead of time so that the poll watch can stop them the
+// moment the value changes: opening them takes a millisecond or two, by which time the writer is
+// usually back in its wait. Threads started after Open are not covered (Open again to add them).
+class ThreadSet {
+ public:
+  ~ThreadSet() { Close(); }
+
+  void Open() {
+    Close();
+    const DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 entry{};
+    entry.dwSize = sizeof(entry);
+    for (BOOL ok = Thread32First(snapshot, &entry); ok && samples_.size() < kMaxThreads;
+         ok = Thread32Next(snapshot, &entry)) {
+      if (entry.th32OwnerProcessID != pid || entry.th32ThreadID == self) continue;
+      HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME |
+                                     THREAD_QUERY_INFORMATION,
+                                 FALSE, entry.th32ThreadID);
+      if (!thread) continue;
+      Entry sample;
+      sample.id = entry.th32ThreadID;
+      sample.thread = thread;
+      sample.stack = ThreadStackRange(thread);
+      samples_.push_back(sample);
+    }
+    CloseHandle(snapshot);
+  }
+
+  // Stops every thread at once, takes their call chains and lets them go again. Nothing is
+  // allocated while the threads are stopped: a stopped thread may hold the heap lock.
+  void Sample() {
+    for (Entry& s : samples_) s.taken = SuspendThread(s.thread) != DWORD(-1);
+    for (Entry& s : samples_) {
+      if (!s.taken) continue;
+      CONTEXT ctx{};
+      ctx.ContextFlags = CONTEXT_FULL;
+      std::fill(std::begin(s.frames), std::end(s.frames), uintptr_t(0));
+      s.guest_from = -1;
+      if (GetThreadContext(s.thread, &ctx)) {
+        UnwindSafe(ctx, s.frames, kStackFrames, s.stack);
+        const DWORD64 regs[16] = {ctx.Rax, ctx.Rcx, ctx.Rdx, ctx.Rbx, ctx.Rsp, ctx.Rbp,
+                                  ctx.Rsi, ctx.Rdi, ctx.R8,  ctx.R9,  ctx.R10, ctx.R11,
+                                  ctx.R12, ctx.R13, ctx.R14, ctx.R15};
+        s.guest_from = ReadGuestRegisters(regs, s.guest);
+      }
+    }
+    for (Entry& s : samples_) {
+      if (s.taken) ResumeThread(s.thread);
+    }
+  }
+
+  // Logs the last Sample's chains of the threads that were in recompiled code (for the poll
+  // watch: the writer is among them if it hasn't returned yet).
+  void Log(const std::string& title) const {
+    REXLOG_INFO("{}", title);
+    for (const Entry& s : samples_) {
+      if (!s.taken) continue;
+      std::string chain;
+      bool guest = false;
+      for (uintptr_t frame : s.frames) {
+        if (!frame) break;
+        const std::string name = FrameName(frame);
+        guest = guest || name.rfind("sub_", 0) == 0;
+        chain += (chain.empty() ? "" : " <- ") + name;
+      }
+      if (!guest) continue;
+      REXLOG_INFO("Poll watch:   {}: {}", s.id, chain);
+      // The guest registers as the recompiled code last stored them (r3 often the object
+      // the function works on).
+      if (s.guest_from >= 0) {
+        std::string text;
+        for (int r = 0; r < 32; ++r) text += fmt::format(" r{}={:08X}", r, s.guest[r]);
+        REXLOG_INFO("Poll watch:   {} guest registers:{}", s.id, text);
+      }
+    }
+  }
+
+ private:
+  static constexpr int kStackFrames = 14;
+  static constexpr size_t kMaxThreads = 512;
+  struct Entry {
     DWORD id = 0;
     HANDLE thread = nullptr;
+    StackRange stack;
     bool taken = false;
     uintptr_t frames[kStackFrames] = {};
+    int guest_from = -1;  // ReadGuestRegisters' result: -1 if the thread wasn't in guest code
+    uint32_t guest[32] = {};
   };
-  const DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
-  std::vector<Sample> samples;
-  samples.reserve(512);
-  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-  if (snapshot == INVALID_HANDLE_VALUE) return;
-  THREADENTRY32 entry{};
-  entry.dwSize = sizeof(entry);
-  for (BOOL ok = Thread32First(snapshot, &entry); ok && samples.size() < 512;
-       ok = Thread32Next(snapshot, &entry)) {
-    if (entry.th32OwnerProcessID != pid || entry.th32ThreadID == self) continue;
-    HANDLE thread =
-        OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, entry.th32ThreadID);
-    if (!thread) continue;
-    Sample sample;
-    sample.id = entry.th32ThreadID;
-    sample.thread = thread;
-    samples.push_back(sample);
+
+  void Close() {
+    for (Entry& s : samples_) CloseHandle(s.thread);
+    samples_.clear();
+    samples_.reserve(kMaxThreads);
   }
-  CloseHandle(snapshot);
-  for (Sample& s : samples) s.taken = SuspendThread(s.thread) != DWORD(-1);
-  for (Sample& s : samples) {
-    if (!s.taken) continue;
-    CONTEXT ctx{};
-    ctx.ContextFlags = CONTEXT_FULL;
-    s.taken = GetThreadContext(s.thread, &ctx) != 0;
-    if (s.taken) UnwindSafe(ctx, s.frames, kStackFrames);
-  }
-  for (Sample& s : samples) {
-    ResumeThread(s.thread);
-    CloseHandle(s.thread);
-  }
-  REXLOG_INFO("{}", title);
-  for (const Sample& s : samples) {
-    if (!s.taken) continue;
-    std::string chain;
-    bool guest = false;
-    for (uintptr_t frame : s.frames) {
-      if (!frame) break;
-      const std::string name = FrameName(frame);
-      guest = guest || name.rfind("sub_", 0) == 0;
-      chain += (chain.empty() ? "" : " <- ") + name;
-    }
-    if (guest) REXLOG_INFO("Poll watch:   {}: {}", s.id, chain);
-  }
-}
+
+  std::vector<Entry> samples_;
+};
 
 #endif  // _WIN32
 
@@ -373,23 +462,34 @@ void StartPollWatch(rex::memory::Memory* memory, uint32_t guest_address, uint32_
   if (!memory || g_polling.load()) return;
   if (g_poller.joinable()) g_poller.join();
   const auto* host = memory->TranslateVirtual<const volatile uint32_t*>(guest_address);
+  g_membase = reinterpret_cast<uint64_t>(memory->virtual_membase());  // for ReadGuestRegisters
   g_polling.store(true);
   g_poller = std::thread([host, guest_address, max_changes] {
     SetThreadDescription(GetCurrentThread(), L"Poll watch");
     uint32_t last = *host;
     REXLOG_INFO("Poll watch: watching guest {:08X}, now {:08X}", guest_address,
                 _byteswap_ulong(last));
+    // The thread list is opened again every second, for threads the game starts meanwhile.
+    ThreadSet threads;
+    threads.Open();
+    auto opened = std::chrono::steady_clock::now();
     uint32_t changes = 0;
-    while (g_polling.load() && changes < max_changes) {
+    for (uint32_t spins = 0; g_polling.load() && changes < max_changes; ++spins) {
       const uint32_t now = *host;
       if (now == last) {
         _mm_pause();
+        if ((spins & 0xFFFF) == 0 &&
+            std::chrono::steady_clock::now() - opened >= std::chrono::seconds(1)) {
+          threads.Open();
+          opened = std::chrono::steady_clock::now();
+        }
         continue;
       }
       ++changes;
-      LogGuestThreadsNow(fmt::format("Poll watch: {:08X} went {:08X} -> {:08X} (change {})",
-                                     guest_address, _byteswap_ulong(last), _byteswap_ulong(now),
-                                     changes));
+      threads.Sample();
+      threads.Log(fmt::format("Poll watch: {:08X} went {:08X} -> {:08X} (change {})",
+                              guest_address, _byteswap_ulong(last), _byteswap_ulong(now),
+                              changes));
       last = now;
     }
     REXLOG_INFO("Poll watch: done, {} change(s) of {:08X}", changes, guest_address);
@@ -530,16 +630,17 @@ void LogThreadStacks(int samples, int interval_ms) {
          ok = Thread32Next(snapshot, &entry)) {
       if (entry.th32OwnerProcessID != pid || entry.th32ThreadID == self) continue;
       HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME |
-                                     THREAD_QUERY_LIMITED_INFORMATION,
+                                     THREAD_QUERY_INFORMATION,
                                  FALSE, entry.th32ThreadID);
       if (!thread) continue;
       Sample& sample = taken[count];
       sample.id = entry.th32ThreadID;
       std::fill(std::begin(sample.frames), std::end(sample.frames), 0);
+      const StackRange stack = ThreadStackRange(thread);
       if (SuspendThread(thread) != DWORD(-1)) {
         CONTEXT ctx{};
         ctx.ContextFlags = CONTEXT_FULL;
-        if (GetThreadContext(thread, &ctx)) UnwindSafe(ctx, sample.frames, kStackFrames);
+        if (GetThreadContext(thread, &ctx)) UnwindSafe(ctx, sample.frames, kStackFrames, stack);
         ResumeThread(thread);
         PWSTR description = nullptr;
         if (SUCCEEDED(GetThreadDescription(thread, &description)) && description) {

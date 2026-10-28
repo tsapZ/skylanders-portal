@@ -30,11 +30,11 @@ void StartWriteWatch(rex::memory::Memory* memory, uint32_t guest_address,
 void StopWriteWatch();
 
 // Watches 4 bytes at a virtual guest address by polling them instead of trapping the writes: each
-// time the value changes (up to `max_changes` times), the old and new value and the call chain of
-// every thread that is in recompiled code right then. Less exact than StartWriteWatch (the writer
-// may have moved on by the time the threads are stopped), but it takes no exception at all, for a
-// game where the debug-register trap fails (Trap Team, SwapForceRecomp #60). Keeps one CPU core
-// busy while it runs.
+// time the value changes (up to `max_changes` times), the old and new value and the call chain and
+// guest registers of every thread that is in recompiled code right then. The threads are opened
+// beforehand and stopped the moment the value changes, so the writer is usually caught in the act;
+// still less exact than StartWriteWatch, but it takes no exception at all. Keeps one CPU core busy
+// while it runs.
 void StartPollWatch(rex::memory::Memory* memory, uint32_t guest_address, uint32_t max_changes = 16);
 
 // Logs where every other thread of the process is right now, `samples` times `interval_ms` apart:

@@ -236,11 +236,20 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
     } else if (cmd == "fps") {
       ok = bool(words >> e.duration) && e.duration > 0.0;
       e.kind = Event::Kind::kFps;
-    } else if (cmd == "scan" || cmd == "poke") {
+    } else if (cmd == "scan") {
       std::string word;
       while (words >> word) e.words.push_back(uint32_t(std::stoul(word, nullptr, 16)));
-      ok = cmd == "scan" ? !e.words.empty() : e.words.size() == 2;
-      e.kind = cmd == "scan" ? Event::Kind::kScan : Event::Kind::kPoke;
+      ok = !e.words.empty();
+      e.kind = Event::Kind::kScan;
+    } else if (cmd == "poke") {
+      std::string address, value;
+      ok = bool(words >> address >> value);
+      if (ok) {
+        e.words.push_back(ParseAddress(address, e));
+        e.words.push_back(uint32_t(std::stoul(value, nullptr, 16)));
+      }
+      e.text = cmd;
+      e.kind = Event::Kind::kPoke;
     } else if (cmd == "renderdoc") {
       e.kind = Event::Kind::kRenderDoc;
       e.frames = 1;
@@ -449,10 +458,16 @@ class ScriptInputDriver final : public rex::input::InputDriver {
         } else if (e.kind == Event::Kind::kScan) {
           ScanGuestMemory(memory, e.words);
         } else if (e.kind == Event::Kind::kPoke) {
-          auto* host = memory->TranslateVirtual<uint8_t*>(e.words[0]);
+          uint32_t address;
+          if (!ResolveAddress(memory, e, address)) continue;
+          if (!Readable(memory, address, 4)) {
+            REXLOG_WARN("Input script: poke {:08X}, which isn't mapped", address);
+            continue;
+          }
+          auto* host = memory->TranslateVirtual<uint8_t*>(address);
           const uint32_t value = rex::byte_swap(e.words[1]);
           std::memcpy(host, &value, 4);
-          REXLOG_INFO("Input script: poke {:08X} = {:08X}", e.words[0], e.words[1]);
+          REXLOG_INFO("Input script: poke {:08X} = {:08X}", address, e.words[1]);
         } else if (e.kind == Event::Kind::kRenderDoc) {
           CaptureGuestFrames(e.frames, guest_frame_count);
         } else if (e.kind == Event::Kind::kPlayer) {

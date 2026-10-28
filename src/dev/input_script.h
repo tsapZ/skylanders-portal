@@ -28,12 +28,13 @@
 //   watchread <hex addr>     the same for reads and writes
 //   pollwatch <hex addr> [<n>]
 //                            polls this big-endian u32 instead of trapping its writes and logs the
-//                            call chains of the threads in recompiled code at each of its first n
-//                            changes (16): for a game where watch fails (write_watch.h)
+//                            call chains and guest registers of the threads in recompiled code at
+//                            each of its first n changes (16): no exceptions at all (write_watch.h)
 //   unwatch                  ends the watch (or poll watch) and logs the writers
-//   For watch, watchread, pollwatch and dump the address can also be hit<n>[+<hex>]: the n-th hit
-//   of the last scan, plus an offset, or *<hex>[+<hex>]: the pointer stored at that address when
-//   the command runs, plus an offset. For data whose heap address changes from run to run.
+//   For watch, watchread, pollwatch, poke and dump the address can also be hit<n>[+<hex>]: the
+//   n-th hit of the last scan, plus an offset, or *<hex>[+<hex>]: the pointer stored at that
+//   address when the command runs, plus an offset. For data whose heap address changes from run
+//   to run.
 //   stacks [<samples>]       logs where every thread is (call chains named by guest function),
 //                            3 samples 250 ms apart by default: finds where the game hangs
 //   renderdoc [n]            captures the next n guest frames with an attached RenderDoc
