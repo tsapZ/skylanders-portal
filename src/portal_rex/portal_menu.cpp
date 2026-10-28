@@ -44,6 +44,7 @@
 #include "portal/figure_stats.h"
 #include "portal/hybrid/real_portal_bridge.h"
 #include "portal/software/software_portal.h"
+#include "portal/trap_villain.h"
 #include "portal_rex/achievements_ui.h"
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
@@ -203,6 +204,8 @@ enum class Text {
   kTrap,
   kVehicle,
   kTired,
+  kTrapEmpty,
+  kTrapHolds,
   kCount,
 };
 
@@ -308,6 +311,8 @@ constexpr const char* kEnglish[] = {
     "Trap",
     "Vehicle",
     "Needs a break",
+    "Empty",
+    "Holds %s",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -414,6 +419,8 @@ constexpr const char* kGerman[] = {
     "Falle",
     "Fahrzeug",
     "Braucht eine Pause",
+    "Leer",
+    "H\xC3\xA4lt %s gefangen",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -922,8 +929,18 @@ struct OwnedFigure {
   std::filesystem::path path;
   const SkylanderInfo* sky = nullptr;
   std::optional<portal::FigureStats> stats;
+  std::optional<portal::TrapContents> trap;  // a trap's villain (TrapTeamRecomp #17)
   std::filesystem::file_time_type mtime{};
 };
+
+// Who a trap holds, as its card and the portal overview show it (TrapTeamRecomp #17: two players
+// lost track of which trap held which villain): the villain's name, or "Empty".
+std::string TrapVillainText(const portal::TrapContents& trap) {
+  if (trap.villain_id == 0) return T(Text::kTrapEmpty);
+  const portal::TrapVillain* villain = portal::FindTrapVillain(trap.villain_id, trap.variant);
+  if (!villain) villain = portal::FindTrapVillain(trap.villain_id, false);
+  return villain ? std::string(villain->name) : "?";
+}
 
 // One version of a character: a figure, or a swapper's top half with its own bottom.
 struct Version {
@@ -1477,6 +1494,7 @@ class Library {
       figure.path = entry.path;
       figure.sky = portal::FindSkylander(portal::ReadFigureId(*data), portal::ReadFigureVariant(*data));
       figure.stats = portal::ParseFigureStats(*data);
+      figure.trap = portal::ReadTrapVillain(*data);
       figure.mtime = std::filesystem::last_write_time(entry.path, ec);
       all.push_back(std::move(figure));
     }
@@ -3591,12 +3609,28 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     const OwnedFigure* owned = library_.Owned(version.sky);
     if (!owned && version.bottom) owned = library_.Owned(version.bottom);
+    float level_w = 0;
     if (owned && owned->stats) {
       const std::string lv = "Lv " + std::to_string(owned->stats->level);
+      level_w = PillWidth(lv) + S(6);
       Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
+    }
+    // A trap: the villain it holds, along its top, left of a level pill (TrapTeamRecomp #17).
+    if (owned && owned->trap && character.sidekick) {
+      DrawVillainPill(dl, {p0.x + S(6), p0.y + S(6)}, p1.x - p0.x - S(12) - level_w, *owned->trap);
     }
     if (auto owner = TakenBy(character)) DrawTaken(dl, a, b, *owner);
     if (IsTired(shown)) DrawTired(dl, a, b);
+  }
+
+  // A trap's villain as a pill at most `width` wide (a smaller font, then shortened, for the long
+  // names): purple for a villain, dark for an empty trap.
+  void DrawVillainPill(ImDrawList* dl, ImVec2 pos, float width, const portal::TrapContents& trap) {
+    std::string text = TrapVillainText(trap);
+    float size = 14;
+    if (PillWidth(text, size) > width) size = 12;
+    while (text.size() > 3 && PillWidth(text, size) > width) text = text.substr(0, text.size() - 4) + "...";
+    Pill(dl, pos, text, trap.villain_id ? Rgba(120, 40, 160, 235) : Rgba(10, 12, 30, 200), kWhite, size);
   }
 
   // A Skylander out of health in this level: a red cross over its picture and the game's words.
@@ -4080,6 +4114,14 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       DrawTraitSymbol(dl, {tx, a.y + S(88)}, S(14), *trait);
       Label(dl, BoldFont(), S(19), {tx + S(20), a.y + S(77)}, kGold, trait->name);
     }
+    // A trap: who it holds, at the top right (TrapTeamRecomp #17).
+    if (owned && owned->trap) {
+      char text[96];
+      std::snprintf(text, sizeof(text), T(Text::kTrapHolds), TrapVillainText(*owned->trap).c_str());
+      const char* shown = owned->trap->villain_id ? text : T(Text::kTrapEmpty);
+      Pill(dl, {b.x - S(26) - PillWidth(shown, 17), a.y + S(30)}, shown,
+           owned->trap->villain_id ? Rgba(120, 40, 160, 235) : Rgba(255, 255, 255, 40), kWhite, 17);
+    }
     if (figures.size() == 2) {
       float px = b.x - S(26);
       for (int i = 1; i >= 0; --i) {
@@ -4394,6 +4436,7 @@ struct PortalEntry {
   std::vector<int> slots;
   std::vector<const SkylanderInfo*> figures;  // null for a figure the catalog doesn't know
   std::optional<uint32_t> player;              // whose Skylander
+  std::optional<portal::TrapContents> trap;    // a trap's villain, as the portal has it now
   bool remove = false;
 };
 
@@ -4423,6 +4466,8 @@ std::vector<PortalEntry> PortalEntries() {
       entry.kind = PortalEntry::Kind::kItem;
     } else if (IsCompanion(sky) || IsSidekickSlot(slot)) {
       entry.kind = PortalEntry::Kind::kSidekick;
+      // A trap: who it holds now (the game writes a catch into it while it is on the portal).
+      if (const auto data = software->Figure(slot)) entry.trap = portal::ReadTrapVillain(*data);
     }
     entry.slots.push_back(slot);
     entry.figures.push_back(sky);
@@ -4511,7 +4556,10 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
     for (const SkylanderInfo* sky : e.figures) {
       if (sky) known.push_back(sky);
     }
-    return known.empty() ? std::string("?") : ComboName(known);
+    std::string name = known.empty() ? std::string("?") : ComboName(known);
+    // A trap with who it holds (TrapTeamRecomp #17).
+    if (e.trap) name += ": " + TrapVillainText(*e.trap);
+    return name;
   }
 
   std::string KindOf(const PortalEntry& e) const {
@@ -4777,7 +4825,10 @@ class PortalOverviewDialog final : public rex::ui::ImGuiDialog {
     for (const SkylanderInfo* sky : e.figures) {
       if (sky) known.push_back(sky);
     }
-    return known.empty() ? std::string("?") : ComboName(known);
+    std::string name = known.empty() ? std::string("?") : ComboName(known);
+    // A trap with who it holds (TrapTeamRecomp #17).
+    if (e.trap) name += ": " + TrapVillainText(*e.trap);
+    return name;
   }
 
   // What a card is: whose Skylander, a trap / vehicle / sidekick, a magic item or adventure pack.
