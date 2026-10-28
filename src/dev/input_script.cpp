@@ -19,6 +19,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>
 #endif
 
 #include <rex/cvar.h>
@@ -501,13 +502,34 @@ class ScriptInputDriver final : public rex::input::InputDriver {
         if (e.kind == Event::Kind::kLog) {
           REXLOG_INFO("Input script: {}", e.text);
         } else if (e.kind == Event::Kind::kFps) {
+          // The frame counter polled every millisecond: the rate, and the gaps between two frames
+          // (a stall, e.g. a shader compiled the first time, shows as a long one).
           const uint64_t frames_before = guest_frame_count();
           const auto time_before = Clock::now();
-          std::this_thread::sleep_for(std::chrono::duration<double>(e.duration));
+          const auto until = time_before + std::chrono::duration_cast<Clock::duration>(
+                                               std::chrono::duration<double>(e.duration));
+          uint64_t last_count = frames_before;
+          auto last_frame = time_before;
+          double longest_ms = 0.0;
+          int over50 = 0;
+          while (Clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            const uint64_t count = guest_frame_count();
+            if (count != last_count) {
+              const auto now = Clock::now();
+              const double gap = std::chrono::duration<double, std::milli>(now - last_frame).count();
+              if (last_count != frames_before) {  // the first gap started before the measurement
+                longest_ms = std::max(longest_ms, gap);
+                over50 += gap > 50.0;
+              }
+              last_count = count;
+              last_frame = now;
+            }
+          }
           const uint64_t frames = guest_frame_count() - frames_before;
           const double seconds = std::chrono::duration<double>(Clock::now() - time_before).count();
-          REXLOG_INFO("Input script: {:.1f} guest FPS ({} frames in {:.2f} s)",
-                      double(frames) / seconds, frames, seconds);
+          REXLOG_INFO("Input script: {:.1f} guest FPS ({} frames in {:.2f} s), longest frame {:.0f} ms, {} over 50 ms",
+                      double(frames) / seconds, frames, seconds, longest_ms, over50);
         } else if (e.kind == Event::Kind::kScan) {
           ScanGuestMemory(memory, e.words);
         } else if (e.kind == Event::Kind::kPoke) {
@@ -804,6 +826,23 @@ void InstallInputScript(rex::system::IInputSystem* input_system, rex::memory::Me
   // Wrapped like the real controllers, so scripted runs can open and drive the portal menu.
   input->AddDriver(skylanders::WrapForPortalMenu(std::move(driver), true));
   REXLOG_INFO("Input script: playing '{}'", path);
+#ifdef _WIN32
+  // The process's memory every 30 s of a scripted run, so a long test shows a leak (a level or a
+  // figure after which it keeps growing). Detached: it ends with the process.
+  std::thread([] {
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::seconds(30));
+      PROCESS_MEMORY_COUNTERS_EX counters{};
+      DWORD handles = 0;
+      if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                                  sizeof(counters)) &&
+          GetProcessHandleCount(GetCurrentProcess(), &handles)) {
+        REXLOG_INFO("Input script: memory {} MB private, {} MB working set, {} handles",
+                    counters.PrivateUsage >> 20, counters.WorkingSetSize >> 20, handles);
+      }
+    }
+  }).detach();
+#endif
 }
 
 void RegisterScriptCommand(const std::string& name, std::function<void(const std::string& args)> run) {

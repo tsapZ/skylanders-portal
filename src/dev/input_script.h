@@ -12,7 +12,9 @@
 //   hold <button> <ms>
 //   stick <x> <y> <ms>       left stick, x and y in -1..1
 //   log <text>               writes a log line, to find a point of the timeline in the log
-//   fps <seconds>            measures the guest frame rate over that time and logs it
+//   fps <seconds>            measures the guest frame rate over that time and logs it, with the
+//                            longest time between two frames and how many took over 50 ms
+//                            (stutter); a scripted run also logs the process's memory every 30 s
 //   scan <hex> [<hex> ...]   logs where this big-endian u32 sequence is in guest memory
 //                            (hit0, hit1, ... in the order logged)
 //   poke <hex addr> <hex>    writes a big-endian u32 to guest memory
