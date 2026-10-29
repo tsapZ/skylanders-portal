@@ -5,7 +5,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 
+#include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
 
 namespace skylanders::dev {
@@ -30,6 +32,19 @@ bool g_level_logged = false;
 bool g_logged_player = false;  // the level's last line had a player
 Clock::time_point g_level_since, g_last_line;
 float g_line_x = 0, g_line_y = 0, g_line_z = 0;
+
+// The level archives (WatchLevelArchives): the game's name for a path, the last one opened.
+std::string (*g_name_of)(std::string_view) = nullptr;
+std::mutex g_archive_mutex;
+std::string g_archive_level;
+
+void OnOpened(std::string_view path) {
+  if (!g_name_of) return;
+  std::string name = g_name_of(path);
+  if (name.empty()) return;
+  std::lock_guard lock(g_archive_mutex);
+  g_archive_level = std::move(name);
+}
 
 }  // namespace
 
@@ -69,6 +84,47 @@ void ReportPlace(const std::string& level, bool has_player, float x, float y, fl
 std::string PlaceText() {
   const int current = g_current.load(std::memory_order_acquire);
   return current < 0 ? std::string() : std::string(g_text[current]);
+}
+
+void WatchLevelArchives(std::string (*name_of)(std::string_view path)) {
+  g_name_of = name_of;
+  rex::filesystem::SetOpenObserver(&OnOpened);
+}
+
+std::string ArchiveLevel() {
+  std::lock_guard lock(g_archive_mutex);
+  return g_archive_level;
+}
+
+void ReportPlayerFrame(uint32_t who, float x, float y, float z, bool relative) {
+  // The players seen lately, in the order they came (a player back after two seconds away, as in
+  // a new level, comes anew). One thread, the game's.
+  struct Seen {
+    uint32_t who = 0;
+    Clock::time_point first{}, last{};
+  };
+  static Seen seen[4];
+  const Clock::time_point now = Clock::now();
+  Seen* mine = nullptr;
+  for (Seen& s : seen) {
+    if (s.who == who) mine = &s;
+  }
+  if (!mine) {
+    mine = &seen[0];
+    for (Seen& s : seen) {
+      if (s.last < mine->last) mine = &s;
+    }
+    *mine = {who, now, now};
+  }
+  if (now - mine->last > std::chrono::seconds(2)) mine->first = now;
+  mine->last = now;
+  for (const Seen& s : seen) {
+    if (&s != mine && s.who && now - s.last < std::chrono::milliseconds(500) && s.first < mine->first) return;
+  }
+  std::string level = ArchiveLevel();
+  if (level.empty()) level = "(level unknown)";
+  if (relative) level += " (on something; the position is relative to it)";
+  ReportPlace(level, true, x, y, z);
 }
 
 void LogPlace(const char* why) {
