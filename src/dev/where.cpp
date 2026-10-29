@@ -20,6 +20,9 @@ constexpr auto kEvery = std::chrono::minutes(5);
 constexpr float kMoved = 2.0f;
 // A level that has no player this long (a menu, a level that never gets one) is logged without.
 constexpr auto kNoPlayer = std::chrono::seconds(20);
+// A player counts a second after it came: its first frames can stand at a placeholder
+// (Imaginators' is at 0 0 -50000 until the level puts it in place).
+constexpr auto kSettle = std::chrono::seconds(1);
 
 // The place as text, for other threads (the crash report, the problem note): two buffers, the
 // reporter writes the one not in use and then switches, so a reader never sees half a line.
@@ -118,6 +121,7 @@ void ReportPlayerFrame(uint32_t who, float x, float y, float z, bool relative) {
   }
   if (now - mine->last > std::chrono::seconds(2)) mine->first = now;
   mine->last = now;
+  if (now - mine->first < kSettle) return;
   for (const Seen& s : seen) {
     if (&s != mine && s.who && now - s.last < std::chrono::milliseconds(500) && s.first < mine->first) return;
   }

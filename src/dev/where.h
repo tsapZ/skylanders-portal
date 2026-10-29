@@ -38,7 +38,8 @@ std::string ArchiveLevel();
 // per-player checks of Swap Force, SuperChargers and Imaginators): `who` the player's object, its
 // position, and whether that is relative to something it stands in or on (a vehicle). The first
 // of the players reported in the last half second counts as player 1; its reports go to
-// ReportPlace with ArchiveLevel() as the level. From the game's thread.
+// ReportPlace with ArchiveLevel() as the level, from a second after it came. From the game's
+// thread.
 void ReportPlayerFrame(uint32_t who, float x, float y, float z, bool relative);
 
 }  // namespace skylanders::dev
