@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <vector>
@@ -68,6 +69,17 @@ bool PlaceFigureFromFile(int slot, const std::filesystem::path& path);
 // Removes the figure from `slot`, if any, and forgets what file it was saving to. Returns false if
 // there is no active software portal or the slot was already empty.
 bool RemoveFigureFromSlot(int slot);
+
+// The figure RemoveFigureFromSlot last took off `slot`, with the file it was saving to, so it can
+// go back when the game wants that one back (portal_menu.h PlayerSkylanderWantedBack). `order`
+// grows with every figure taken off, so the newest of several slots can be told. Any thread.
+struct TakenOffFigure {
+  int slot = -1;
+  uint64_t order = 0;
+  std::optional<std::filesystem::path> path;
+  portal::FigureData data;
+};
+std::optional<TakenOffFigure> TakenOffFrom(int slot);
 
 // Creates a new blank figure for `sky` under portal_figures_dir/<game>/<name>.dump (creating the
 // game subfolder if needed; an existing file of that name is never overwritten -- a " (2)", " (3)"

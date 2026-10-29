@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -432,6 +433,10 @@ namespace skylanders {
 namespace {
 // What UseSharedDataFolder did, for the log (it runs before logging starts).
 std::string g_data_folder_note;
+// What RemoveFigureFromSlot took off each slot last (TakenOffFrom).
+std::mutex g_taken_off_mutex;
+std::map<int, TakenOffFigure> g_taken_off;
+uint64_t g_taken_off_count = 0;
 }  // namespace
 
 void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem::path& cache_root,
@@ -572,7 +577,21 @@ bool PlaceFigureFromFile(int slot, const std::filesystem::path& path) {
 bool RemoveFigureFromSlot(int slot) {
   portal::SoftwarePortal* software = g_software_portal.load();
   if (!software) return false;
-  return software->RemoveFigure(slot);
+  std::optional<portal::FigureData> data = software->Figure(slot);
+  std::optional<std::filesystem::path> path = software->Source(slot);
+  if (!software->RemoveFigure(slot)) return false;
+  if (data) {
+    std::lock_guard lock(g_taken_off_mutex);
+    g_taken_off[slot] = {slot, ++g_taken_off_count, std::move(path), *data};
+  }
+  return true;
+}
+
+std::optional<TakenOffFigure> TakenOffFrom(int slot) {
+  std::lock_guard lock(g_taken_off_mutex);
+  const auto it = g_taken_off.find(slot);
+  if (it == g_taken_off.end()) return std::nullopt;
+  return it->second;
 }
 
 std::optional<std::filesystem::path> CreateFigureFile(const portal::SkylanderInfo& sky) {

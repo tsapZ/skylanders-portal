@@ -46,6 +46,9 @@
 //   place <slot> <file>      puts a figure file straight onto the emulated portal's slot (0-15),
 //                            past the portal menu, e.g. a second sidekick for the portal check
 //   remove <slot>            takes the figure off that slot again
+//   putback                  if the game wants back the Skylander just taken off and takes no
+//                            other (portal_menu.h PlayerSkylanderWantedBack, Giants in a shop),
+//                            puts that one back; else nothing
 //   shot <name>              saves the game's picture (without the menus over it, at most 960
 //                            wide) as <name>.png next to the script file: on the game's own
 //                            timeline, so it also comes at the right moment after a waitfor

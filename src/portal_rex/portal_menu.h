@@ -219,6 +219,19 @@ void CompanionRequestEnded();
 // stays pickable. Any thread.
 void PlayerSkylanderTired(uint32_t user);
 
+// The game wants back the Skylander player `user` took off and takes no other (Giants' "put the
+// Skylander back on the portal", 301_PortalError_ToyMissing, after it came off in a shop or a
+// talk; the console does the same): the menu for that player opens (unless portal_menu_auto_open
+// is off) or, open, turns to a message naming that Skylander, and A or B puts it back. Taken off
+// some other way than by the menu, it is the Skylander taken off last. Callable from any thread.
+void PlayerSkylanderWantedBack(uint32_t user);
+// For the input script's putback: puts back the Skylander the game wants back (above); false if
+// it wants none back. UI thread.
+bool PutBackWantedSkylander();
+// How often the game has asked for a Skylander back so far (each new request once), for a test
+// that then has to leave the shop another way. Any thread.
+uint32_t WantedBackCount();
+
 // For the settings menu's Problem melden (problem_note.h), UI thread: the game's picture as it is
 // now (the guest output, without the menus over it) as RGBA, false without one; the figures on the
 // emulated portal ("Chop Chop (player 1), ..."); and a short message at the top of the screen.

@@ -65,6 +65,7 @@ struct Event {
     kKey,
     kPlace,
     kRemove,
+    kPutBack,
     kShot,
     kTrap,
     kWatch,
@@ -352,6 +353,8 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
     } else if (cmd == "remove") {
       ok = bool(words >> e.frames) && e.frames < 16;
       e.kind = Event::Kind::kRemove;
+    } else if (cmd == "putback") {
+      e.kind = Event::Kind::kPutBack;
     } else if (cmd == "shot") {
       ok = bool(words >> e.text);
       e.kind = Event::Kind::kShot;
@@ -633,6 +636,14 @@ class ScriptInputDriver final : public rex::input::InputDriver {
               const bool removed = skylanders::RemoveFigureFromSlot(slot);
               REXLOG_INFO("Input script: {} slot {}", removed ? "removed from" : "nothing in",
                           slot);
+            });
+          }
+        } else if (e.kind == Event::Kind::kPutBack) {
+          if (run_in_ui) {
+            run_in_ui([] {
+              const bool put = skylanders::PutBackWantedSkylander();
+              REXLOG_INFO("Input script: putback: {}", put ? "the Skylander the game wants back goes back"
+                                                            : "the game wants none back");
             });
           }
         } else if (e.kind == Event::Kind::kShot) {

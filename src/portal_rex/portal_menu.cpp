@@ -206,6 +206,9 @@ enum class Text {
   kTired,
   kTrapEmpty,
   kTrapHolds,
+  kWantedBack,
+  kWantedBackAny,
+  kPutBack,
   kCount,
 };
 
@@ -313,6 +316,11 @@ constexpr const char* kEnglish[] = {
     "Needs a break",
     "Empty",
     "Holds %s",
+    "The game wants %s back on the portal first: it is in the middle of something with that "
+    "Skylander (a shop, a talk). Swap after that.",
+    "The game wants the Skylander you just took off back on the portal first: it is in the middle "
+    "of something with it (a shop, a talk). Swap after that.",
+    "Put back",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -421,6 +429,14 @@ constexpr const char* kGerman[] = {
     "Braucht eine Pause",
     "Leer",
     "H\xC3\xA4lt %s gefangen",
+    "Das Spiel will %s zuerst zur\xC3\xBC"
+    "ck auf dem Portal: Es ist mitten in etwas mit diesem Skylander (ein Laden, ein Gespr\xC3\xA4"
+    "ch). Tausch danach.",
+    "Das Spiel will den Skylander, den du gerade runtergenommen hast, zuerst zur\xC3\xBC"
+    "ck auf dem Portal: Es ist mitten in etwas mit ihm (ein Laden, ein Gespr\xC3\xA4"
+    "ch). Tausch danach.",
+    "Zur\xC3\xBC"
+    "cklegen",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -2009,6 +2025,8 @@ void RestoreLifted(uint32_t user, const std::vector<LiftedFigure>& lifted) {
   if (!software) return;
   auto& slots = g_player_slots[user];
   for (const LiftedFigure& figure : lifted) {
+    // Back already (the input script's putback, the real portal): not put on twice.
+    if (software->HasFigure(figure.slot)) continue;
     bool placed = false;
     if (figure.path) {
       placed = PlaceFigureFromFile(figure.slot, *figure.path);
@@ -2018,6 +2036,36 @@ void RestoreLifted(uint32_t user, const std::vector<LiftedFigure>& lifted) {
     if (placed) slots.push_back(figure.slot);
   }
 }
+
+// The Skylander taken off last (by the menu, the input script, the developer tools) from a slot
+// that is still empty and not another player's, for the game that wants it back.
+std::optional<LiftedFigure> TakenOffSkylander(uint32_t user) {
+  portal::SoftwarePortal* software = GetSoftwarePortal();
+  if (!software) return std::nullopt;
+  std::optional<TakenOffFigure> newest;
+  for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
+    if (software->HasFigure(slot) || OwnedByOther(slot, user)) continue;
+    std::optional<TakenOffFigure> taken = TakenOffFrom(slot);
+    if (!taken || (newest && newest->order > taken->order)) continue;
+    const SkylanderInfo* sky = portal::FindSkylander(portal::ReadFigureId(taken->data),
+                                                     portal::ReadFigureVariant(taken->data));
+    if (sky && !IsItem(sky) && !IsCompanion(sky)) newest = std::move(taken);
+  }
+  if (!newest) return std::nullopt;
+  LiftedFigure figure;
+  figure.slot = newest->slot;
+  figure.path = newest->path;
+  figure.data = newest->data;
+  figure.sky = portal::FindSkylander(portal::ReadFigureId(newest->data),
+                                     portal::ReadFigureVariant(newest->data));
+  return figure;
+}
+
+// The player whose Skylander the game wants back (PlayerSkylanderWantedBack) and that Skylander,
+// the one taken off last when the game first asked, until it stops asking. UI thread only.
+std::optional<uint32_t> g_wanted_back;
+std::optional<LiftedFigure> g_wanted_figure;
+std::atomic<uint32_t> g_wanted_back_count{0};  // WantedBackCount
 
 // The item put on through the menu, if it's still there.
 const SkylanderInfo* PortalItem() {
@@ -2373,6 +2421,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   uint32_t user() const { return user_; }
   bool auto_opened() const { return auto_opened_; }
+  bool wants_back() const { return wants_back_; }
 
   // hybrid: the player put a figure on the real portal while the menu was open, so that one is
   // theirs now; the menu closes without putting the lifted figure back.
@@ -2398,6 +2447,24 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     REXLOG_INFO("Portal menu: shown {} ms after the open button",
                 std::chrono::duration_cast<std::chrono::milliseconds>(reveal_time_ - lift_time_)
                     .count());
+  }
+
+  // The game wants the Skylander back that was taken off and takes no other
+  // (PlayerSkylanderWantedBack): instead of the figures the menu says so, and A or B puts it back.
+  // Taken off some other way than by this menu, it is `figure`.
+  void WantBack(const std::optional<LiftedFigure>& figure) {
+    if (state_ == State::kWaiting || state_ == State::kDone || !software_ || wants_back_) return;
+    if (lifted_.empty() && figure) lifted_.push_back(*figure);
+    std::vector<const SkylanderInfo*> figures;
+    for (const LiftedFigure& figure : lifted_) {
+      if (figure.sky) figures.push_back(figure.sky);
+    }
+    wanted_name_ = figures.empty() ? std::string() : ComboName(figures);
+    wants_back_ = true;
+    Reveal();
+    state_ = State::kMessage;
+    REXLOG_INFO("Portal menu: the game wants {} back from player {}",
+                wanted_name_.empty() ? std::string("the Skylander") : wanted_name_, user_ + 1);
   }
 
  protected:
@@ -3314,8 +3381,15 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   }
 
   void DrawMessage(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const Actions& a) {
-    const char* text = GetUsbPortal() || REXCVAR_GET(portal_mode) == "usb" ? T(Text::kUsbActive)
+    std::string text = GetUsbPortal() || REXCVAR_GET(portal_mode) == "usb" ? T(Text::kUsbActive)
                                                                            : T(Text::kNoPortal);
+    if (wants_back_ && wanted_name_.empty()) {
+      text = T(Text::kWantedBackAny);
+    } else if (wants_back_) {
+      char line[512];
+      std::snprintf(line, sizeof(line), T(Text::kWantedBack), wanted_name_.c_str());
+      text = line;
+    }
     Label(dl, BoldFont(), S(30), {p0.x + S(60), (p0.y + p1.y) / 2 - S(30)}, kWhite, text,
           p1.x - p0.x - S(120));
     // Closes through kWaiting like B elsewhere, so this frame still draws as the message.
@@ -3328,6 +3402,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const ImU32 grey = Rgba(78, 86, 120);
     // Without the emulated portal the menu only shows a message and has no library to look at
     // (it crashed here when B closed that message with the real USB portal active).
+    if (state_ == State::kMessage && wants_back_) {
+      x += Hint(dl, {x, y}, "A", Rgba(76, 175, 80), T(Text::kPutBack), true, "Enter");
+      Hint(dl, {x, y}, "B", Rgba(232, 73, 43), T(Text::kBack), true, "Esc");
+      return;
+    }
     if (state_ == State::kMessage || state_ == State::kDetails || !software_) {
       Hint(dl, {x, y}, "B", Rgba(232, 73, 43), T(Text::kBack), true, "Esc");
       return;
@@ -4320,6 +4399,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   State previous_state_ = State::kBrowsing;
   Library library_;
   std::vector<LiftedFigure> lifted_;
+  bool wants_back_ = false;  // WantBack: the message instead of the figures
+  std::string wanted_name_;
   std::unordered_map<std::string, uint32_t> taken_;  // character -> player who has it
   const SkylanderInfo* current_item_ = nullptr;
   Clock::time_point lift_time_ = Clock::now();
@@ -5236,9 +5317,44 @@ void CloseAutoOpenedPortalMenu() {
   if (!g_app_context) return;
   ++g_auto_open_generation;  // the game stopped asking: a deferred open doesn't come
   g_app_context->CallInUIThread([] {
+    g_wanted_back.reset();
+    g_wanted_figure.reset();
     if (g_menu && g_menu->auto_opened()) g_menu->Cancel();
   });
 }
+
+void PlayerSkylanderWantedBack(uint32_t user) {
+  if (!g_app_context || user >= rex::input::kMaxGuestUsers) return;
+  g_app_context->CallInUIThread([user] {
+    if (g_wanted_back != user) {
+      g_wanted_back = user;
+      g_wanted_figure = TakenOffSkylander(user);
+      ++g_wanted_back_count;
+    }
+    if (!g_menu) {
+      if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal()) return;
+      OpenAutoMenu(user);
+    }
+    if (g_menu && g_menu->user() == user) g_menu->WantBack(g_wanted_figure);
+  });
+}
+
+bool PutBackWantedSkylander() {
+  if (!g_wanted_back) return false;
+  const uint32_t user = *g_wanted_back;
+  if (g_menu && g_menu->user() == user) {
+    // The menu holds it (WantBack): it goes back as with B.
+    g_menu->WantBack(g_wanted_figure);
+    if (!g_menu->wants_back()) return false;
+    g_menu->Cancel();
+    return true;
+  }
+  if (!g_wanted_figure) return false;
+  RestoreLifted(user, {*g_wanted_figure});
+  return true;
+}
+
+uint32_t WantedBackCount() { return g_wanted_back_count.load(); }
 
 void SetPortalMenuConfigPath(std::filesystem::path config_path) {
   g_config_path = std::move(config_path);
