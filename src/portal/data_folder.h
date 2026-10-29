@@ -25,7 +25,13 @@ std::filesystem::path DefaultDataFolder();
 // Where a picked data folder is written down for every game: %APPDATA%\Skylanders\data-folder.txt,
 // one line, UTF-8. Not there: the default.
 std::filesystem::path DataFolderPointer();
-// The data folder: the pointer's, else Documents\Skylanders.
+// Portable data (Core of Light #47, a stick that goes from PC to PC): the folder of the running
+// executable or one up to three folders above it (a game in <Core of Light>\Games\<game>) that
+// holds kPortableMarker; empty if none. Its data folder is "Skylanders" in it, whatever the drive.
+// Not portable.txt: that one marks Core of Light's ZIP (#46), whose data stays in Documents.
+inline constexpr const char* kPortableMarker = "portable-data.txt";
+std::filesystem::path PortableFolder();
+// The data folder: the portable one, else the pointer's, else Documents\Skylanders.
 std::filesystem::path DataFolder();
 // Writes the pointer (or removes it for the default folder); false if it couldn't.
 bool SetDataFolder(const std::filesystem::path& folder);

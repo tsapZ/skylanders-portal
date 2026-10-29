@@ -67,7 +67,31 @@ fs::path DataFolderPointer() {
   return appdata / "Skylanders" / "data-folder.txt";
 }
 
+fs::path PortableFolder() {
+#ifdef _WIN32
+  std::wstring exe(MAX_PATH, L'\0');
+  for (;;) {
+    const DWORD n = GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size()));
+    if (n == 0) return {};
+    if (n < exe.size()) {
+      exe.resize(n);
+      break;
+    }
+    exe.resize(exe.size() * 2);
+  }
+  fs::path dir = fs::path(exe).parent_path();
+  std::error_code ec;
+  for (int up = 0; up <= 3 && !dir.empty(); ++up) {
+    if (fs::is_regular_file(dir / kPortableMarker, ec)) return dir;
+    if (dir == dir.root_path()) break;
+    dir = dir.parent_path();
+  }
+#endif
+  return {};
+}
+
 fs::path DataFolder() {
+  if (const fs::path portable = PortableFolder(); !portable.empty()) return portable / "Skylanders";
   const fs::path pointer = DataFolderPointer();
   if (!pointer.empty()) {
     std::ifstream in(pointer, std::ios::binary);

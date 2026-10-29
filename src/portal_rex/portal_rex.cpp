@@ -450,8 +450,10 @@ void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem:
   if (SettingsSchemaRequested()) return;
   const fs::path old_dir = user_data_root;
   const fs::path target = DataFolder() / fs::path(std::u8string(game.begin(), game.end()));
+  // Portable data (data_folder.h): a PC the stick visits keeps its own old folder.
+  const bool portable = !PortableFolder().empty();
   std::error_code ec;
-  if (!fs::exists(target, ec) && fs::is_directory(old_dir, ec) && !fs::is_empty(old_dir, ec)) {
+  if (!portable && !fs::exists(target, ec) && fs::is_directory(old_dir, ec) && !fs::is_empty(old_dir, ec)) {
     const CopyResult copy = CopyFolderVerified(old_dir, target);
     if (!copy.ok) {
       g_data_folder_note = "Data folder: could not copy " + Utf8Path(old_dir) + " to " + Utf8Path(target) +
