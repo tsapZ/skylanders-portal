@@ -17,7 +17,7 @@ set windows-shell := ["C:/Program Files/Git/usr/bin/sh.exe", "-cu"]
 # On Windows, `just` is a native program, so it always sees PATH in Windows form (';'-separated),
 # even when started from Git Bash; append in the same form, and sh.exe converts the whole value.
 # rexruntime.dll imports amd_fidelityfx_dx12.dll (debug: amd_fidelityfx_dx12d.dll). The SDK builds it into
-# bin/ (git-ignored), but the codegen tool (thirdparty/rexglue-sdk/out/win-amd64/rexglue[d].exe) does not
+# bin/ (git-ignored), but the codegen tool (out/build/<preset>/rexglue-out/rexglue[d].exe) does not
 # depend on it, so the regen recipes build it first and PATH points there. Without it codegen
 # exits with 0xC0000135 (DLL not found).
 ffx_dll_dirs := justfile_directory() + "\\bin"
@@ -40,13 +40,15 @@ triple := if os() == "windows" { "win-amd64" } else if os() == "macos" { "mac-am
 exe_suffix := if os() == "windows" { ".exe" } else { "" }
 
 # Where the SDK puts its own shared libraries (librexruntime, libTracyClient, ...), matching
-# rexglue-sdk/CMakeLists.txt's CMAKE_RUNTIME_OUTPUT_DIRECTORY. On Windows and macOS, the SDK's
+# rexglue-sdk/CMakeLists.txt's CMAKE_RUNTIME_OUTPUT_DIRECTORY: inside a game, each build folder's
+# rexglue-out (one folder for all of them let one build's files into another's). On Windows and macOS, the SDK's
 # rexglue_configure_target() copies these next to the host executable as a post-build step, so
 # out/build/<triple>-*/ already has everything it needs. On Linux it only stages the GPU plugin
 # that way, not the runtime libraries themselves -- so play-*/package-release point
 # LD_LIBRARY_PATH/DYLD_LIBRARY_PATH at this directory instead of relying on a copy that doesn't
 # happen. Harmless to set on every platform.
-sdk_lib_dir := "thirdparty/rexglue-sdk/out/" + triple
+sdk_lib_dir_debug := "out/build/" + triple + "-debug/rexglue-out"
+sdk_lib_dir := "out/build/" + triple + "-release/rexglue-out"
 
 # List every recipe
 default:
@@ -98,7 +100,7 @@ regen-release:
 # args are passed straight to the game, e.g.:
 #   just play-debug --portal_mode usb
 play-debug *ARGS: build-debug
-    LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:{{ sdk_lib_dir }}" DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-}:{{ sdk_lib_dir }}" ./out/build/{{ triple }}-debug/{{ exe }}{{ exe_suffix }} {{ ARGS }}
+    LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:{{ sdk_lib_dir_debug }}" DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-}:{{ sdk_lib_dir_debug }}" ./out/build/{{ triple }}-debug/{{ exe }}{{ exe_suffix }} {{ ARGS }}
 
 # Build (only if needed) then run the release build -- smoother than debug, prefer this for
 # actually playing rather than debugging.
