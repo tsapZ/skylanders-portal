@@ -33,6 +33,15 @@ XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expe
 // UTF-8 form of a path. Unlike path::string(), never throws for characters outside the ANSI code page.
 std::string Utf8(const std::filesystem::path& p);
 
+// The first line of a game's log (build_info.cpp): "<title> <version> (build <commit>); Windows 11
+// build 26100; <CPU>, <n> threads; <n> GB RAM". Nothing personal in it: no names, no paths.
+std::string BuildAndSystemLine(std::string_view title);
+
+// The game's release version (its installer script's MyAppVersion) and commit, from the source
+// skylanders_game_xex generates for the game (cmake/game_xex.cmake).
+const char* GameVersion();
+const char* GameCommit();
+
 // Human-readable explanation for anything other than XexCheck::Match; empty for a match. UTF-8, so
 // a game folder with any Unicode characters is shown exactly as it was tried (see Utf8()).
 // `game` names the disc to put in, e.g. "Skylanders: SuperChargers".
