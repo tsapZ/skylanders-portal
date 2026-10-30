@@ -36,6 +36,10 @@ bool g_logged_player = false;  // the level's last line had a player
 Clock::time_point g_level_since, g_last_line;
 float g_line_x = 0, g_line_y = 0, g_line_z = 0;
 
+// The level alone, for CurrentLevel on other threads (written when it changes).
+std::mutex g_level_mutex;
+std::string g_level_shared;
+
 // The level archives (WatchLevelArchives): the game's name for a path, the last one opened.
 std::string (*g_name_of)(std::string_view) = nullptr;
 std::mutex g_archive_mutex;
@@ -57,6 +61,10 @@ void ReportPlace(const std::string& level, bool has_player, float x, float y, fl
     g_level = level;
     g_level_logged = false;
     g_level_since = now;
+    // Without ReportPlayerFrame's notes ("(level unknown)", " (on something; ...)").
+    std::lock_guard lock(g_level_mutex);
+    g_level_shared = level.substr(0, level.find('('));
+    while (!g_level_shared.empty() && g_level_shared.back() == ' ') g_level_shared.pop_back();
   }
   const int next = g_current.load(std::memory_order_relaxed) == 0 ? 1 : 0;
   if (has_player) {
@@ -87,6 +95,11 @@ void ReportPlace(const std::string& level, bool has_player, float x, float y, fl
 std::string PlaceText() {
   const int current = g_current.load(std::memory_order_acquire);
   return current < 0 ? std::string() : std::string(g_text[current]);
+}
+
+std::string CurrentLevel() {
+  std::lock_guard lock(g_level_mutex);
+  return g_level_shared;
 }
 
 void WatchLevelArchives(std::string (*name_of)(std::string_view path)) {

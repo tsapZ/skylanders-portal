@@ -20,6 +20,9 @@ void ReportPlace(const std::string& level, bool has_player, float x, float y, fl
 // Safe from any thread, also at a crash.
 std::string PlaceText();
 
+// The level of the last report ("Level_014"), or empty before the first. Any thread.
+std::string CurrentLevel();
+
 // Logs the "Where:" line now, with the reason ("crash", "problem note"); nothing before the first
 // report.
 void LogPlace(const char* why);
