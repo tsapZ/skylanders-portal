@@ -94,9 +94,10 @@ bool IsVehicle(const portal::SkylanderInfo& sky) {
   return sky.category.find("Vehicle") != std::string_view::npos;
 }
 
-// "Chop Chop", "Chop Chop & Spyro" (two players), a swapper's two halves as "Freeze Blade" or
-// "Freeze Blade / Night Shift", and a vehicle after a "+". Empty with no Skylander on the portal.
-std::string FiguresText() {
+// "Playing as Chop Chop", "... Chop Chop & Spyro" (two players), a swapper's two halves as
+// "Freeze Blade" or "Freeze Blade / Night Shift", one player's vehicle as "... Chop Chop with Buzz
+// Wing" ("Spielt mit Chop Chop und Buzz Wing"). Empty with no Skylander on the portal.
+std::string DetailsText(bool german) {
   std::vector<const portal::SkylanderInfo*> figures;
   auto add = [&](const portal::FigureData& data) {
     const portal::SkylanderInfo* sky =
@@ -131,9 +132,13 @@ std::string FiguresText() {
     std::string b(portal::SwapperBaseName(bottom ? *bottom : *top));
     characters.insert(characters.begin(), a == b ? a : a + " / " + b);
   }
-  std::string text;
-  for (size_t i = 0; i < characters.size() && i < 2; ++i) text += (i ? " & " : "") + characters[i];
-  if (!text.empty() && !vehicles.empty()) text += " + " + vehicles.front();
+  if (characters.empty()) return {};
+  std::string text = (german ? "Spielt mit " : "Playing as ") + characters[0];
+  if (characters.size() > 1) {
+    text += " & " + characters[1];
+  } else if (!vehicles.empty()) {
+    text += (german ? " und " : " with ") + vehicles.front();
+  }
   return text;
 }
 
@@ -147,12 +152,10 @@ std::string LevelText() {
 // The activity as Discord's JSON; `start` is the play time's start (Unix seconds).
 std::string Activity(int64_t start) {
   const bool german = menu_draw::GermanText();
-  const std::string figures = FiguresText();
+  const std::string details = DetailsText(german);
   const std::string level = LevelText();
   std::string json = "{";
-  if (!figures.empty()) {
-    json += "\"details\":" + JsonString((german ? "Spielt mit " : "Playing as ") + figures) + ",";
-  }
+  if (!details.empty()) json += "\"details\":" + JsonString(details) + ",";
   if (level.size() >= 2) json += "\"state\":" + JsonString(level) + ",";
   json += "\"timestamps\":{\"start\":" + std::to_string(start) + "},";
   json += "\"assets\":{\"large_image\":\"logo\",\"large_text\":" +
