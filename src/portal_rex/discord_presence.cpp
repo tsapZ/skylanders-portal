@@ -20,6 +20,7 @@
 #include "portal/figure_file.h"
 #include "portal/figure_info.h"
 #include "portal/software/software_portal.h"
+#include "portal/trap_villain.h"
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_rex.h"
 
@@ -94,15 +95,37 @@ bool IsVehicle(const portal::SkylanderInfo& sky) {
   return sky.category.find("Vehicle") != std::string_view::npos;
 }
 
-// "Playing as Chop Chop", "... Chop Chop & Spyro" (two players), a swapper's two halves as
-// "Freeze Blade" or "Freeze Blade / Night Shift", one player's vehicle as "... Chop Chop with Buzz
-// Wing" ("Spielt mit Chop Chop und Buzz Wing"). Empty with no Skylander on the portal.
-std::string DetailsText(bool german) {
-  std::vector<const portal::SkylanderInfo*> figures;
+// Who is on the portal: the players' Skylanders (a swapper's two halves as "Freeze Blade" or
+// "Freeze Blade / Night Shift") and what goes with them, a SuperChargers vehicle or the villain in
+// a Trap Team trap.
+struct Lineup {
+  std::vector<std::string> characters;
+  std::string companion;
+};
+
+Lineup PortalLineup() {
+  Lineup lineup;
+  const portal::SkylanderInfo* top = nullptr;
+  const portal::SkylanderInfo* bottom = nullptr;
   auto add = [&](const portal::FigureData& data) {
+    if (auto trap = portal::ReadTrapVillain(data); trap && trap->villain_id != 0) {
+      if (const portal::TrapVillain* villain = portal::FindTrapVillain(trap->villain_id, trap->variant)) {
+        if (lineup.companion.empty()) lineup.companion = portal::DisplayName(villain->name);
+      }
+      return;
+    }
     const portal::SkylanderInfo* sky =
         portal::FindSkylander(portal::ReadFigureId(data), portal::ReadFigureVariant(data));
-    if (sky) figures.push_back(sky);
+    if (!sky) return;
+    if (IsVehicle(*sky)) {
+      if (lineup.companion.empty()) lineup.companion = ShownName(*sky);
+    } else if (portal::GetSwapperHalf(*sky) == portal::SwapperHalf::kTop) {
+      top = sky;
+    } else if (portal::GetSwapperHalf(*sky) == portal::SwapperHalf::kBottom) {
+      bottom = sky;
+    } else if (portal::FigureElement(*sky) != portal::Element::kNone) {
+      lineup.characters.push_back(ShownName(*sky));
+    }
   };
   if (portal::SoftwarePortal* software = GetSoftwarePortal()) {
     for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
@@ -113,31 +136,24 @@ std::string DetailsText(bool german) {
       if (auto data = ReadRealFigureBlocks(slot)) add(*data);
     }
   }
-  std::vector<std::string> characters, vehicles;
-  const portal::SkylanderInfo* top = nullptr;
-  const portal::SkylanderInfo* bottom = nullptr;
-  for (const portal::SkylanderInfo* sky : figures) {
-    if (IsVehicle(*sky)) {
-      vehicles.push_back(ShownName(*sky));
-    } else if (portal::GetSwapperHalf(*sky) == portal::SwapperHalf::kTop) {
-      top = sky;
-    } else if (portal::GetSwapperHalf(*sky) == portal::SwapperHalf::kBottom) {
-      bottom = sky;
-    } else if (portal::FigureElement(*sky) != portal::Element::kNone) {
-      characters.push_back(ShownName(*sky));
-    }
-  }
   if (top || bottom) {
     std::string a(portal::SwapperBaseName(top ? *top : *bottom));
     std::string b(portal::SwapperBaseName(bottom ? *bottom : *top));
-    characters.insert(characters.begin(), a == b ? a : a + " / " + b);
+    lineup.characters.insert(lineup.characters.begin(), a == b ? a : a + " / " + b);
   }
-  if (characters.empty()) return {};
-  std::string text = (german ? "Spielt mit " : "Playing as ") + characters[0];
-  if (characters.size() > 1) {
-    text += " & " + characters[1];
-  } else if (!vehicles.empty()) {
-    text += (german ? " und " : " with ") + vehicles.front();
+  if (lineup.characters.size() > 2) lineup.characters.resize(2);  // two players at most
+  return lineup;
+}
+
+// "Playing as Chop Chop", with one player's companion "... Chop Chop with Buzz Wing" ("Spielt mit
+// Chop Chop und Buzz Wing"), two players "... Chop Chop & Spyro". Empty with no Skylander.
+std::string DetailsText(const Lineup& lineup, bool german) {
+  if (lineup.characters.empty()) return {};
+  std::string text = (german ? "Spielt mit " : "Playing as ") + lineup.characters[0];
+  if (lineup.characters.size() > 1) {
+    text += " & " + lineup.characters[1];
+  } else if (!lineup.companion.empty()) {
+    text += (german ? " und " : " with ") + lineup.companion;
   }
   return text;
 }
@@ -149,14 +165,20 @@ std::string LevelText() {
   return g_level_names ? g_level_names(level) : std::string();
 }
 
-// The activity as Discord's JSON; `start` is the play time's start (Unix seconds).
-std::string Activity(int64_t start) {
+// The activity as Discord's JSON; `start` is the play time's start (Unix seconds), `party` this
+// game's party id. Two players are a party of two, which Discord shows after the level as
+// "(2 of 2)" ("Co-op (2 of 2)" without a level name).
+std::string Activity(int64_t start, const std::string& party) {
   const bool german = menu_draw::GermanText();
-  const std::string details = DetailsText(german);
-  const std::string level = LevelText();
+  const Lineup lineup = PortalLineup();
+  const std::string details = DetailsText(lineup, german);
+  const bool coop = lineup.characters.size() == 2;
+  std::string level = LevelText();
+  if (level.size() < 2 && coop) level = german ? "Koop" : "Co-op";
   std::string json = "{";
   if (!details.empty()) json += "\"details\":" + JsonString(details) + ",";
   if (level.size() >= 2) json += "\"state\":" + JsonString(level) + ",";
+  if (coop) json += "\"party\":{\"id\":" + JsonString(party) + ",\"size\":[2,2]},";
   json += "\"timestamps\":{\"start\":" + std::to_string(start) + "},";
   json += "\"assets\":{\"large_image\":\"logo\",\"large_text\":" +
           JsonString(german ? "Inoffizieller PC-Port (Recomp)" : "Unofficial PC port (recomp)") +
@@ -297,6 +319,7 @@ class DiscordPipe {
 void Run(const char* client_id) {
   const int64_t start = static_cast<int64_t>(std::time(nullptr));
   const DWORD pid = GetCurrentProcessId();
+  const std::string party = "skylanders-" + std::to_string(pid) + "-" + std::to_string(start);
   DiscordPipe pipe;
   Clock::time_point next_try{}, last_send{};
   std::string sent;  // the activity Discord has
@@ -332,7 +355,7 @@ void Run(const char* client_id) {
       next_try = now + kRetry;
       continue;
     }
-    const std::string activity = Activity(start);
+    const std::string activity = Activity(start, party);
     if (activity == sent || now - last_send < kMinGap) continue;
     const std::string command = "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":" + std::to_string(pid) +
                                 ",\"activity\":" + activity + "},\"nonce\":\"" +
