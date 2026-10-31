@@ -19,7 +19,11 @@ int RunCheck(const std::filesystem::path& xex) {
                                                            SKYLANDERS_GAME_TITLE);
 
   if (problem.empty()) {
-    std::puts("OK");
+    if (result.status == skylanders::xex::XexCheck::SameCode) {
+      std::printf("OK, another pressing with the same code: %s\n", result.header.c_str());
+    } else {
+      std::puts("OK");
+    }
     return skylanders::xex::kExitMatch;
   }
   std::fputs(problem.c_str(), stderr);

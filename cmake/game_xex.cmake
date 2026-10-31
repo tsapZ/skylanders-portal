@@ -1,8 +1,9 @@
 # skylanders_game_xex(TARGET <game exe> PREFIX <name> TITLE <disc name> HASH_FILE <file>)
 #
 # The disc check of one game port (src/xex): reads the supported discs' SHA-256 from HASH_FILE (one
-# per line, as docs/game/default.xex.sha256 holds them), links the check into TARGET with
-# SKYLANDERS_XEX_SHA256 (the hashes, comma separated) and SKYLANDERS_GAME_TITLE (TITLE, e.g.
+# per line, as docs/game/default.xex.sha256 holds them) and their code pins from default.xex.code
+# beside it if there is one, links the check into TARGET with SKYLANDERS_XEX_SHA256 (the hashes and
+# pins, comma separated) and SKYLANDERS_GAME_TITLE (TITLE, e.g.
 # "Skylanders: Giants", for the "put your disc in" message), and adds <PREFIX>_xexcheck (the CLI
 # the installer runs, exit codes in xex_check_exit_code.h) and the tests <PREFIX>_tests,
 # xex_check_cli_argv_test and xex_check_exit_code_test. Needs REXSDK_DIR for the SDK's vendored
@@ -32,6 +33,26 @@ function(skylanders_game_xex)
     endforeach()
     if(NOT hashes)
         message(FATAL_ERROR "${ARG_HASH_FILE} holds no SHA-256")
+    endif()
+    # The code pins (src/xex/xex_header.h) beside it, default.xex.code: "<address>:<SHA-256>" per
+    # line. Another pressing with a supported disc's pin runs the same code; the pins go into the
+    # same list.
+    cmake_path(GET ARG_HASH_FILE PARENT_PATH hash_dir)
+    set(code_file "${hash_dir}/default.xex.code")
+    if(EXISTS "${code_file}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${code_file}")
+        file(STRINGS "${code_file}" lines REGEX "^[0-9a-fA-F]")
+        foreach(line IN LISTS lines)
+            string(REGEX MATCH "^[0-9a-fA-F]+:[0-9a-fA-F]+" pin "${line}")
+            if(NOT pin MATCHES "^[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]:")
+                message(FATAL_ERROR "${code_file}: every line must start with <8 hex digits>:<SHA-256>")
+            endif()
+            string(LENGTH "${pin}" pin_len)
+            if(NOT pin_len EQUAL 73)
+                message(FATAL_ERROR "${code_file}: every line must start with <8 hex digits>:<SHA-256>")
+            endif()
+            string(APPEND hashes ",${pin}")
+        endforeach()
     endif()
 
     # This file's folder: the function runs in the game's scope, where the library's variables

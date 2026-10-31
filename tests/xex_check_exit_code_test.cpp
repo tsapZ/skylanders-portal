@@ -16,6 +16,7 @@ static int g_failures = 0;
 
 int main() {
   CHECK(ExitCodeForStatus(XexCheck::Match) == 0);
+  CHECK(ExitCodeForStatus(XexCheck::SameCode) == 0);
   CHECK(ExitCodeForStatus(XexCheck::Mismatch) == 2);
   CHECK(ExitCodeForStatus(XexCheck::Unreadable) == 3);
   CHECK(ExitCodeForStatus(XexCheck::BadExpected) == 4);

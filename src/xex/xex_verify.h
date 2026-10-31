@@ -1,7 +1,8 @@
 #pragma once
 
 // The disc check: default.xex's SHA-256 against the ones a port is made for (one per supported
-// disc). Used by the game at start, by <game>_xexcheck (the installer's check, xex_check_cli.cpp)
+// disc), or its code pin (xex_header.h) against theirs: another pressing with the same code runs
+// too. Used by the game at start, by <game>_xexcheck (the installer's check, xex_check_cli.cpp)
 // and by the launcher's disc setup through that tool.
 
 #include <filesystem>
@@ -13,6 +14,7 @@ namespace skylanders::xex {
 
 enum class XexCheck {
   Match,        // file hashes to the expected value
+  SameCode,     // another file, but its code pin is an expected one: another pressing, same code
   Mismatch,     // file readable but hash differs (includes empty and truncated files)
   Unreadable,   // file missing, a directory, or a read error
   BadExpected,  // expected hash is not 64 hex characters
@@ -21,14 +23,21 @@ enum class XexCheck {
 struct XexCheckResult {
   XexCheck status;
   std::string actual_sha256;  // empty unless the file was readable
+  std::string header;         // DescribeXexHeader of the file, empty when it has no XEX2 header
+  std::string code_pin;       // its code pin, empty without a header or code pages
 };
 
 // Lowercase hex SHA-256 of the file at `path`, or nullopt if it cannot be read completely.
 std::optional<std::string> Sha256File(const std::filesystem::path& path);
 
-// Compares the file's SHA-256 with `expected_sha256`: one or more 64-hex-character hashes, comma
-// separated (any case, surrounding whitespace ignored); a match with any of them is a Match.
+// Compares the file's SHA-256 with `expected_sha256`: one or more entries, comma separated (any
+// case, surrounding whitespace ignored), each a 64-hex-character SHA-256 or a code pin
+// ("82450000:" and 64 hex characters). A hash matching is a Match, else a code pin matching is
+// SameCode.
 XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expected_sha256);
+
+// The code pin of the XEX2 file at `path` (xex_header.h), or nullopt when it has none.
+std::optional<std::string> XexCodePin(const std::filesystem::path& path);
 
 // UTF-8 form of a path. Unlike path::string(), never throws for characters outside the ANSI code page.
 std::string Utf8(const std::filesystem::path& p);

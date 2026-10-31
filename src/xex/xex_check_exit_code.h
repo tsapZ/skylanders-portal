@@ -16,6 +16,7 @@ enum XexCheckExitCode {
 inline int ExitCodeForStatus(XexCheck status) {
   switch (status) {
     case XexCheck::Match:
+    case XexCheck::SameCode:  // another pressing with the same code: runs as well
       return kExitMatch;
     case XexCheck::Mismatch:
       return kExitMismatch;
