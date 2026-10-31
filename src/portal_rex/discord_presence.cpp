@@ -167,8 +167,8 @@ std::string LevelText() {
 
 // The activity as Discord's JSON; `start` is the play time's start (Unix seconds), `party` this
 // game's party id. Two players are a party of two, which Discord shows after the level as
-// "(2 of 2)" ("Co-op (2 of 2)" without a level name).
-std::string Activity(int64_t start, const std::string& party) {
+// "(2 of 2)" ("Co-op (2 of 2)" without a level name). `shown`: its two lines, for the log.
+std::string Activity(int64_t start, const std::string& party, std::string* shown) {
   const bool german = menu_draw::GermanText();
   const Lineup lineup = PortalLineup();
   const std::string details = DetailsText(lineup, german);
@@ -183,6 +183,8 @@ std::string Activity(int64_t start, const std::string& party) {
   json += "\"assets\":{\"large_image\":\"logo\",\"large_text\":" +
           JsonString(german ? "Inoffizieller PC-Port (Recomp)" : "Unofficial PC port (recomp)") +
           "}}";
+  *shown = details.empty() ? "-" : details;
+  if (level.size() >= 2) *shown += " / " + level;
   return json;
 }
 
@@ -355,7 +357,8 @@ void Run(const char* client_id) {
       next_try = now + kRetry;
       continue;
     }
-    const std::string activity = Activity(start, party);
+    std::string shown;
+    const std::string activity = Activity(start, party, &shown);
     if (activity == sent || now - last_send < kMinGap) continue;
     const std::string command = "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":" + std::to_string(pid) +
                                 ",\"activity\":" + activity + "},\"nonce\":\"" +
@@ -365,7 +368,8 @@ void Run(const char* client_id) {
       next_try = now + kRetry;
       continue;
     }
-    if (sent.empty()) REXLOG_INFO("Discord status: shown");
+    // What it says (catalog and level names only), so a log tells what a player's friends saw.
+    REXLOG_INFO("Discord status: {}", shown);
     sent = activity;
     last_send = now;
   }
