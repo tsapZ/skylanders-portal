@@ -131,6 +131,20 @@ void ApplyGraphicsDefaults() {
       !rex::cvar::SetFlagByName("draw_resolution_scaled_texture_offsets", "false")) {
     REXLOG_WARN("Could not set draw_resolution_scaled_texture_offsets to false");
   }
+  // The water ripple simulation (the discs' shaders/WaterRipple.igz: its Ripple, Blur and Normals
+  // pixel shaders, Swap Force's, SuperChargers' and Imaginators' own builds) steps each texel from
+  // its neighbours one console texel away, the coordinates made in the vertex shader. At scale 2
+  // that split it into one simulation per host texel and the ripples where a Skylander wades came
+  // out grainy (SwapForceRecomp #76); on the console's texel grid they ripple as on the console.
+  // The hashes are the SDK's of each shader's microcode (Swap Force's seen in a shader dump, the
+  // other two computed from their discs' files). Only when nothing set it.
+  if (rex::cvar::GetFlagSource("draw_resolution_guest_grid_shaders") == rex::cvar::Source::kDefault &&
+      !rex::cvar::SetFlagByName("draw_resolution_guest_grid_shaders",
+                                "8866B05163554699,2DF71E8FBF9ACA5C,E92701C0A83CB5DC,"    // SF
+                                "BC6A70F217359FB0,DED34DC51E632121,9CCDC876248D6FC0,"    // SC
+                                "12288C4056FDEAD8,3561F4FF40DF3C8A,0B730E004D3A390F")) {  // IM
+    REXLOG_WARN("Could not set draw_resolution_guest_grid_shaders");
+  }
 }
 
 void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game) {
