@@ -167,9 +167,12 @@ std::string DescribeXexProblem(const std::filesystem::path& xex, const XexCheckR
     case XexCheck::SameCode:
       return {};
     case XexCheck::Unreadable:
+      // The path is the one the game reads (rom\default.xex in the game's folder): saying "the game
+      // folder" alone had people put the disc next to the exe (seen on a fresh Windows, 2026-11-01).
       return "Cannot read " + Utf8(xex) +
-             "\nPut your extracted " + std::string(game) +
-             " disc contents in the game folder (default.xex must be at its top level).";
+             "\nThe extracted " + std::string(game) +
+             " disc belongs in the rom folder in the game's folder, with default.xex directly in it."
+             "\nRun the setup again and pick your disc, or set the game up in Core of Light.";
     case XexCheck::Mismatch: {
       size_t count = 0;
       const std::string hashes = ExpectedHashes(expected_sha256, count);

@@ -26,8 +26,15 @@ int RunCheck(const std::filesystem::path& xex) {
     }
     return skylanders::xex::kExitMatch;
   }
-  std::fputs(problem.c_str(), stderr);
-  std::fputc('\n', stderr);
+  // The game's text for a missing file says where the game looks for its disc; the tool is run on
+  // any folder (the setup's disc check), so it only names the file.
+  if (result.status == skylanders::xex::XexCheck::Unreadable) {
+    const auto u8 = xex.u8string();
+    std::fprintf(stderr, "Cannot read %s\n", reinterpret_cast<const char*>(u8.c_str()));
+  } else {
+    std::fputs(problem.c_str(), stderr);
+    std::fputc('\n', stderr);
+  }
   return skylanders::xex::ExitCodeForStatus(result.status);
 }
 
