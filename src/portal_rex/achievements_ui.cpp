@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <imgui.h>
+#include <rex/cvar.h>
 #include <rex/input/input.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
@@ -438,6 +439,8 @@ std::function<rex::system::AchievementManager*()> g_manager;
 std::atomic<bool> g_registered{false};
 std::atomic<bool> g_cache_stop{false};
 
+void UpdateCheatHold();  // below, with CheatSetting
+
 // One field of achievements.txt: no tabs or line breaks inside.
 std::string CacheField(std::string text) {
   for (char& c : text) {
@@ -465,6 +468,8 @@ void RegisterAchievementsMenu(rex::ui::ImGuiDrawer* drawer,
   g_runtime = runtime;
   g_manager = std::move(manager);
   g_registered.store(true, std::memory_order_release);
+  // A cheat already on from the settings file holds the unlocks from the start (CheatSetting).
+  UpdateCheatHold();
 }
 
 void ToggleAchievementsMenu() {
@@ -550,6 +555,47 @@ Setting AchievementsSetting() {
   s.help_de = "Alle Erfolge des Spiels, die freigeschalteten zuerst (auch mit F7).";
   s.action = [] { ToggleAchievementsMenu(); };
   return s;
+}
+
+namespace {
+
+std::mutex g_cheat_mutex;
+std::vector<std::string> g_cheat_cvars;  // CheatSetting's, each once
+
+// Holds the achievement unlocks while any cheat is on (and lets them go once none is).
+void UpdateCheatHold() {
+  if (!g_registered.load(std::memory_order_acquire) || !g_manager) return;
+  std::string on;
+  {
+    std::lock_guard lock(g_cheat_mutex);
+    for (const std::string& cvar : g_cheat_cvars) {
+      if (rex::cvar::GetFlagByName(cvar) == "true") on += (on.empty() ? "" : ", ") + cvar;
+    }
+  }
+  if (rex::system::AchievementManager* manager = g_manager()) {
+    manager->SetUnlocksHeld(!on.empty(), on.empty() ? std::string() : "cheats on: " + on);
+  }
+}
+
+}  // namespace
+
+Setting CheatSetting(Setting setting) {
+  setting.help_en += "\n\nWhile this is on, achievements don't unlock.";
+  setting.help_de += "\n\nSolange das an ist, werden keine Erfolge freigeschaltet.";
+  bool added = false;
+  {
+    std::lock_guard lock(g_cheat_mutex);
+    if (std::find(g_cheat_cvars.begin(), g_cheat_cvars.end(), setting.cvar) == g_cheat_cvars.end()) {
+      g_cheat_cvars.push_back(setting.cvar);
+      added = true;
+    }
+  }
+  if (added) {
+    rex::cvar::RegisterChangeCallback(setting.cvar,
+                                      [](std::string_view, std::string_view) { UpdateCheatHold(); });
+    UpdateCheatHold();
+  }
+  return setting;
 }
 
 }  // namespace skylanders

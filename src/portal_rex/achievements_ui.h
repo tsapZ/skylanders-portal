@@ -58,4 +58,9 @@ void StartAchievementCache(std::filesystem::path dir);
 // achievements can be seen with a controller too.
 Setting AchievementsSetting();
 
+// A row of a game's Extras page that makes the game easier (a bool cvar): while any such row is
+// on, achievements don't unlock (AchievementManager::SetUnlocksHeld), so an unlocked one still
+// means it was earned (the owner's wish, 2026-10-31). Its help text gets a line saying so.
+Setting CheatSetting(Setting setting);
+
 }  // namespace skylanders
