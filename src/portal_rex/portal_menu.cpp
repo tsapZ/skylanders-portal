@@ -1551,6 +1551,58 @@ std::unordered_map<uint32_t, std::unique_ptr<rex::ui::ImmediateTexture>> g_textu
 // Uploaded art by key. UI thread only.
 std::unordered_map<std::string, std::unique_ptr<rex::ui::ImmediateTexture>> g_art_textures;
 
+// A picture not made yet costs a decode and an upload, on the UI thread. The menu's first open asks
+// for dozens at once (a page of figures with their element and stat pictures), and making them all
+// in one frame stalled its opening animation, on every first open of a session ("the portal
+// animation lags the first time, after that it's fine", the owner, 2026-11-01). So a frame makes new
+// pictures for about 4 ms, at least one; the rest come in the next frames, blank until then.
+// UI thread only.
+class PictureBudget {
+ public:
+  // True when this frame may make another new picture; then Spent() once it is made (or found to
+  // be missing: a figure without a picture is asked for again every frame, which costs next to
+  // nothing).
+  bool Take() {
+    const int frame = ImGui::GetFrameCount();
+    if (frame != frame_) {
+      if (made_) {
+        REXLOG_DEBUG("Portal menu: {} new pictures in {:.1f} ms, {} asked for left to the next frames",
+                     made_, spent_ms_, refused_);
+      }
+      frame_ = frame;
+      made_ = 0;
+      refused_ = 0;
+      spent_ms_ = 0;
+    }
+    if (spent_ms_ >= kMsPerFrame) {
+      ++refused_;
+      return false;
+    }
+    start_ = Clock::now();
+    return true;
+  }
+  void Spent(bool uploaded) {
+    if (uploaded) ++made_;
+    const double ms = std::chrono::duration<double, std::milli>(Clock::now() - start_).count();
+    spent_ms_ += ms;
+    if (ms >= 2.0) REXLOG_DEBUG("Portal menu: one new picture took {:.1f} ms", ms);
+  }
+
+ private:
+  static constexpr double kMsPerFrame = 4.0;
+  int frame_ = -1;
+  int made_ = 0;
+  int refused_ = 0;
+  double spent_ms_ = 0;
+  Clock::time_point start_;
+};
+PictureBudget g_picture_budget;
+// Tells the budget, on the way out of a picture function, what that picture took.
+struct PictureSpent {
+  bool uploaded = false;
+  ~PictureSpent() { g_picture_budget.Spent(uploaded); }
+};
+
 // The figure's picture as a texture, or null while there is none (yet).
 ImTextureID FigureTexture(const SkylanderInfo* sky) {
   if (!sky || !g_immediate_drawer) return ImTextureID{};
@@ -1558,6 +1610,8 @@ ImTextureID FigureTexture(const SkylanderInfo* sky) {
   if (auto it = g_textures.find(key); it != g_textures.end()) {
     return reinterpret_cast<ImTextureID>(it->second.get());
   }
+  if (!g_picture_budget.Take()) return ImTextureID{};
+  PictureSpent spent;
   FigureImageProvider provider;
   {
     std::lock_guard lock(g_provider_mutex);
@@ -1577,6 +1631,7 @@ ImTextureID FigureTexture(const SkylanderInfo* sky) {
   if (!texture) return ImTextureID{};
   ImTextureID id = reinterpret_cast<ImTextureID>(texture.get());
   g_textures.emplace(key, std::move(texture));
+  spent.uploaded = true;
   return id;
 }
 
@@ -1598,6 +1653,8 @@ ImTextureID ArtTexture(const std::string& key) {
   if (auto it = g_art_textures.find(key); it != g_art_textures.end()) {
     return reinterpret_cast<ImTextureID>(it->second.get());
   }
+  if (!g_picture_budget.Take()) return ImTextureID{};
+  PictureSpent spent;
   ArtImageProvider provider;
   {
     std::lock_guard lock(g_provider_mutex);
@@ -1615,6 +1672,7 @@ ImTextureID ArtTexture(const std::string& key) {
   if (!texture) return ImTextureID{};
   ImTextureID id = reinterpret_cast<ImTextureID>(texture.get());
   g_art_textures.emplace(key, std::move(texture));
+  spent.uploaded = true;
   return id;
 }
 
@@ -1627,6 +1685,8 @@ ImTextureID OtherGameHatTexture(uint16_t hat) {
   if (auto it = g_art_textures.find(key); it != g_art_textures.end()) {
     return reinterpret_cast<ImTextureID>(it->second.get());
   }
+  if (!g_picture_budget.Take()) return ImTextureID{};
+  PictureSpent spent;
   std::shared_ptr<const FigureImage> image = OtherGameHatPicture(hat);
   if (!image || image->width <= 0 || image->height <= 0 ||
       image->rgba.size() < size_t(image->width) * image->height * 4) {
@@ -1639,6 +1699,7 @@ ImTextureID OtherGameHatTexture(uint16_t hat) {
   if (!texture) return ImTextureID{};
   ImTextureID id = reinterpret_cast<ImTextureID>(texture.get());
   g_art_textures.emplace(key, std::move(texture));
+  spent.uploaded = true;
   return id;
 }
 
@@ -2469,6 +2530,21 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    // Debug log: a frame of the menu that took long, and the menu's frames each second (both stall
+    // its animation).
+    struct SlowFrameLog {
+      Clock::time_point start = Clock::now();
+      ~SlowFrameLog() {
+        const double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+        if (ms >= 8.0) REXLOG_DEBUG("Portal menu: a frame took {:.1f} ms", ms);
+      }
+    } slow_frame_log;
+    ++frames_this_second_;
+    if (Clock::now() - second_start_ >= std::chrono::seconds(1)) {
+      REXLOG_DEBUG("Portal menu: {} frames in the last second", frames_this_second_);
+      frames_this_second_ = 0;
+      second_start_ = Clock::now();
+    }
     SetScale(io.DisplaySize.y / 1080.0f);
     TrackMouse(io);
     if (state_ == State::kWaiting) {
@@ -4389,6 +4465,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   bool revealed_ = true;
   std::optional<Clock::time_point> reveal_at_;  // RevealSoon
   Clock::time_point reveal_time_ = Clock::now();
+  int frames_this_second_ = 0;  // the debug log's frames per second (OnDraw)
+  Clock::time_point second_start_ = Clock::now();
   bool leave_ = false;
   size_t option_ = 0;
   bool first_frame_ = true;
