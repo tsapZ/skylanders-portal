@@ -47,12 +47,12 @@ bool SaveFigureFileAtomic(const std::filesystem::path& path, const FigureData& d
   return true;
 }
 
-std::filesystem::path FigureBackupDir(const std::filesystem::path& file, const std::filesystem::path& data_folder) {
+std::filesystem::path FigureBackupDir(const std::filesystem::path& file, const std::filesystem::path& figures_dir) {
   std::error_code ec;
-  std::filesystem::path rel = std::filesystem::relative(file, data_folder / "Figures", ec);
+  std::filesystem::path rel = std::filesystem::relative(file, figures_dir, ec);
   if (ec || rel.empty() || *rel.begin() == "..") rel = std::filesystem::path("Other") / file.filename();
   rel.replace_extension();
-  return data_folder / "Backups" / "Figures" / rel;
+  return figures_dir.parent_path() / "Backups" / "Figures" / rel;
 }
 
 std::filesystem::path BackUpFigureFile(const std::filesystem::path& file, const std::filesystem::path& backup_dir,

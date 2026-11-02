@@ -21,12 +21,13 @@ std::optional<FigureData> LoadFigureFile(const std::filesystem::path& path);
 bool SaveFigureFileAtomic(const std::filesystem::path& path, const FigureData& data);
 
 // Backups of figure files, so a bad write or a mistake doesn't cost a figure's progress (level,
-// gold, upgrades live in the file). The folder of `file`'s backups: Backups\Figures in the data
-// folder, followed by the file's path under the data folder's Figures without ".dump" (Giants\Tree
-// Rex), or Backups\Figures\Other\<name> for a file elsewhere. Outside Figures on purpose: the
-// portal menu lists everything under Figures.
+// gold, upgrades live in the file). The folder of `file`'s backups: Backups\Figures next to the
+// figures folder in use (`figures_dir`; normally the data folder's Figures, a test's own copy in a
+// scripted run), followed by the file's path under it without ".dump" (Giants\Tree Rex), or
+// Backups\Figures\Other\<name> for a file elsewhere. Outside the figures folder on purpose: the
+// portal menu reads every figure-sized file under it.
 inline constexpr int kFigureBackups = 10;
-std::filesystem::path FigureBackupDir(const std::filesystem::path& file, const std::filesystem::path& data_folder);
+std::filesystem::path FigureBackupDir(const std::filesystem::path& file, const std::filesystem::path& figures_dir);
 // Copies `file` as it is now into `backup_dir` as <name> (default: the local date and time,
 // "2026-11-02 15-04-05.dump") and deletes the oldest copies there beyond `keep`. Returns the copy's
 // path, or empty when `file` doesn't exist or the copy failed. Never throws.

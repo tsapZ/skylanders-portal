@@ -316,7 +316,7 @@ void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generat
 
 // Keeps a copy of a figure file before the game first saves over it in this run, and again when the
 // last copy is 30 minutes old (the game writes several blocks a second while it plays, a copy each
-// time would be far too many): Backups\Figures in the data folder, the newest
+// time would be far too many): Backups\Figures next to the figures folder in use, the newest
 // portal::kFigureBackups per figure (portal/figure_file.h).
 void BackUpBeforeFirstSave(const std::filesystem::path& file) {
   static std::mutex mutex;
@@ -328,7 +328,10 @@ void BackUpBeforeFirstSave(const std::filesystem::path& file) {
     if (it != last_copy.end() && now - it->second < std::chrono::minutes(30)) return;
     last_copy[file] = now;
   }
-  const std::filesystem::path dir = skylanders::portal::FigureBackupDir(file, skylanders::DataFolder());
+  // The figures folder in use (InstallPortal always sets it): the data folder's Figures normally,
+  // a scripted run's own copy in a test, so a test never writes into the owner's data folder.
+  const std::filesystem::path dir =
+      skylanders::portal::FigureBackupDir(file, Utf8ToPath(REXCVAR_GET(portal_figures_dir)));
   const std::filesystem::path copy = skylanders::portal::BackUpFigureFile(file, dir);
   if (copy.empty()) {
     REXLOG_WARN("Portal: could not back up a figure file before saving it");

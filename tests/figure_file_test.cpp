@@ -42,9 +42,9 @@ int main() {
     fs::create_directories(data / L"Figures" / L"Giants", ec);
     const fs::path figure = data / L"Figures" / L"Giants" / L"Tree Rex.dump";
     { std::ofstream(figure, std::ios::binary) << std::string(kFigureSize, 'x'); }
-    const fs::path dir = FigureBackupDir(figure, data);
+    const fs::path dir = FigureBackupDir(figure, data / L"Figures");
     CHECK(dir == data / L"Backups" / L"Figures" / L"Giants" / L"Tree Rex");
-    CHECK(FigureBackupDir(fs::temp_directory_path() / L"Loose.dump", data) ==
+    CHECK(FigureBackupDir(fs::temp_directory_path() / L"Loose.dump", data / L"Figures") ==
           data / L"Backups" / L"Figures" / L"Other" / L"Loose");
     // Twelve copies with sortable names: the newest ten stay.
     for (int i = 0; i < 12; ++i) {
