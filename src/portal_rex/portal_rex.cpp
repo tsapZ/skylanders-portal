@@ -314,6 +314,29 @@ void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generat
   bridge->Step(nullptr);  // takes the copies off
 }
 
+// Keeps a copy of a figure file before the game first saves over it in this run, and again when the
+// last copy is 30 minutes old (the game writes several blocks a second while it plays, a copy each
+// time would be far too many): Backups\Figures in the data folder, the newest
+// portal::kFigureBackups per figure (portal/figure_file.h).
+void BackUpBeforeFirstSave(const std::filesystem::path& file) {
+  static std::mutex mutex;
+  static std::map<std::filesystem::path, std::chrono::steady_clock::time_point> last_copy;
+  const auto now = std::chrono::steady_clock::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = last_copy.find(file);
+    if (it != last_copy.end() && now - it->second < std::chrono::minutes(30)) return;
+    last_copy[file] = now;
+  }
+  const std::filesystem::path dir = skylanders::portal::FigureBackupDir(file, skylanders::DataFolder());
+  const std::filesystem::path copy = skylanders::portal::BackUpFigureFile(file, dir);
+  if (copy.empty()) {
+    REXLOG_WARN("Portal: could not back up a figure file before saving it");
+  } else {
+    REXLOG_INFO("Portal: backed up a figure file before saving it (Backups\\Figures)");
+  }
+}
+
 // Builds a ready-to-use SoftwarePortal, wired the same way regardless of whether this is the
 // startup portal or a live switch back into software mode from the F4 menu.
 skylanders::portal::SoftwarePortal* SetUpSoftwarePortal() {
@@ -328,6 +351,7 @@ skylanders::portal::SoftwarePortal* SetUpSoftwarePortal() {
       bridge->OnEmulatedWrite(slot, data);
     }
     if (!source) return;  // this slot's figure did not come from a file
+    BackUpBeforeFirstSave(*source);
     if (skylanders::portal::SaveFigureFileAtomic(*source, data)) {
       REXLOG_INFO("Portal: saved changes back to slot {}'s figure file", slot);
     } else {
