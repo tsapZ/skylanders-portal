@@ -90,6 +90,31 @@ std::filesystem::path BackUpFigureFile(const std::filesystem::path& file, const 
   return copy;
 }
 
+std::vector<std::filesystem::path> ListFigureBackups(const std::filesystem::path& backup_dir) {
+  std::vector<std::filesystem::path> copies;
+  std::error_code ec;
+  for (std::filesystem::directory_iterator it(backup_dir, ec), end; !ec && it != end; it.increment(ec)) {
+    const std::filesystem::path& path = it->path();
+    std::error_code size_ec;
+    if (path.extension() != ".dump" || !it->is_regular_file(size_ec)) continue;
+    if (std::filesystem::file_size(path, size_ec) != kFigureSize || size_ec) continue;
+    copies.push_back(path);
+  }
+  // The names sort by time; the newest first.
+  std::sort(copies.begin(), copies.end(), [](const auto& a, const auto& b) { return b < a; });
+  return copies;
+}
+
+bool RestoreFigureBackup(const std::filesystem::path& backup, const std::filesystem::path& file,
+                         const std::filesystem::path& backup_dir) {
+  // Read before backing up: that may delete the oldest copy, which can be this one.
+  const std::optional<FigureData> data = LoadFigureFile(backup);
+  if (!data) return false;
+  std::error_code ec;
+  if (std::filesystem::exists(file, ec) && BackUpFigureFile(file, backup_dir).empty()) return false;
+  return SaveFigureFileAtomic(file, *data);
+}
+
 namespace {
 
 uint16_t Crc16Ccitt(const uint8_t* data, size_t size, uint16_t crc) {
