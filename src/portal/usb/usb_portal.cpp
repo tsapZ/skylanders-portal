@@ -9,6 +9,18 @@
 #include <rex/logging.h>
 #include <rex/string/utf8.h>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <setupapi.h>
+#pragma comment(lib, "setupapi.lib")
+#endif
+
 namespace skylanders::portal {
 
 namespace {
@@ -21,6 +33,44 @@ std::string HidErrorUtf8(hid_device* device) {
   if (message == nullptr) return "(no error message)";
   return rex::string::to_utf8(std::u16string_view(reinterpret_cast<const char16_t*>(message)));
 }
+
+#ifdef _WIN32
+std::string WideUtf8(const wchar_t* text) {
+  return rex::string::to_utf8(std::u16string_view(reinterpret_cast<const char16_t*>(text)));
+}
+
+// Every present USB device of the portals' maker (vendor 1430) with the driver Windows gave it, once
+// per run: a HID portal (the Wii U and PS3 ones) has HidUsb, which the USB mode opens; an Xbox 360
+// portal usually gets the Xbox controller driver (xusb22) and, after Zadig, WinUSB or libusbK, none
+// of which is a HID device (TrapTeamRecomp #19; Xenia talks to the Xbox 360 portal over WinUSB, its
+// commands start with 0B 14). Hardware ids and driver names only, nothing about the user.
+void LogPortalDrivers() {
+  HDEVINFO set = SetupDiGetClassDevsW(nullptr, L"USB", nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+  if (set == INVALID_HANDLE_VALUE) return;
+  SP_DEVINFO_DATA info{};
+  info.cbSize = sizeof(info);
+  int found = 0;
+  for (DWORD i = 0; SetupDiEnumDeviceInfo(set, i, &info); ++i) {
+    wchar_t ids[512] = {};
+    if (!SetupDiGetDeviceRegistryPropertyW(set, &info, SPDRP_HARDWAREID, nullptr, reinterpret_cast<PBYTE>(ids),
+                                           sizeof(ids) - 2 * sizeof(wchar_t), nullptr) ||
+        wcsstr(ids, L"VID_1430") == nullptr) {
+      continue;
+    }
+    wchar_t service[128] = {};
+    wchar_t description[256] = {};
+    SetupDiGetDeviceRegistryPropertyW(set, &info, SPDRP_SERVICE, nullptr, reinterpret_cast<PBYTE>(service),
+                                      sizeof(service) - sizeof(wchar_t), nullptr);
+    SetupDiGetDeviceRegistryPropertyW(set, &info, SPDRP_DEVICEDESC, nullptr, reinterpret_cast<PBYTE>(description),
+                                      sizeof(description) - sizeof(wchar_t), nullptr);
+    REXLOG_INFO("Portal (usb): USB device {} ({}), driver {}", WideUtf8(ids), WideUtf8(description),
+                service[0] ? WideUtf8(service) : std::string("none"));
+    ++found;
+  }
+  SetupDiDestroyDeviceInfoList(set);
+  if (found == 0) REXLOG_INFO("Portal (usb): no USB device of vendor 1430 plugged in");
+}
+#endif
 
 std::string HexBytes(const uint8_t* data, size_t n) {
   static constexpr char kHex[] = "0123456789abcdef";
@@ -37,6 +87,9 @@ std::string HexBytes(const uint8_t* data, size_t n) {
 }  // namespace
 
 UsbPortal::UsbPortal() {
+#ifdef _WIN32
+  LogPortalDrivers();
+#endif
   if (hid_init() != 0) return;
   for (const auto& [vendor_id, product_id] : kKnownPortals) {
     device_ = hid_open(vendor_id, product_id, nullptr);
