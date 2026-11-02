@@ -40,8 +40,9 @@ inline constexpr std::pair<uint16_t, uint16_t> kKnownPortals[] = {
 class UsbPortal final : public PortalDevice {
  public:
   // Opens the first connected device matching kKnownPortals, in the order listed. Check IsOpen()
-  // before installing this as the active portal -- construction never throws or logs; the caller
-  // decides what to do if no matching device was found.
+  // before installing this as the active portal -- construction never throws; it logs
+  // which portal it opened, or the vendor's HID devices when none. The caller decides what to do
+  // if no matching device was found.
   UsbPortal();
   ~UsbPortal() override;
 

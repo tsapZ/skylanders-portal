@@ -46,6 +46,20 @@ UsbPortal::UsbPortal() {
       break;
     }
   }
+  // Which portal was opened, or, when none, every HID device of the portals' maker (vendor 1430)
+  // Windows shows: tells an untested model or a portal that isn't a HID device (an Xbox 360 one on
+  // the Xbox controller driver, TrapTeamRecomp #19) from no portal at all.
+  if (device_ != nullptr) {
+    REXLOG_INFO("Portal (usb): opened {:04x}:{:04x}", vendor_id_, product_id_);
+  } else {
+    hid_device_info* list = hid_enumerate(0x1430, 0);
+    if (list == nullptr) REXLOG_WARN("Portal (usb): no known portal opened, no HID device of vendor 1430 at all");
+    for (const hid_device_info* d = list; d != nullptr; d = d->next) {
+      REXLOG_WARN("Portal (usb): no known portal opened; vendor 1430 HID device {:04x}, usage page {:04x}, usage "
+                  "{:04x}, interface {}", d->product_id, d->usage_page, d->usage, d->interface_number);
+    }
+    hid_free_enumeration(list);
+  }
   // Deliberately never call hid_exit(): it finalizes the whole hidapi library, not just this
   // device, and this portal lives for the whole process (see portal_rex.cpp's InstallPortal,
   // which never frees its SoftwarePortal either, for the same reason). Process exit cleans this up.
