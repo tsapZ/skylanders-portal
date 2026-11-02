@@ -1,6 +1,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "portal/figure_file.h"
 #include "test_util.h"
@@ -59,6 +60,100 @@ int main() {
     CHECK(fs::exists(dir / L"2026-11-02 15-00-11.dump"));
     // A missing file gives no copy.
     CHECK(BackUpFigureFile(data / L"Figures" / L"missing.dump", dir).empty());
+    fs::remove_all(data, ec);
+  }
+
+  // Listing backups: newest first, only figure-sized .dump files.
+  {
+    const fs::path dir = fs::temp_directory_path() / L"gr_backup_list";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    CHECK(ListFigureBackups(dir).empty());  // no folder yet
+    fs::create_directories(dir / L"2020-01-01 00-00-09.dump", ec);  // a folder, not a copy
+    auto write = [](const fs::path& p, size_t size, char c) {
+      std::ofstream(p, std::ios::binary) << std::string(size, c);
+    };
+    write(dir / L"2020-01-01 00-00-01.dump", kFigureSize, 'a');
+    write(dir / L"2020-01-01 00-00-03.dump", kFigureSize, 'c');
+    write(dir / L"2020-01-01 00-00-02.dump", kFigureSize, 'b');
+    write(dir / L"2020-01-01 00-00-05.dump", 100, 'x');          // too short
+    write(dir / L"2020-01-01 00-00-04.txt", kFigureSize, 'x');   // not a .dump
+    const std::vector<fs::path> list = ListFigureBackups(dir);
+    CHECK(list.size() == 3);
+    if (list.size() == 3) {
+      CHECK(list[0] == dir / L"2020-01-01 00-00-03.dump");
+      CHECK(list[1] == dir / L"2020-01-01 00-00-02.dump");
+      CHECK(list[2] == dir / L"2020-01-01 00-00-01.dump");
+    }
+    fs::remove_all(dir, ec);
+  }
+
+  // Restoring a backup: the file gets the copy's bytes, and what it held becomes the newest copy.
+  {
+    const fs::path data = fs::temp_directory_path() / L"gr_restore_data";
+    std::error_code ec;
+    fs::remove_all(data, ec);
+    fs::create_directories(data / L"Figures" / L"Giants", ec);
+    const fs::path figure = data / L"Figures" / L"Giants" / L"Tree Rex.dump";
+    const fs::path dir = FigureBackupDir(figure, data / L"Figures");
+    auto bytes = [](uint8_t seed) {
+      FigureData d{};
+      for (size_t i = 0; i < d.size(); ++i) d[i] = static_cast<uint8_t>(seed + i * 7);
+      return d;
+    };
+    CHECK(SaveFigureFileAtomic(figure, bytes(1)));
+    // Copies from long ago, so the restore's own copy (named by the time now) is the newest.
+    fs::create_directories(dir, ec);
+    CHECK(SaveFigureFileAtomic(dir / L"2020-01-01 00-00-01.dump", bytes(2)));
+    CHECK(SaveFigureFileAtomic(dir / L"2020-01-01 00-00-02.dump", bytes(3)));
+    CHECK(RestoreFigureBackup(dir / L"2020-01-01 00-00-01.dump", figure, dir));
+    auto now = LoadFigureFile(figure);
+    CHECK(now.has_value() && *now == bytes(2));
+    std::vector<fs::path> list = ListFigureBackups(dir);
+    CHECK(list.size() == 3);
+    if (!list.empty()) {
+      auto undo = LoadFigureFile(list.front());
+      CHECK(undo.has_value() && *undo == bytes(1));
+      // And back again: the restore can be undone with that copy.
+      CHECK(RestoreFigureBackup(list.front(), figure, dir));
+      now = LoadFigureFile(figure);
+      CHECK(now.has_value() && *now == bytes(1));
+    }
+
+    // A copy that isn't a figure file, or none at all, is refused: nothing changes, no copy made.
+    const size_t before = ListFigureBackups(dir).size();
+    { std::ofstream(dir / L"2020-01-01 00-00-00.dump", std::ios::binary) << std::string(100, 'x'); }
+    CHECK(!RestoreFigureBackup(dir / L"2020-01-01 00-00-00.dump", figure, dir));
+    CHECK(!RestoreFigureBackup(dir / L"missing.dump", figure, dir));
+    now = LoadFigureFile(figure);
+    CHECK(now.has_value() && *now == bytes(1));
+    CHECK(ListFigureBackups(dir).size() == before);
+    fs::remove(dir / L"2020-01-01 00-00-00.dump", ec);
+
+    // With the folder full, the oldest copy can still be put back, although backing up the file
+    // first deletes it.
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    for (int i = 0; i < kFigureBackups; ++i) {
+      const std::wstring name = L"2020-01-01 00-00-" + std::wstring(i < 10 ? L"0" : L"") + std::to_wstring(i) + L".dump";
+      CHECK(SaveFigureFileAtomic(dir / name, bytes(static_cast<uint8_t>(10 + i))));
+    }
+    CHECK(RestoreFigureBackup(dir / L"2020-01-01 00-00-00.dump", figure, dir));
+    now = LoadFigureFile(figure);
+    CHECK(now.has_value() && *now == bytes(10));
+    list = ListFigureBackups(dir);
+    CHECK(list.size() == static_cast<size_t>(kFigureBackups));
+    CHECK(!fs::exists(dir / L"2020-01-01 00-00-00.dump"));
+    if (!list.empty()) {
+      auto undo = LoadFigureFile(list.front());
+      CHECK(undo.has_value() && *undo == bytes(1));
+    }
+
+    // A file that is gone is just written.
+    fs::remove(figure, ec);
+    CHECK(RestoreFigureBackup(dir / L"2020-01-01 00-00-05.dump", figure, dir));
+    now = LoadFigureFile(figure);
+    CHECK(now.has_value() && *now == bytes(15));
     fs::remove_all(data, ec);
   }
 

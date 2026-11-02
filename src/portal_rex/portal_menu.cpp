@@ -209,6 +209,18 @@ enum class Text {
   kWantedBack,
   kWantedBackAny,
   kPutBack,
+  kBackups,
+  kNoBackups,
+  kRestore,
+  kRestoreAsk,
+  kRestoreInfo,
+  kYes,
+  kNo,
+  kChoose,
+  kRestoreOnPortal,
+  kRestored,
+  kRestoreFailed,
+  kNoProgressShort,
   kCount,
 };
 
@@ -321,6 +333,19 @@ constexpr const char* kEnglish[] = {
     "The game wants the Skylander you just took off back on the portal first: it is in the middle "
     "of something with it (a shop, a talk). Swap after that.",
     "Put back",
+    "Backups",
+    "No backups of this figure yet: the first one is made when the game first saves it.",
+    "Restore",
+    "Restore this backup?",
+    "The figure gets back what it held then. What it holds now is backed up first, so this can "
+    "be undone.",
+    "Yes",
+    "No",
+    "Choose",
+    "%s is on the portal: take it off first.",
+    "Restored the backup from %s",
+    "The backup could not be restored.",
+    "No progress saved",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -437,6 +462,22 @@ constexpr const char* kGerman[] = {
     "ch). Tausch danach.",
     "Zur\xC3\xBC"
     "cklegen",
+    "Sicherungen",
+    "Noch keine Sicherungen dieser Figur: Die erste entsteht, wenn das Spiel sie zum ersten Mal "
+    "speichert.",
+    "Wiederherstellen",
+    "Diese Sicherung wiederherstellen?",
+    "Die Figur bekommt zur\xC3\xBC"
+    "ck, was sie damals hatte. Was sie jetzt hat, wird vorher gesichert: Das l\xC3\xA4sst sich "
+    "r\xC3\xBC"
+    "ckg\xC3\xA4ngig machen.",
+    "Ja",
+    "Nein",
+    "Ausw\xC3\xA4hlen",
+    "%s steht auf dem Portal: Nimm die Figur zuerst runter.",
+    "Sicherung vom %s wiederhergestellt",
+    "Die Sicherung konnte nicht wiederhergestellt werden.",
+    "Kein Spielstand",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -1499,22 +1540,43 @@ class Library {
     return false;
   }
 
+  // A figure file changed on disk (a backup put back from the details view): read again, so the
+  // cards, the preview and the details view show what it holds now.
+  void Reload(const std::filesystem::path& path) {
+    const std::optional<portal::FigureData> data = portal::LoadFigureFile(path);
+    if (!data) return;
+    for (OwnedFigure& figure : storage_) {
+      if (figure.path == path) Read(figure, *data);
+    }
+    IndexOwned();
+  }
+
  private:
-  void ScanOwned() {
+  static void Read(OwnedFigure& figure, const portal::FigureData& data) {
     std::error_code ec;
+    figure.sky = portal::FindSkylander(portal::ReadFigureId(data), portal::ReadFigureVariant(data));
+    figure.stats = portal::ParseFigureStats(data);
+    figure.trap = portal::ReadTrapVillain(data);
+    figure.mtime = std::filesystem::last_write_time(figure.path, ec);
+  }
+
+  void ScanOwned() {
     std::vector<OwnedFigure> all;
     for (const portal::FigureCatalogEntry& entry : portal::ScanFigureCatalog(FiguresDir())) {
       std::optional<portal::FigureData> data = portal::LoadFigureFile(entry.path);
       if (!data) continue;
       OwnedFigure figure;
       figure.path = entry.path;
-      figure.sky = portal::FindSkylander(portal::ReadFigureId(*data), portal::ReadFigureVariant(*data));
-      figure.stats = portal::ParseFigureStats(*data);
-      figure.trap = portal::ReadTrapVillain(*data);
-      figure.mtime = std::filesystem::last_write_time(entry.path, ec);
+      Read(figure, *data);
       all.push_back(std::move(figure));
     }
     storage_ = std::move(all);
+    IndexOwned();
+  }
+
+  void IndexOwned() {
+    owned_.clear();
+    by_path_.clear();
     for (const OwnedFigure& figure : storage_) {
       by_path_[PathUtf8(figure.path)] = &figure;
       if (!figure.sky) continue;
@@ -1951,6 +2013,36 @@ bool RealPortalHas(bool (*is)(const SkylanderInfo*)) {
     if (IsRealPortalCopy(slot) && is(FigureIn(slot))) return true;
   }
   return false;
+}
+
+// Whether a figure file is on the portal now: in a slot of the emulated portal (the game saves into
+// the file while it is there, so a backup put back would be overwritten) or, in hybrid mode, the
+// figure standing on the real portal.
+bool FileOnPortal(const std::filesystem::path& path) {
+  if (portal::SoftwarePortal* software = GetSoftwarePortal()) {
+    for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
+      const std::optional<std::filesystem::path> source = software->Source(slot);
+      std::error_code ec;
+      if (source && (*source == path || std::filesystem::equivalent(*source, path, ec))) return true;
+    }
+  }
+  return OnRealPortal(path);
+}
+
+// A figure backup's date and time from its name ("2026-11-02 15-04-05.dump", figure_file.h
+// BackUpFigureFile), written as the menu writes dates (StatsLines); the name itself for a file named
+// some other way.
+std::string BackupTime(const std::filesystem::path& backup) {
+  const std::string name = PathUtf8(backup.stem());
+  constexpr std::string_view kPattern = "0000-00-00 00-00-00";
+  if (name.size() != kPattern.size()) return name;
+  for (size_t i = 0; i < name.size(); ++i) {
+    const bool digit = name[i] >= '0' && name[i] <= '9';
+    if (kPattern[i] == '0' ? !digit : name[i] != kPattern[i]) return name;
+  }
+  const std::string year = name.substr(0, 4), month = name.substr(5, 2), day = name.substr(8, 2);
+  const std::string time = name.substr(11, 2) + ":" + name.substr(14, 2);
+  return g_german ? day + "." + month + "." + year + ", " + time : year + "-" + month + "-" + day + ", " + time;
 }
 
 void ShowToast(std::string text);
@@ -2884,7 +2976,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   void HandleInput(const Actions& a) {
     if (state_ == State::kDetails) {
+      if (backups_open_) {
+        HandleBackups(a);
+        return;
+      }
       if (a.back || a.details) state_ = previous_state_;
+      if (a.take_off && state_ == State::kDetails) OpenBackups();
       if (a.left) MoveDetailFocus(-1, 0);
       if (a.right) MoveDetailFocus(+1, 0);
       if (a.up) MoveDetailFocus(0, -1);
@@ -2902,6 +2999,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       state_ = State::kDetails;
       detail_half_ = 0;
       detail_focus_ = 0;
+      backups_open_ = false;
       return;
     }
     if (state_ == State::kBuilding) {
@@ -3483,6 +3581,20 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       Hint(dl, {x, y}, "B", Rgba(232, 73, 43), T(Text::kBack), true, "Esc");
       return;
     }
+    // The details view: Y opens the figure file's backups; in their list A restores one (asks
+    // first).
+    if (state_ == State::kDetails && software_) {
+      if (backups_open_ && backup_ask_) {
+        x += Hint(dl, {x, y}, "A", Rgba(76, 175, 80), T(Text::kChoose), true, "Enter");
+      } else if (backups_open_ && !backups_.empty()) {
+        x += Hint(dl, {x, y}, "A", Rgba(76, 175, 80), T(Text::kRestore), true, "Enter");
+      }
+      x += Hint(dl, {x, y}, "B", Rgba(232, 73, 43), T(Text::kBack), true, "Esc");
+      if (!backups_open_ && DetailFile()) {
+        Hint(dl, {x, y}, "Y", Rgba(230, 180, 40), T(Text::kBackups), true, "P");
+      }
+      return;
+    }
     if (state_ == State::kMessage || state_ == State::kDetails || !software_) {
       Hint(dl, {x, y}, "B", Rgba(232, 73, 43), T(Text::kBack), true, "Esc");
       return;
@@ -3626,6 +3738,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (overlay == State::kChoosing) DrawChoices(dl, area0, grid1);
     if (overlay == State::kBuilding) DrawBuilder(dl, area0, grid1);
     if (state_ == State::kDetails) DrawDetails(dl, area0, grid1);
+    if (state_ == State::kDetails && backups_open_) DrawBackups(dl, area0, grid1);
     if (state_ == State::kOptions) DrawOptions(dl, area0, grid1);
   }
 
@@ -4227,6 +4340,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (auto owner = TakenBy(sky)) DrawTaken(dl, a, b, *owner);
   }
 
+  // Items and sidekicks keep nothing on the figure (the details view's small panel, no backups).
+  static bool KeepsNothing(const SkylanderInfo* sky) {
+    return IsItem(sky) || (IsCompanion(sky) && GameCompanionKind() == CompanionKind::kSidekick);
+  }
+
   // The details view, for one figure at a time (a swapper's halves with LB / RB): level, hat and
   // the other facts on the left, the upgrades as the game's upgrade screen shows them on the right,
   // with the one the cursor is on described below them.
@@ -4240,7 +4358,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const portal::FigureStats* stats = owned && owned->stats && !IsItem(sky) ? &*owned->stats : nullptr;
     // Items and sidekicks keep nothing on the figure: a smaller panel with what they do. Traps
     // (their villain) and vehicles (their mods) do, and get the usual one.
-    const bool simple = IsItem(sky) || (IsCompanion(sky) && GameCompanionKind() == CompanionKind::kSidekick);
+    const bool simple = KeepsNothing(sky);
     const auto upgrades = !simple ? UpgradesFor(*sky) : nullptr;
 
     const float avail_w = area1.x - area0.x - S(24), avail_h = area1.y - area0.y - S(24);
@@ -4453,6 +4571,217 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     detail_focus_ = best;
   }
 
+  // --- details view: the figure file's backups ---
+  //
+  // Y in the details view lists the backups of the file shown (the copies portal_rex.cpp keeps
+  // before the game first saves over a figure file in a run and every 30 minutes, figure_file.h),
+  // newest first with the level and gold each holds. A asks ("No" chosen) and puts the chosen one
+  // back; the file as it was becomes a backup itself, so a restore can be undone the same way. Only
+  // while the figure is off the portal: the game would save its own data over it.
+
+  struct BackupEntry {
+    std::filesystem::path path;
+    std::string when;  // its date and time as the menu writes them
+    std::optional<portal::FigureStats> stats;
+  };
+
+  // The figure file the details view shows, if it can have backups: nullptr for a figure without a
+  // file, an item, a sidekick.
+  const OwnedFigure* DetailFile() const {
+    const std::vector<const SkylanderInfo*> figures = PreviewFigures();
+    if (figures.empty()) return nullptr;
+    const SkylanderInfo* sky = figures[std::min(detail_half_, figures.size() - 1)];
+    return KeepsNothing(sky) ? nullptr : library_.Owned(sky);
+  }
+
+  void OpenBackups() {
+    const OwnedFigure* owned = DetailFile();
+    if (!owned) return;
+    backups_file_ = owned->path;
+    backups_sky_ = owned->sky;
+    LoadBackups();
+    backup_ = backup_scroll_ = 0;
+    followed_backup_ = SIZE_MAX;  // follow the choice again
+    backup_ask_ = false;
+    backups_open_ = true;
+  }
+
+  void LoadBackups() {
+    backups_.clear();
+    for (const auto& path : portal::ListFigureBackups(portal::FigureBackupDir(backups_file_, FiguresDir()))) {
+      BackupEntry entry;
+      entry.path = path;
+      entry.when = BackupTime(path);
+      if (const auto data = portal::LoadFigureFile(path)) entry.stats = portal::ParseFigureStats(*data);
+      backups_.push_back(std::move(entry));
+    }
+    backup_ = backups_.empty() ? 0 : std::min(backup_, backups_.size() - 1);
+  }
+
+  void HandleBackups(const Actions& a) {
+    if (backup_ask_) {
+      if (a.up || a.down) backup_ask_choice_ = 1 - backup_ask_choice_;
+      if (a.back) {
+        backup_ask_ = false;
+      } else if (a.accept) {
+        ChooseRestore(backup_ask_choice_);
+      }
+      return;
+    }
+    if (a.back || a.take_off) {
+      backups_open_ = false;
+      return;
+    }
+    if (backups_.empty()) return;
+    if (a.up) backup_ = (backup_ + backups_.size() - 1) % backups_.size();
+    if (a.down) backup_ = (backup_ + 1) % backups_.size();
+    if (a.accept) AskRestore();
+  }
+
+  // A on a backup: the question, unless the figure is on the portal now.
+  void AskRestore() {
+    if (backup_ >= backups_.size()) return;
+    if (FileOnPortal(backups_file_)) {
+      ShowOnPortalToast();
+      return;
+    }
+    backup_ask_ = true;
+    backup_ask_choice_ = 1;  // "No" first: A twice by mistake doesn't restore
+  }
+
+  void ShowOnPortalToast() {
+    char text[256];
+    std::snprintf(text, sizeof(text), T(Text::kRestoreOnPortal),
+                  backups_sky_ ? FigureName(*backups_sky_).c_str() : "?");
+    ShowToast(text);
+  }
+
+  // The question's answer: 0 yes, 1 no.
+  void ChooseRestore(int choice) {
+    backup_ask_ = false;
+    if (choice != 0 || backup_ >= backups_.size()) return;
+    const BackupEntry entry = backups_[backup_];
+    // Asked again: the figure may have gone on meanwhile (the developer tools).
+    if (FileOnPortal(backups_file_)) {
+      ShowOnPortalToast();
+      return;
+    }
+    if (!portal::RestoreFigureBackup(entry.path, backups_file_,
+                                     portal::FigureBackupDir(backups_file_, FiguresDir()))) {
+      REXLOG_WARN("Portal menu: could not restore a figure backup");
+      ShowToast(T(Text::kRestoreFailed));
+      LoadBackups();
+      return;
+    }
+    REXLOG_INFO("Portal menu: player {} restored {} from its backup of {}", user_ + 1,
+                backups_sky_ ? std::string(backups_sky_->name) : std::string("a figure"),
+                PathUtf8(entry.path.stem()));
+    // The details view shows what the file holds now.
+    library_.Reload(backups_file_);
+    backups_open_ = false;
+    char text[160];
+    std::snprintf(text, sizeof(text), T(Text::kRestored), entry.when.c_str());
+    ShowToast(text);
+  }
+
+  // One backup as a line: its date and time at the left, the level and gold it holds at the right.
+  void DrawBackupLine(ImDrawList* dl, ImVec2 r0, ImVec2 r1, const BackupEntry& entry) {
+    const float cy = (r0.y + r1.y) / 2;
+    Label(dl, BoldFont(), S(23), {r0.x + S(20), CapCentredY(cy, S(23))}, kWhite, entry.when);
+    float x = r1.x - S(20);
+    if (!entry.stats) {
+      const char* text = T(Text::kNoProgressShort);
+      x -= TextSize(BoldFont(), S(19), text).x;
+      Label(dl, BoldFont(), S(19), {x, CapCentredY(cy, S(19))}, kDim, text);
+      return;
+    }
+    // The gold with the game's coin before it, as on the level bar.
+    const std::string gold = std::to_string(entry.stats->gold);
+    x -= TextSize(BoldFont(), S(20), gold).x;
+    Label(dl, BoldFont(), S(20), {x, CapCentredY(cy, S(20))}, kWhite, gold);
+    const float coin = S(10);
+    DrawGoldCoin(dl, {x - S(6) - coin, cy}, coin);
+    x -= S(6) + 2 * coin + S(22);
+    char level[32];
+    std::snprintf(level, sizeof(level), "Level %u", unsigned(entry.stats->level));
+    x -= TextSize(BoldFont(), S(20), level).x;
+    Label(dl, BoldFont(), S(20), {x, CapCentredY(cy, S(20))}, kGold, level);
+  }
+
+  // The backups of the details view's figure file over the details view, newest first.
+  void DrawBackups(ImDrawList* dl, ImVec2 area0, ImVec2 area1) {
+    const float row_h = S(62);
+    const size_t fits = std::max<size_t>(1, size_t((area1.y - area0.y - S(120)) / (row_h + S(8))));
+    const size_t visible = std::min({backups_.size(), fits, size_t(7)});
+    const float w = std::min(S(720), area1.x - area0.x - S(24));
+    const float tw = w - S(56);
+    const float h = backups_.empty() ? S(114) + TextSize(BoldFont(), S(20), T(Text::kNoBackups), tw).y
+                                     : S(96) + visible * (row_h + S(8));
+    ImVec2 a, b;
+    DrawOverlayPanel(dl, area0, area1, {w, h}, a, b);
+    Label(dl, BoldFont(), S(28), {a.x + S(28), a.y + S(22)}, kGold, T(Text::kBackups));
+    // The figure's name at the right of the title.
+    if (backups_sky_) {
+      const std::string name = FigureName(*backups_sky_);
+      const ImVec2 ns = TextSize(BoldFont(), S(20), name);
+      Label(dl, BoldFont(), S(20), {b.x - S(28) - ns.x, a.y + S(29)}, kDim, name);
+    }
+    if (backups_.empty()) {
+      Label(dl, BoldFont(), S(20), {a.x + S(28), a.y + S(84)}, kDim, T(Text::kNoBackups), tw);
+      return;
+    }
+    ScrollList(backup_scroll_, followed_backup_, wheel_, backup_, visible, backups_.size(), !backup_ask_);
+    for (size_t i = backup_scroll_; i < backups_.size() && i < backup_scroll_ + visible; ++i) {
+      const ImVec2 r0{a.x + S(24), a.y + S(78) + (i - backup_scroll_) * (row_h + S(8))};
+      const ImVec2 r1{b.x - S(24), r0.y + row_h};
+      const bool active = i == backup_;
+      if (!backup_ask_) {
+        if (MouseSelects(r0, r1)) backup_ = i;
+        if (ImGui::IsMouseHoveringRect(r0, r1) && ImGui::IsMouseClicked(0)) {
+          backup_ = i;
+          AskRestore();
+          return;
+        }
+      }
+      dl->AddRectFilled(r0, r1, active ? Rgba(255, 255, 255, 52) : Rgba(255, 255, 255, 14), S(14));
+      if (active) dl->AddRect(r0, r1, kGold, S(14), 0, S(3));
+      DrawBackupLine(dl, r0, r1, backups_[i]);
+    }
+    if (backup_ask_) DrawRestoreAsk(dl, area0, area1);
+  }
+
+  // The question before a backup goes back: the backup, what happens, "Yes" / "No".
+  void DrawRestoreAsk(ImDrawList* dl, ImVec2 area0, ImVec2 area1) {
+    const BackupEntry& entry = backups_[std::min(backup_, backups_.size() - 1)];
+    const float w = std::min(S(760), area1.x - area0.x - S(40));
+    const float tw = w - S(72);
+    const char* info = T(Text::kRestoreInfo);
+    const float info_h = TextSize(BoldFont(), S(20), info, tw).y;
+    ImVec2 a, b;
+    DrawOverlayPanel(dl, area0, area1, {w, S(316) + info_h}, a, b);
+    OutlinedLabel(dl, TitleFont(), S(32), {a.x + S(36), a.y + S(26)}, kGold, T(Text::kRestoreAsk), S(2));
+    const ImVec2 l0{a.x + S(36), a.y + S(80)}, l1{b.x - S(36), a.y + S(132)};
+    dl->AddRectFilled(l0, l1, Rgba(8, 10, 30, 170), S(12));
+    DrawBackupLine(dl, l0, l1, entry);
+    Label(dl, BoldFont(), S(20), {a.x + S(36), l1.y + S(14)}, kDim, info, tw);
+    const char* options[2] = {T(Text::kYes), T(Text::kNo)};
+    float y = l1.y + S(34) + info_h;
+    for (int i = 0; i < 2; ++i) {
+      const ImVec2 r0{a.x + S(36), y}, r1{b.x - S(36), y + S(56)};
+      if (MouseSelects(r0, r1)) backup_ask_choice_ = i;
+      if (ImGui::IsMouseHoveringRect(r0, r1) && ImGui::IsMouseClicked(0)) {
+        ChooseRestore(i);
+        return;
+      }
+      const bool active = i == backup_ask_choice_;
+      dl->AddRectFilled(r0, r1, active ? Rgba(255, 255, 255, 52) : Rgba(255, 255, 255, 14), S(14));
+      if (active) dl->AddRect(r0, r1, kGold, S(14), 0, S(3));
+      Label(dl, BoldFont(), S(23), {r0.x + S(22), CapCentredY((r0.y + r1.y) / 2, S(23))},
+            active ? kGold : kWhite, options[i]);
+      y += S(66);
+    }
+  }
+
   std::function<void()> on_done_;
   DeviceId device_;
   uint32_t user_;
@@ -4498,6 +4827,17 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   size_t detail_half_ = 0;
   size_t detail_focus_ = 0;
   std::vector<DetailIcon> detail_icons_;
+  // Details view: the backups of the file shown (Y), the one chosen, and the question before one
+  // goes back.
+  bool backups_open_ = false;
+  std::filesystem::path backups_file_;
+  const SkylanderInfo* backups_sky_ = nullptr;
+  std::vector<BackupEntry> backups_;
+  size_t backup_ = 0;
+  size_t backup_scroll_ = 0;
+  size_t followed_backup_ = SIZE_MAX;  // ScrollList's, for the backups
+  bool backup_ask_ = false;
+  int backup_ask_choice_ = 1;  // 0 yes, 1 no
   bool sidekick_change_ = false;
   std::optional<std::filesystem::path> sidekick_path_;
   size_t tab_ = 0;

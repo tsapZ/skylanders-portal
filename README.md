@@ -37,6 +37,15 @@ pictures), and the achievements with the title's own pictures (`achievements.txt
 The menus use it the other way round as well: `OtherGamePicture` gives a figure's picture from
 another game on the same PC, which the portal menu takes where the game has none.
 
+## Figure backups
+
+Before the game first saves over a figure file in a run, and again every 30 minutes, a copy goes
+to `Backups\Figures\<path under the figures folder>\<date> <time>.dump` next to the figures folder
+(the newest 10 per figure). To put one back, open the figure's details in the portal menu (X, or L
+on the keyboard), then its backups (Y, or P): they are listed newest first with their level and
+gold, and A restores the chosen one after asking. The figure has to be off the portal for that.
+The file as it was is backed up first, so a restore can be undone the same way.
+
 ## The exe's icon
 
 `skylanders_game_icon(<target> <rom folder>)` (cmake/game_icon.cmake) gives a game's exe its own
