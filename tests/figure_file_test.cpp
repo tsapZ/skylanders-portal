@@ -34,6 +34,34 @@ int main() {
   CHECK(!LoadFigureFile(WriteTemp(L"gr_figure_1088.dump", 1088, 1)).has_value());
   CHECK(!LoadFigureFile(WriteTemp(L"gr_figure_empty.dump", 0, 1)).has_value());
 
+  // Backups: the folder mirrors the path under Figures; a file elsewhere goes to Other.
+  {
+    const fs::path data = fs::temp_directory_path() / L"gr_backup_data";
+    std::error_code ec;
+    fs::remove_all(data, ec);
+    fs::create_directories(data / L"Figures" / L"Giants", ec);
+    const fs::path figure = data / L"Figures" / L"Giants" / L"Tree Rex.dump";
+    { std::ofstream(figure, std::ios::binary) << std::string(kFigureSize, 'x'); }
+    const fs::path dir = FigureBackupDir(figure, data / L"Figures");
+    CHECK(dir == data / L"Backups" / L"Figures" / L"Giants" / L"Tree Rex");
+    CHECK(FigureBackupDir(fs::temp_directory_path() / L"Loose.dump", data / L"Figures") ==
+          data / L"Backups" / L"Figures" / L"Other" / L"Loose");
+    // Twelve copies with sortable names: the newest ten stay.
+    for (int i = 0; i < 12; ++i) {
+      const std::string name = "2026-11-02 15-00-" + std::string(i < 10 ? "0" : "") + std::to_string(i) + ".dump";
+      CHECK(!BackUpFigureFile(figure, dir, kFigureBackups, name).empty());
+    }
+    int count = 0;
+    for (const auto& entry : fs::directory_iterator(dir)) count += entry.path().extension() == ".dump";
+    CHECK(count == kFigureBackups);
+    CHECK(!fs::exists(dir / L"2026-11-02 15-00-00.dump"));
+    CHECK(!fs::exists(dir / L"2026-11-02 15-00-01.dump"));
+    CHECK(fs::exists(dir / L"2026-11-02 15-00-11.dump"));
+    // A missing file gives no copy.
+    CHECK(BackUpFigureFile(data / L"Figures" / L"missing.dump", dir).empty());
+    fs::remove_all(data, ec);
+  }
+
   // A missing file and a folder are rejected.
   CHECK(!LoadFigureFile(fs::temp_directory_path() / L"gr_figure_missing.dump").has_value());
   CHECK(!LoadFigureFile(fs::temp_directory_path()).has_value());

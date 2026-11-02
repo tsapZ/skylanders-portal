@@ -1,9 +1,12 @@
 #include "portal/figure_file.h"
 
+#include <algorithm>
+#include <ctime>
 #include <fstream>
 #include <random>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace skylanders::portal {
 
@@ -42,6 +45,49 @@ bool SaveFigureFileAtomic(const std::filesystem::path& path, const FigureData& d
     return false;
   }
   return true;
+}
+
+std::filesystem::path FigureBackupDir(const std::filesystem::path& file, const std::filesystem::path& figures_dir) {
+  std::error_code ec;
+  std::filesystem::path rel = std::filesystem::relative(file, figures_dir, ec);
+  if (ec || rel.empty() || *rel.begin() == "..") rel = std::filesystem::path("Other") / file.filename();
+  rel.replace_extension();
+  return figures_dir.parent_path() / "Backups" / "Figures" / rel;
+}
+
+std::filesystem::path BackUpFigureFile(const std::filesystem::path& file, const std::filesystem::path& backup_dir,
+                                       int keep, std::string_view name) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(file, ec)) return {};
+  std::filesystem::create_directories(backup_dir, ec);
+  if (ec) return {};
+  std::string file_name(name);
+  if (file_name.empty()) {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    char text[40] = {};
+    std::strftime(text, sizeof(text), "%Y-%m-%d %H-%M-%S.dump", &local);
+    file_name = text;
+  }
+  const std::filesystem::path copy = backup_dir / file_name;
+  std::filesystem::copy_file(file, copy, std::filesystem::copy_options::overwrite_existing, ec);
+  if (ec) return {};
+  // The names sort by time; the oldest go first.
+  std::vector<std::filesystem::path> copies;
+  for (std::filesystem::directory_iterator it(backup_dir, ec), end; !ec && it != end; it.increment(ec)) {
+    if (it->path().extension() == ".dump") copies.push_back(it->path());
+  }
+  std::sort(copies.begin(), copies.end());
+  for (size_t i = 0; keep >= 0 && copies.size() - i > static_cast<size_t>(keep); ++i) {
+    std::error_code ignore;
+    std::filesystem::remove(copies[i], ignore);
+  }
+  return copy;
 }
 
 namespace {
