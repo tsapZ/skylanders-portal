@@ -110,6 +110,13 @@ class UsbPortal final : public PortalDevice {
   std::mutex io_mutex_;  // serializes every raw HID transfer: Write(), Read(), DumpFigure()
 
   hid_device* device_ = nullptr;
+  uint16_t vendor_id_ = 0;   // of the opened device, for the log
+  uint16_t product_id_ = 0;
+  // The first few raw commands and replies go to the log (TrapTeamRecomp #19: an Xbox 360
+  // Traptanium portal came up as "incompatible"; the Xbox 360 portals were never tested here).
+  static constexpr int kRawLogCount = 6;
+  std::atomic<int> raw_writes_logged_{0};
+  std::atomic<int> raw_reads_logged_{0};
   std::atomic<bool> write_error_logged_{false};
   std::atomic<bool> read_error_logged_{false};
   static constexpr int kDisconnectThreshold = 5;

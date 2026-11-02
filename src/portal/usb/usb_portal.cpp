@@ -40,7 +40,11 @@ UsbPortal::UsbPortal() {
   if (hid_init() != 0) return;
   for (const auto& [vendor_id, product_id] : kKnownPortals) {
     device_ = hid_open(vendor_id, product_id, nullptr);
-    if (device_ != nullptr) break;
+    if (device_ != nullptr) {
+      vendor_id_ = vendor_id;
+      product_id_ = product_id;
+      break;
+    }
   }
   // Deliberately never call hid_exit(): it finalizes the whole hidapi library, not just this
   // device, and this portal lives for the whole process (see portal_rex.cpp's InstallPortal,
@@ -63,6 +67,10 @@ void UsbPortal::SendRaw(const Report& report) {
   std::array<uint8_t, kReportSize + 1> buffer{};  // buffer[0] = report ID 0
   std::copy(report.begin(), report.end(), buffer.begin() + 1);
   const int written = hid_send_output_report(device_, buffer.data(), buffer.size());
+  if (raw_writes_logged_.fetch_add(1) < kRawLogCount) {
+    REXLOG_INFO("Portal (usb): {:04x}:{:04x} command -> {} ({})", vendor_id_, product_id_,
+                HexBytes(report.data(), 8), written);
+  }
   if (written < 0) {
     consecutive_errors_.fetch_add(1);
     if (!write_error_logged_.exchange(true)) {
@@ -86,6 +94,10 @@ Report UsbPortal::ReceiveRaw() {
   // 0 means "no report within the timeout", hidapi's normal outcome for an idle poll, not a
   // failure -- resets consecutive_errors_ same as a real read, since it proves the transport
   // itself is still working. -1 is the actual error indicator.
+  if (bytes_read > 0 && raw_reads_logged_.fetch_add(1) < kRawLogCount) {
+    REXLOG_INFO("Portal (usb): {:04x}:{:04x} reply ({} bytes) <- {}", vendor_id_, product_id_, bytes_read,
+                HexBytes(report.data(), static_cast<size_t>(bytes_read) < 16 ? static_cast<size_t>(bytes_read) : 16));
+  }
   if (bytes_read < 0) {
     consecutive_errors_.fetch_add(1);
     if (!read_error_logged_.exchange(true)) {
