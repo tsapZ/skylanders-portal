@@ -13,6 +13,9 @@
 //   to the portal) before it fades in; opened by the game's prompt, it comes up at once.
 // - Start: options (which games are listed, only my figures) and, for a second player, leaving
 //   the portal.
+// - X: a figure's details. There Y lists the backups of its file (figure_file.h), newest first
+//   with the level and gold each holds; A puts one back after asking, and only while the figure
+//   is off the portal. The file as it was becomes a backup too, so a restore can be undone.
 // - portal_item_off_buttons / bind_portal_item_off (F5) take the item off without the menu.
 //
 // Needs the input system from CreatePortalMenuInputSystem and the emulated (software) portal.
