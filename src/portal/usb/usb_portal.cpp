@@ -1,6 +1,7 @@
 #include "portal/usb/usb_portal.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -87,8 +88,12 @@ std::string HexBytes(const uint8_t* data, size_t n) {
 }  // namespace
 
 UsbPortal::UsbPortal() {
+  // The USB mode builds a UsbPortal once a second while none opens (portal_rex's hot-plug retry),
+  // so the device lists below go to the log once per run, not with every retry.
+  static std::atomic<bool> listed{false};
+  const bool list_devices = !listed.exchange(true);
 #ifdef _WIN32
-  LogPortalDrivers();
+  if (list_devices) LogPortalDrivers();
 #endif
   if (hid_init() != 0) return;
   for (const auto& [vendor_id, product_id] : kKnownPortals) {
@@ -104,7 +109,7 @@ UsbPortal::UsbPortal() {
   // the Xbox controller driver, TrapTeamRecomp #19) from no portal at all.
   if (device_ != nullptr) {
     REXLOG_INFO("Portal (usb): opened {:04x}:{:04x}", vendor_id_, product_id_);
-  } else {
+  } else if (list_devices) {
     hid_device_info* list = hid_enumerate(0x1430, 0);
     if (list == nullptr) REXLOG_WARN("Portal (usb): no known portal opened, no HID device of vendor 1430 at all");
     for (const hid_device_info* d = list; d != nullptr; d = d->next) {
