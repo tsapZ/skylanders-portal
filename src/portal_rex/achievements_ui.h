@@ -67,4 +67,8 @@ Setting CheatSetting(Setting setting);
 // put on from a figure file comes with full gold.
 Setting FullGoldCheatSetting();
 
+// The Extras page's first row: show_cheats. Off, every CheatSetting row is left off the page (from
+// the menu's next opening; greyed right away) and switched off, so achievements unlock again.
+Setting ShowCheatsSetting();
+
 }  // namespace skylanders

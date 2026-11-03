@@ -179,7 +179,10 @@ void Merge(Actions& into, const Actions& from) {
 
 // Shared by every menu instance: the pages and what was changed this session.
 struct SettingsState {
+  // The pages as the menu lists them: all_pages without the rows whose shown_by cvar is off,
+  // rebuilt each time the menu opens.
   std::vector<SettingsPage> pages;
+  std::vector<SettingsPage> all_pages;
   std::filesystem::path config_path;
   std::unordered_map<std::string, std::string> startup;  // cvar -> value at start-up
   std::unordered_map<std::string, std::string> stored;   // cvar -> value written this session
@@ -1456,8 +1459,20 @@ std::unique_ptr<SettingsMenuDialog> g_menu;
 rex::ui::ImGuiDrawer* g_drawer = nullptr;
 rex::ui::WindowedAppContext* g_app_context = nullptr;
 
+// The pages as listed now: rows whose shown_by cvar is off left out, and a page left empty too.
+void ListPages() {
+  g_state.pages = g_state.all_pages;
+  for (SettingsPage& page : g_state.pages) {
+    std::erase_if(page.settings, [](const Setting& s) {
+      return !s.shown_by.empty() && !CvarOn(s.shown_by.c_str());
+    });
+  }
+  std::erase_if(g_state.pages, [](const SettingsPage& p) { return p.settings.empty(); });
+}
+
 void OpenSettingsMenu() {
   if (g_menu || !g_drawer) return;
+  ListPages();
   // Over the portal or the player menu: that one closes like with B (the portal menu puts the
   // figure back), and the settings come up once it is gone.
   bool wait = false;
@@ -1522,6 +1537,7 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
       if (!s.cvar.empty()) g_state.startup[s.cvar] = rex::cvar::GetFlagByName(s.cvar);
     }
   }
+  g_state.all_pages = g_state.pages;
   menu_input::SetButtonHandler(menu_input::ButtonAction::kSettingsMenu,
                                [](DeviceId device, uint32_t) {
                                  if (!g_app_context) return;

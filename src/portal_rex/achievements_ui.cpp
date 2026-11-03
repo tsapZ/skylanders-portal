@@ -32,6 +32,11 @@
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/utf8_path.h"
 
+// The owner's wish (2026-11-03): the cheats can be hidden completely. Off, every CheatSetting row
+// leaves the Extras page and is switched off (ShowCheatsSetting, SwitchCheatsOffIfHidden).
+REXCVAR_DEFINE_BOOL(show_cheats, true, "Extras",
+                    "List the cheats on the Extras page; off also switches them all off");
+
 namespace skylanders {
 namespace {
 
@@ -562,6 +567,21 @@ namespace {
 std::mutex g_cheat_mutex;
 std::vector<std::string> g_cheat_cvars;  // CheatSetting's, each once
 
+// show_cheats off: every cheat goes off as well (a hidden cheat can't be on), at start-up too when
+// the settings file still has one on. The cvars are set outside the lock: their change callbacks
+// take it (UpdateCheatHold).
+void SwitchCheatsOffIfHidden() {
+  if (REXCVAR_GET(show_cheats)) return;
+  std::vector<std::string> cvars;
+  {
+    std::lock_guard lock(g_cheat_mutex);
+    cvars = g_cheat_cvars;
+  }
+  for (const std::string& cvar : cvars) {
+    if (rex::cvar::GetFlagByName(cvar) == "true") rex::cvar::SetFlagByName(cvar, "false");
+  }
+}
+
 // Holds the achievement unlocks while any cheat is on (and lets them go once none is).
 void UpdateCheatHold() {
   if (!g_registered.load(std::memory_order_acquire) || !g_manager) return;
@@ -582,6 +602,18 @@ void UpdateCheatHold() {
 Setting CheatSetting(Setting setting) {
   setting.help_en += "\n\nWhile this is on, achievements don't unlock.";
   setting.help_de += "\n\nSolange das an ist, werden keine Erfolge freigeschaltet.";
+  // Behind show_cheats: greyed as soon as it goes off, gone from the page the next time the menu
+  // opens.
+  setting.shown_by = "show_cheats";
+  if (setting.enabled_by.empty()) setting.enabled_by = "show_cheats";
+  static bool show_cheats_watched = false;
+  if (!show_cheats_watched) {
+    show_cheats_watched = true;
+    rex::cvar::RegisterChangeCallback("show_cheats", [](std::string_view, std::string_view) {
+      SwitchCheatsOffIfHidden();
+      UpdateCheatHold();
+    });
+  }
   bool added = false;
   {
     std::lock_guard lock(g_cheat_mutex);
@@ -593,9 +625,18 @@ Setting CheatSetting(Setting setting) {
   if (added) {
     rex::cvar::RegisterChangeCallback(setting.cvar,
                                       [](std::string_view, std::string_view) { UpdateCheatHold(); });
+    SwitchCheatsOffIfHidden();
     UpdateCheatHold();
   }
   return setting;
+}
+
+Setting ShowCheatsSetting() {
+  return {"show_cheats", "Show cheats", "Cheats anzeigen",
+          "Off takes every cheat off this page and switches them off; achievements unlock as usual "
+          "again. The page leaves them out from the next time the menu opens.",
+          "Aus nimmt alle Cheats von dieser Seite und schaltet sie ab; Erfolge werden wieder normal "
+          "freigeschaltet. Ab dem n\xC3\xA4" "chsten \xC3\x96" "ffnen des Men\xC3\xBC" "s fehlen sie hier."};
 }
 
 Setting FullGoldCheatSetting() {
