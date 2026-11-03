@@ -120,6 +120,18 @@ Xbox360Portal::Xbox360Portal() {
     CloseHandle(file);
     return;
   }
+  // Every endpoint of every alternate setting, for the logs (TrapTeamRecomp #19: is there a second pair?).
+  for (UCHAR alt = 0; alt < 8; ++alt) {
+    USB_INTERFACE_DESCRIPTOR any{};
+    if (!WinUsb_QueryInterfaceSettings(winusb, alt, &any)) break;
+    for (UCHAR i = 0; i < any.bNumEndpoints; ++i) {
+      WINUSB_PIPE_INFORMATION pipe{};
+      if (!WinUsb_QueryPipe(winusb, alt, i, &pipe)) continue;
+      REXLOG_INFO("Portal (Xbox 360): setting {} (class {:02x}/{:02x}/{:02x}) endpoint {:02x} type {} packet {} interval {}",
+                  alt, any.bInterfaceClass, any.bInterfaceSubClass, any.bInterfaceProtocol, pipe.PipeId,
+                  int(pipe.PipeType), pipe.MaximumPacketSize, pipe.Interval);
+    }
+  }
   USB_INTERFACE_DESCRIPTOR descriptor{};
   if (WinUsb_QueryInterfaceSettings(winusb, 0, &descriptor)) {
     for (UCHAR i = 0; i < descriptor.bNumEndpoints; ++i) {
@@ -164,6 +176,7 @@ Xbox360Portal::~Xbox360Portal() {
 void Xbox360Portal::ReaderLoop() {
   auto* winusb = static_cast<WINUSB_INTERFACE_HANDLE>(winusb_);
   int logged = 0;
+  int other_logged = 0;
   // Overlapped, with an event of its own: a synchronous read held the WinUSB handle while it waited,
   // and the game's writes queued behind it (TrapTeamRecomp #19).
   HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -207,6 +220,9 @@ void Xbox360Portal::ReaderLoop() {
       if (logged < 12) {  // the first answers raw, as UsbPortal does
         ++logged;
         REXLOG_INFO("Portal (Xbox 360): answer {} <- {}", logged, Hex(frame.data(), 16));
+      } else if (frame[2] != 'S' && other_logged < 24) {  // a reply to a command, however late
+        ++other_logged;
+        REXLOG_INFO("Portal (Xbox 360): answer (not a status) <- {}", Hex(frame.data(), 16));
       }
       std::lock_guard<std::mutex> lock(answers_mutex_);
       if (answers_.size() >= kMaxQueuedAnswers) answers_.pop_front();
