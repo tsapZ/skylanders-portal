@@ -51,6 +51,7 @@ class Xbox360Portal {
   std::thread reader_;
   std::atomic<bool> stopping_{false};
   std::atomic<bool> failed_{false};
+  std::atomic<int> logged_writes_{0};
   std::mutex answers_mutex_;
   std::deque<std::array<uint8_t, kFrameSize>> answers_;  // guarded by answers_mutex_
 };

@@ -30,6 +30,17 @@ namespace skylanders::portal {
 namespace {
 
 constexpr size_t kMaxQueuedAnswers = 64;  // about a second of answers; older ones are dropped
+
+std::string Hex(const uint8_t* data, size_t n) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string hex;
+  for (size_t i = 0; i < n; ++i) {
+    if (i) hex += ' ';
+    hex += kHex[data[i] >> 4];
+    hex += kHex[data[i] & 0xF];
+  }
+  return hex;
+}
 constexpr ULONG kPipeTimeoutMs = 200;     // lets the reader thread see a stop request
 
 std::string Utf8(const wchar_t* text) {
@@ -159,22 +170,22 @@ void Xbox360Portal::ReaderLoop() {
       return;
     }
     if (got == 0) continue;
-    std::array<uint8_t, kFrameSize> frame{};
-    std::memcpy(frame.data(), buffer, std::min<size_t>(got, frame.size()));
-    if (logged < 6) {  // the first answers raw, as UsbPortal does (TrapTeamRecomp #19)
-      ++logged;
-      std::string hex;
-      for (size_t i = 0; i < std::min<size_t>(got, 16); ++i) {
-        static constexpr char kHex[] = "0123456789abcdef";
-        if (i) hex += ' ';
-        hex += kHex[buffer[i] >> 4];
-        hex += kHex[buffer[i] & 0xF];
+    // The portal sends full 32-byte packets, so a 64-byte read ends only after the second one: each
+    // read can hold two frames (the answers' counters went up by two, and the replies to the game's
+    // commands were among the dropped halves: "incompatible portal", TrapTeamRecomp #19). Each
+    // frame goes to the game on its own, as Xenia's 32-byte reads hand them over.
+    for (size_t offset = 0; offset < got; offset += kFrameSize) {
+      std::array<uint8_t, kFrameSize> frame{};
+      const size_t n = std::min<size_t>(got - offset, frame.size());
+      std::memcpy(frame.data(), buffer + offset, n);
+      if (logged < 12) {  // the first answers raw, as UsbPortal does
+        ++logged;
+        REXLOG_INFO("Portal (Xbox 360): answer {} <- {}", logged, Hex(frame.data(), 16));
       }
-      REXLOG_INFO("Portal (Xbox 360): answer ({} bytes) <- {}", got, hex);
+      std::lock_guard<std::mutex> lock(answers_mutex_);
+      if (answers_.size() >= kMaxQueuedAnswers) answers_.pop_front();
+      answers_.push_back(frame);
     }
-    std::lock_guard<std::mutex> lock(answers_mutex_);
-    if (answers_.size() >= kMaxQueuedAnswers) answers_.pop_front();
-    answers_.push_back(frame);
   }
 }
 
@@ -193,6 +204,11 @@ bool Xbox360Portal::Read(std::span<uint8_t> buffer, uint32_t& bytes_read) {
 
 bool Xbox360Portal::Write(std::span<const uint8_t> buffer) {
   if (failed_.load() || !winusb_) return false;
+  // The game's first commands raw, next to the answers they get.
+  if (const int n = logged_writes_.fetch_add(1); n < 12) {
+    REXLOG_INFO("Portal (Xbox 360): command {} -> {}", n + 1,
+                Hex(buffer.data(), std::min<size_t>(buffer.size(), 16)));
+  }
   ULONG written = 0;
   if (WinUsb_WritePipe(static_cast<WINUSB_INTERFACE_HANDLE>(winusb_), out_pipe_, const_cast<PUCHAR>(buffer.data()),
                        static_cast<ULONG>(buffer.size()), &written, nullptr)) {
