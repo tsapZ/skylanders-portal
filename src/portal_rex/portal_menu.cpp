@@ -4953,6 +4953,9 @@ void QuickSwap(DeviceId device, uint32_t user) {
   for (int slot : g_player_slots[user]) {
     if (auto source = software->Source(slot)) on_portal.push_back(source->lexically_normal());
   }
+  // What is on now goes to the front of Recent first, so the next press swaps back to it even if it
+  // came on some other way (the real portal, a start-up figure, a script) and isn't in Recent yet.
+  if (!on_portal.empty()) AddRecent(user, on_portal);
   for (const auto& paths : LoadRecentPaths(user)) {
     bool usable = !paths.empty();
     std::vector<const SkylanderInfo*> figures;
