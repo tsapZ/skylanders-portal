@@ -239,12 +239,23 @@ bool Xbox360Portal::Write(std::span<const uint8_t> buffer) {
     packet = std::span<const uint8_t>(padded.data(), padded.size());
   }
   ULONG written = 0;
-  if (WinUsb_WritePipe(static_cast<WINUSB_INTERFACE_HANDLE>(winusb_), out_pipe_, const_cast<PUCHAR>(packet.data()),
-                       static_cast<ULONG>(packet.size()), &written, nullptr)) {
+  const bool ok = WinUsb_WritePipe(static_cast<WINUSB_INTERFACE_HANDLE>(winusb_), out_pipe_,
+                                   const_cast<PUCHAR>(packet.data()), static_cast<ULONG>(packet.size()), &written,
+                                   nullptr);
+  const DWORD error = ok ? 0 : GetLastError();
+  // What became of the first commands: taken (how many bytes) or not (TrapTeamRecomp #19).
+  if (logged_results_.fetch_add(1) < 12) {
+    REXLOG_INFO("Portal (Xbox 360): command sent: {} of {} bytes taken{}", written, packet.size(),
+                ok ? "" : (error == ERROR_SEM_TIMEOUT ? ", timed out" : ", failed"));
+  }
+  if (ok) return true;
+  if (error == ERROR_SEM_TIMEOUT) {  // the portal didn't take it in time; the game resends
+    const uint32_t n = write_timeouts_.fetch_add(1) + 1;
+    if (n == 10 || n == 100 || n == 1000) {
+      REXLOG_WARN("Portal (Xbox 360): {} commands timed out so far (the portal isn't taking them)", n);
+    }
     return true;
   }
-  const DWORD error = GetLastError();
-  if (error == ERROR_SEM_TIMEOUT) return true;  // the portal didn't take it in time; the game resends
   REXLOG_WARN("Portal (Xbox 360): write failed (error {}); treating it as unplugged", error);
   failed_.store(true);
   return false;

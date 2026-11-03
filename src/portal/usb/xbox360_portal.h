@@ -55,6 +55,8 @@ class Xbox360Portal {
   std::atomic<uint32_t> frames_read_{0};         // answer frames since opening
   std::atomic<int64_t> first_command_ms_{0};     // steady clock ms of the game's first command
   std::atomic<bool> warned_silent_{false};
+  std::atomic<int> logged_results_{0};       // write results logged (the first 12)
+  std::atomic<uint32_t> write_timeouts_{0};  // writes the portal didn't take within the timeout
   std::mutex answers_mutex_;
   std::deque<std::array<uint8_t, kFrameSize>> answers_;  // guarded by answers_mutex_
 };
