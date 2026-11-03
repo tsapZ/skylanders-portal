@@ -46,6 +46,7 @@ class Xbox360Portal {
 
   void* file_ = nullptr;    // HANDLE of the device interface
   void* winusb_ = nullptr;  // WINUSB_INTERFACE_HANDLE
+  void* write_event_ = nullptr;  // HANDLE, the overlapped writes' event (writes come one at a time)
   uint8_t in_pipe_ = 0;
   uint8_t out_pipe_ = 0;
   std::thread reader_;
