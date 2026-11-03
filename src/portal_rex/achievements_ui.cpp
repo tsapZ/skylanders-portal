@@ -598,4 +598,14 @@ Setting CheatSetting(Setting setting) {
   return setting;
 }
 
+Setting FullGoldCheatSetting() {
+  return CheatSetting(
+      {"cheat_full_gold", "Full gold", "Volles Gold",
+       "Every Skylander you put on the portal comes with full gold (65000) and keeps it like gold "
+       "it earned. Its backups (portal menu > details > Y) still have the old amount.",
+       "Jeder Skylander, den du aufs Portal stellst, kommt mit vollem Gold (65000) und beh\xC3\xA4lt "
+       "es wie verdientes Gold. Seine Sicherungen (Portal-Men\xC3\xBC > Details > Y) haben noch den "
+       "alten Betrag."});
+}
+
 }  // namespace skylanders

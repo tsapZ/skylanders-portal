@@ -187,4 +187,23 @@ std::optional<FigureStats> ParseFigureStats(const FigureData& data) {
   return stats;
 }
 
+bool SetFigureGold(FigureData& data, uint16_t gold) {
+  bool changed = false;
+  for (const uint8_t start : kAreas) {
+    if (!HeaderValid(data, start)) continue;
+    Block header = DecryptFigureBlock(data, start);
+    header[0x03] = uint8_t(gold);
+    header[0x04] = uint8_t(gold >> 8);
+    header[0x0E] = 0x05;
+    header[0x0F] = 0x00;
+    const uint16_t crc = FigureCrc16(header.data(), header.size());
+    header[0x0E] = uint8_t(crc);
+    header[0x0F] = uint8_t(crc >> 8);
+    const Block encrypted = EncryptFigureBlock(data, start, header);
+    std::memcpy(data.data() + size_t(start) * kBlockSize, encrypted.data(), kBlockSize);
+    changed = true;
+  }
+  return changed;
+}
+
 }  // namespace skylanders::portal

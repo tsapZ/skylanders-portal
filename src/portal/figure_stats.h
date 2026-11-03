@@ -59,4 +59,13 @@ int UpgradePath(const FigureStats& stats);
 // hats. Verified against the owner's dumps: the newer area holds the higher play time and XP.
 std::optional<FigureStats> ParseFigureStats(const FigureData& data);
 
+// The most gold a figure holds in the games (their own cap; the field is a u16).
+inline constexpr uint16_t kMaxFigureGold = 65000;
+
+// Puts `gold` into each save area whose header checks out (ParseFigureStats' rule) and fixes that
+// header's CRC, so whichever copy the game takes holds it. Only the header block changes: the
+// area's other checksums cover the blocks after it. Returns false, `data` unchanged, when no area
+// checks out (a figure never played has no gold to set yet).
+bool SetFigureGold(FigureData& data, uint16_t gold);
+
 }  // namespace skylanders::portal

@@ -164,5 +164,39 @@ int main() {
     CHECK(stats->level == 10);
   }
 
+  // Full gold (Extras): both copies get it, everything else stays, and the headers still check
+  // out; a figure never played is left alone.
+  {
+    FigureData d = CreateBlankFigure(30, 0, {0x05, 0x06, 0x07, 0x08});
+    CHECK(!SetFigureGold(d, kMaxFigureGold));
+    Area a = MakeArea(5614, 455, 3151, 1);
+    a[0x10] = 0x08;
+    WriteArea(d, 0x08, a);
+    Area b = MakeArea(5700, 300, 3200, 2);  // the newer copy
+    b[0x10] = 0x0C;
+    WriteArea(d, 0x24, b);
+    const FigureData before = d;
+    CHECK(SetFigureGold(d, kMaxFigureGold));
+    auto stats = ParseFigureStats(d);
+    REQUIRE_OR_RETURN(stats.has_value());
+    CHECK(stats->gold == kMaxFigureGold);
+    CHECK(stats->xp == 5700);
+    CHECK(stats->play_seconds == 3200);
+    CHECK(stats->upgrades == 0x0C);
+    // The older copy too, should the game take that one.
+    FigureData older = d;
+    std::memset(older.data() + 0x24 * kBlockSize, 0, kBlockSize);
+    stats = ParseFigureStats(older);
+    REQUIRE_OR_RETURN(stats.has_value());
+    CHECK(stats->gold == kMaxFigureGold);
+    CHECK(stats->xp == 5614);
+    // Only the two header blocks changed.
+    for (size_t block = 0; block < kFigureSize / kBlockSize; ++block) {
+      const bool same = std::memcmp(d.data() + block * kBlockSize, before.data() + block * kBlockSize,
+                                    kBlockSize) == 0;
+      CHECK(same == (block != 0x08 && block != 0x24));
+    }
+  }
+
   return Finish("figure_stats");
 }
