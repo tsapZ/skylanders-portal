@@ -2086,15 +2086,15 @@ struct LiftedFigure {
   const SkylanderInfo* sky = nullptr;
 };
 
-std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
-  std::vector<LiftedFigure> lifted;
+// The slots of this player's Skylander: the ones the menu placed that still hold a figure; figures
+// placed some other way (start-up figure, the developer tools, a script) belong to player 1.
+std::vector<int> PlayerSkylanderSlots(uint32_t user) {
+  std::vector<int> slots;
   portal::SoftwarePortal* software = GetSoftwarePortal();
-  if (!software) return lifted;
-  auto& slots = g_player_slots[user];
-  slots.erase(std::remove_if(slots.begin(), slots.end(),
-                             [&](int slot) { return !software->HasFigure(slot); }),
-              slots.end());
-  // Figures placed some other way (start-up figure, the developer tools) belong to player 1.
+  if (!software || user >= g_player_slots.size()) return slots;
+  for (int slot : g_player_slots[user]) {
+    if (software->HasFigure(slot)) slots.push_back(slot);
+  }
   if (slots.empty() && user == 0) {
     for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
       if (software->HasFigure(slot) && !OwnedByOther(slot, user) && !IsExtraSlot(slot) &&
@@ -2103,6 +2103,15 @@ std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
       }
     }
   }
+  return slots;
+}
+
+std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
+  std::vector<LiftedFigure> lifted;
+  portal::SoftwarePortal* software = GetSoftwarePortal();
+  if (!software) return lifted;
+  auto& slots = g_player_slots[user];
+  slots = PlayerSkylanderSlots(user);
   for (int slot : slots) {
     LiftedFigure figure;
     figure.slot = slot;
@@ -4950,7 +4959,7 @@ void QuickSwap(DeviceId device, uint32_t user) {
   if (g_menu || !g_drawer || menu_input::MenuOpen() || !software || CompanionRequest()) return;
   if (user >= g_player_slots.size()) return;
   std::vector<std::filesystem::path> on_portal;
-  for (int slot : g_player_slots[user]) {
+  for (int slot : PlayerSkylanderSlots(user)) {
     if (auto source = software->Source(slot)) on_portal.push_back(source->lexically_normal());
   }
   // What is on now goes to the front of Recent first, so the next press swaps back to it even if it
