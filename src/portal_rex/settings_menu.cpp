@@ -267,6 +267,7 @@ const char* KeyboardBindOf(const std::string& cvar) {
   if (cvar == "portal_item_off_buttons") return "bind_portal_item_off";
   if (cvar == "player_menu_buttons") return "bind_player_menu";
   if (cvar == "settings_menu_buttons") return "bind_settings_menu";
+  if (cvar == "portal_quick_swap_buttons") return "bind_portal_quick_swap";
   return nullptr;
 }
 

@@ -17,6 +17,8 @@
 //   with the level and gold each holds; A puts one back after asking, and only while the figure
 //   is off the portal. The file as it was becomes a backup too, so a restore can be undone.
 // - portal_item_off_buttons / bind_portal_item_off (F5) take the item off without the menu.
+// - portal_quick_swap_buttons (Back+X) / bind_portal_quick_swap (F2): the Skylander played before
+//   (the player's Recent list, the newest that isn't on the portal now) goes back on, no menu.
 //
 // Needs the input system from CreatePortalMenuInputSystem and the emulated (software) portal.
 

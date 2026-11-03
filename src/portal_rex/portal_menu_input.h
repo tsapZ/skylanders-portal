@@ -12,7 +12,8 @@
 //
 // Besides the portal menu, the same kind of button entries take the item off the portal
 // (portal_item_off_buttons), open the player menu (player_menu_buttons) and the settings menu
-// (settings_menu_buttons).
+// (settings_menu_buttons), and swap back to the Skylander played before
+// (portal_quick_swap_buttons).
 
 #include <cstdint>
 #include <functional>
@@ -36,6 +37,7 @@ REXCVAR_DECLARE(std::string, portal_menu_open_buttons);
 REXCVAR_DECLARE(std::string, portal_item_off_buttons);
 REXCVAR_DECLARE(std::string, player_menu_buttons);
 REXCVAR_DECLARE(std::string, settings_menu_buttons);
+REXCVAR_DECLARE(std::string, portal_quick_swap_buttons);
 
 namespace skylanders {
 
@@ -57,6 +59,7 @@ enum class ButtonAction {
   kItemOff,     // portal_item_off_buttons
   kPlayerMenu,  // player_menu_buttons
   kSettingsMenu,  // settings_menu_buttons
+  kQuickSwap,     // portal_quick_swap_buttons
 };
 
 // Called on a game input thread when a controller's button entry for `action` fires while no menu
