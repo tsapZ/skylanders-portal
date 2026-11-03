@@ -22,7 +22,9 @@
 #include <rex/runtime.h>
 
 #include "portal/data_folder.h"
+#include "portal/figure_catalog.h"
 #include "portal/figure_file.h"
+#include "portal/figure_stats.h"
 #include "portal_rex/settings_menu.h"
 #include "portal_rex/settings_schema.h"
 #include "portal/hybrid/real_portal_bridge.h"
@@ -57,6 +59,11 @@ REXCVAR_DEFINE_STRING(portal_figure, "", "Portal",
 REXCVAR_DEFINE_STRING(portal_figures_dir, "", "Portal",
                       "Folder to search for .dump figure files for the in-game figure picker "
                       "(F6). Searched recursively; only used by the overlay.");
+// F4 > Extras > Full gold (each game's ExtrasPage, FullGoldCheatSetting): a cheat, so it holds the
+// achievement unlocks while on. Applied in PlaceFigureFromFile, see FillGold there.
+REXCVAR_DEFINE_BOOL(cheat_full_gold, false, "Extras",
+                    "Every Skylander put on the emulated portal from a figure file comes with full "
+                    "gold (65000); the game saves it to the file like any gold it earns");
 
 namespace {
 
@@ -632,11 +639,35 @@ void InstallPortal(const std::filesystem::path& default_figures_dir) {
   rex::kernel::xam::RegisterNonControllerHandler(&g_xam_handler);
 }
 
+namespace {
+
+// Extras > Full gold: the figure goes on with the most gold the games allow, in the bytes the game
+// reads. The file only changes when the game saves, and BackUpBeforeFirstSave copies it before
+// that, so its backups keep the gold it had. Only Skylanders: items, traps, vehicles, sidekicks
+// keep no gold, and an Imaginators creation crystal's area isn't checked for it yet.
+void FillGold(int slot, portal::FigureData& data) {
+  const portal::SkylanderInfo* sky =
+      portal::FindSkylander(portal::ReadFigureId(data), portal::ReadFigureVariant(data));
+  if (!sky) return;
+  for (std::string_view none : {"Items", "Traps", "Vehicles", "Vehicle Variants", "Sidekicks",
+                                "Creation Crystals"}) {
+    if (sky->category == none) return;
+  }
+  const auto stats = portal::ParseFigureStats(data);
+  if (!stats || stats->gold >= portal::kMaxFigureGold) return;
+  if (portal::SetFigureGold(data, portal::kMaxFigureGold)) {
+    REXLOG_INFO("Extras: full gold for slot {}'s figure (it had {})", slot, stats->gold);
+  }
+}
+
+}  // namespace
+
 bool PlaceFigureFromFile(int slot, const std::filesystem::path& path) {
   portal::SoftwarePortal* software = g_software_portal.load();
   if (!software) return false;
   auto figure = portal::LoadFigureFile(path);
   if (!figure) return false;
+  if (REXCVAR_GET(cheat_full_gold)) FillGold(slot, *figure);
   return software->PlaceFigure(slot, *figure, path);
 }
 

@@ -63,4 +63,8 @@ Setting AchievementsSetting();
 // means it was earned (the owner's wish, 2026-10-31). Its help text gets a line saying so.
 Setting CheatSetting(Setting setting);
 
+// The same row in every game's Extras page: cheat_full_gold (portal_rex.cpp FillGold), a Skylander
+// put on from a figure file comes with full gold.
+Setting FullGoldCheatSetting();
+
 }  // namespace skylanders

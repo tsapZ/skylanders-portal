@@ -180,8 +180,27 @@ void Xbox360Portal::ReaderLoop() {
   // Overlapped, with an event of its own: a synchronous read held the WinUSB handle while it waited,
   // and the game's writes queued behind it (TrapTeamRecomp #19).
   HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  // For the first minute, every 5 s: how many statuses and other answers came and how many
+  // commands went out since the last line, so a report shows whether the portal goes quiet after
+  // the first exchange or only stops answering (TrapTeamRecomp #19, 0.4.1-beta.1: one 'R' answered
+  // right after a replug, then no answer to anything).
+  const auto opened = std::chrono::steady_clock::now();
+  auto last_summary = opened;
+  uint32_t statuses = 0, others = 0, commands_before = 0;
+  uint8_t last_counter = 0;
+  auto summary = [&] {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - opened > std::chrono::seconds(65) || now - last_summary < std::chrono::seconds(5)) return;
+    last_summary = now;
+    const uint32_t commands = commands_sent_.load();
+    REXLOG_INFO("Portal (Xbox 360): last 5 s: {} statuses (counter now {:02x}), {} other answers, {} commands sent",
+                statuses, last_counter, others, commands - commands_before);
+    statuses = others = 0;
+    commands_before = commands;
+  };
   while (!stopping_.load()) {
-    uint8_t buffer[64] = {};
+    // One packet per read, as Xenia reads it: the portal's packets are 32 bytes.
+    uint8_t buffer[kFrameSize] = {};
     ULONG got = 0;
     OVERLAPPED overlapped{};
     overlapped.hEvent = event;
@@ -191,6 +210,7 @@ void Xbox360Portal::ReaderLoop() {
     if (ok || error == ERROR_IO_PENDING) {
       while (WaitForSingleObject(event, kPipeTimeoutMs) == WAIT_TIMEOUT) {
         if (stopping_.load()) WinUsb_AbortPipe(winusb, in_pipe_);
+        summary();
       }
       ok = WinUsb_GetOverlappedResult(winusb, &overlapped, &got, FALSE);
       error = ok ? 0 : GetLastError();
@@ -204,10 +224,9 @@ void Xbox360Portal::ReaderLoop() {
       break;
     }
     if (got == 0) continue;
-    // The portal sends full 32-byte packets, so a 64-byte read ends only after the second one: each
-    // read can hold two frames (the answers' counters went up by two, and the replies to the game's
-    // commands were among the dropped halves: "incompatible portal", TrapTeamRecomp #19). Each
-    // frame goes to the game on its own, as Xenia's 32-byte reads hand them over.
+    // The portal sends full 32-byte packets (a 64-byte read held two, and the replies to the game's
+    // commands were among the dropped halves once: "incompatible portal", TrapTeamRecomp #19).
+    // Each frame goes to the game on its own, as Xenia's 32-byte reads hand them over.
     if (frames_read_.load() == 0) {
       const int64_t first = first_command_ms_.load();
       REXLOG_INFO("Portal (Xbox 360): first answer{}", first ? " after the game's first command" : " (before any command)");
@@ -224,10 +243,17 @@ void Xbox360Portal::ReaderLoop() {
         ++other_logged;
         REXLOG_INFO("Portal (Xbox 360): answer (not a status) <- {}", Hex(frame.data(), 16));
       }
+      if (frame[2] == 'S') {
+        ++statuses;
+        last_counter = frame[7];
+      } else {
+        ++others;
+      }
       std::lock_guard<std::mutex> lock(answers_mutex_);
       if (answers_.size() >= kMaxQueuedAnswers) answers_.pop_front();
       answers_.push_back(frame);
     }
+    summary();
   }
   CloseHandle(event);
 }
@@ -248,7 +274,7 @@ bool Xbox360Portal::Read(std::span<uint8_t> buffer, uint32_t& bytes_read) {
 bool Xbox360Portal::Write(std::span<const uint8_t> buffer) {
   if (failed_.load() || !winusb_ || !write_event_) return false;
   // The game's first commands raw, next to the answers they get.
-  if (const int n = logged_writes_.fetch_add(1); n < 12) {
+  if (const int n = logged_writes_.fetch_add(1); n < 24) {
     REXLOG_INFO("Portal (Xbox 360): command {} -> {}", n + 1,
                 Hex(buffer.data(), std::min<size_t>(buffer.size(), 16)));
   }
@@ -263,14 +289,12 @@ bool Xbox360Portal::Write(std::span<const uint8_t> buffer) {
                 "unplugging the portal and plugging it back in may help",
                 logged_writes_.load());
   }
-  // The game hands over just the command (4 bytes for 'R'); the portal takes full 32-byte packets,
-  // as the HID portals' reports are (TrapTeamRecomp #19: no answer to 4-byte frames).
-  std::array<uint8_t, kFrameSize> padded{};
+  // The game's bytes as they are (4 for 'R'), as Xenia sends them. 0.4.0-beta.7 to 0.4.1-beta.1
+  // padded them with zeros to 32 bytes: the frame's second byte (0x14) reads like a length, as in
+  // the Xbox 360 controllers' messages on the same kind of interface, and after a replug the portal
+  // answered the first padded command and nothing after it (TrapTeamRecomp #19). The earlier
+  // unpadded writes went out behind a blocking read, so they never proved anything.
   std::span<const uint8_t> packet = buffer;
-  if (buffer.size() < kFrameSize) {
-    std::memcpy(padded.data(), buffer.data(), buffer.size());
-    packet = std::span<const uint8_t>(padded.data(), padded.size());
-  }
   auto* winusb = static_cast<WINUSB_INTERFACE_HANDLE>(winusb_);
   auto* event = static_cast<HANDLE>(write_event_);
   ULONG written = 0;
@@ -289,7 +313,8 @@ bool Xbox360Portal::Write(std::span<const uint8_t> buffer) {
     error = ok ? 0 : GetLastError();
   }
   // What became of the first commands: taken (how many bytes) or not (TrapTeamRecomp #19).
-  if (logged_results_.fetch_add(1) < 12) {
+  if (ok) commands_sent_.fetch_add(1);
+  if (logged_results_.fetch_add(1) < 24) {
     REXLOG_INFO("Portal (Xbox 360): command sent: {} of {} bytes taken{}", written, packet.size(),
                 ok ? "" : (error == ERROR_SEM_TIMEOUT || error == ERROR_OPERATION_ABORTED ? ", timed out" : ", failed"));
   }
