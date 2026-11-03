@@ -147,6 +147,7 @@ Xbox360Portal::Xbox360Portal() {
   WinUsb_FlushPipe(winusb, in_pipe_);
   file_ = file;
   winusb_ = winusb;
+  write_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   REXLOG_INFO("Portal (Xbox 360): opened on WinUSB, pipes in {:02x} out {:02x}", in_pipe_, out_pipe_);
   reader_ = std::thread([this] { ReaderLoop(); });
 }
@@ -156,23 +157,38 @@ Xbox360Portal::~Xbox360Portal() {
   if (winusb_) WinUsb_AbortPipe(static_cast<WINUSB_INTERFACE_HANDLE>(winusb_), in_pipe_);
   if (reader_.joinable()) reader_.join();
   if (winusb_) WinUsb_Free(static_cast<WINUSB_INTERFACE_HANDLE>(winusb_));
+  if (write_event_) CloseHandle(static_cast<HANDLE>(write_event_));
   if (file_) CloseHandle(static_cast<HANDLE>(file_));
 }
 
 void Xbox360Portal::ReaderLoop() {
   auto* winusb = static_cast<WINUSB_INTERFACE_HANDLE>(winusb_);
   int logged = 0;
+  // Overlapped, with an event of its own: a synchronous read held the WinUSB handle while it waited,
+  // and the game's writes queued behind it (TrapTeamRecomp #19).
+  HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   while (!stopping_.load()) {
     uint8_t buffer[64] = {};
     ULONG got = 0;
-    if (!WinUsb_ReadPipe(winusb, in_pipe_, buffer, sizeof(buffer), &got, nullptr)) {
-      const DWORD error = GetLastError();
-      if (error == ERROR_SEM_TIMEOUT) continue;  // nothing within the timeout: normal while idle
+    OVERLAPPED overlapped{};
+    overlapped.hEvent = event;
+    ResetEvent(event);
+    BOOL ok = WinUsb_ReadPipe(winusb, in_pipe_, buffer, sizeof(buffer), nullptr, &overlapped);
+    DWORD error = ok ? 0 : GetLastError();
+    if (ok || error == ERROR_IO_PENDING) {
+      while (WaitForSingleObject(event, kPipeTimeoutMs) == WAIT_TIMEOUT) {
+        if (stopping_.load()) WinUsb_AbortPipe(winusb, in_pipe_);
+      }
+      ok = WinUsb_GetOverlappedResult(winusb, &overlapped, &got, FALSE);
+      error = ok ? 0 : GetLastError();
+    }
+    if (!ok) {
+      if (error == ERROR_SEM_TIMEOUT || error == ERROR_OPERATION_ABORTED) continue;  // idle, or stopping
       if (!stopping_.load()) {
         REXLOG_WARN("Portal (Xbox 360): read failed (error {}); treating it as unplugged", error);
         failed_.store(true);
       }
-      return;
+      break;
     }
     if (got == 0) continue;
     // The portal sends full 32-byte packets, so a 64-byte read ends only after the second one: each
@@ -197,6 +213,7 @@ void Xbox360Portal::ReaderLoop() {
       answers_.push_back(frame);
     }
   }
+  CloseHandle(event);
 }
 
 bool Xbox360Portal::Read(std::span<uint8_t> buffer, uint32_t& bytes_read) {
@@ -213,7 +230,7 @@ bool Xbox360Portal::Read(std::span<uint8_t> buffer, uint32_t& bytes_read) {
 }
 
 bool Xbox360Portal::Write(std::span<const uint8_t> buffer) {
-  if (failed_.load() || !winusb_) return false;
+  if (failed_.load() || !winusb_ || !write_event_) return false;
   // The game's first commands raw, next to the answers they get.
   if (const int n = logged_writes_.fetch_add(1); n < 12) {
     REXLOG_INFO("Portal (Xbox 360): command {} -> {}", n + 1,
@@ -238,13 +255,36 @@ bool Xbox360Portal::Write(std::span<const uint8_t> buffer) {
     std::memcpy(padded.data(), buffer.data(), buffer.size());
     packet = std::span<const uint8_t>(padded.data(), padded.size());
   }
+  auto* winusb = static_cast<WINUSB_INTERFACE_HANDLE>(winusb_);
+  auto* event = static_cast<HANDLE>(write_event_);
   ULONG written = 0;
-  if (WinUsb_WritePipe(static_cast<WINUSB_INTERFACE_HANDLE>(winusb_), out_pipe_, const_cast<PUCHAR>(packet.data()),
-                       static_cast<ULONG>(packet.size()), &written, nullptr)) {
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event;
+  ResetEvent(event);
+  BOOL ok = WinUsb_WritePipe(winusb, out_pipe_, const_cast<PUCHAR>(packet.data()), static_cast<ULONG>(packet.size()),
+                             nullptr, &overlapped);
+  DWORD error = ok ? 0 : GetLastError();
+  if (ok || error == ERROR_IO_PENDING) {
+    if (WaitForSingleObject(event, 500) == WAIT_TIMEOUT) {
+      WinUsb_AbortPipe(winusb, out_pipe_);  // the portal didn't take it: give up on this one
+      WaitForSingleObject(event, 500);
+    }
+    ok = WinUsb_GetOverlappedResult(winusb, &overlapped, &written, FALSE);
+    error = ok ? 0 : GetLastError();
+  }
+  // What became of the first commands: taken (how many bytes) or not (TrapTeamRecomp #19).
+  if (logged_results_.fetch_add(1) < 12) {
+    REXLOG_INFO("Portal (Xbox 360): command sent: {} of {} bytes taken{}", written, packet.size(),
+                ok ? "" : (error == ERROR_SEM_TIMEOUT || error == ERROR_OPERATION_ABORTED ? ", timed out" : ", failed"));
+  }
+  if (ok) return true;
+  if (error == ERROR_SEM_TIMEOUT || error == ERROR_OPERATION_ABORTED) {  // not taken in time; the game resends
+    const uint32_t n = write_timeouts_.fetch_add(1) + 1;
+    if (n == 10 || n == 100 || n == 1000) {
+      REXLOG_WARN("Portal (Xbox 360): {} commands timed out so far (the portal isn't taking them)", n);
+    }
     return true;
   }
-  const DWORD error = GetLastError();
-  if (error == ERROR_SEM_TIMEOUT) return true;  // the portal didn't take it in time; the game resends
   REXLOG_WARN("Portal (Xbox 360): write failed (error {}); treating it as unplugged", error);
   failed_.store(true);
   return false;
