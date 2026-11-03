@@ -221,6 +221,8 @@ enum class Text {
   kRestored,
   kRestoreFailed,
   kNoProgressShort,
+  kQuickSwapTo,
+  kQuickSwapNone,
   kCount,
 };
 
@@ -346,6 +348,8 @@ constexpr const char* kEnglish[] = {
     "Restored the backup from %s",
     "The backup could not be restored.",
     "No progress saved",
+    "Quick swap: %s",
+    "No other Skylander played yet",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -478,6 +482,8 @@ constexpr const char* kGerman[] = {
     "Sicherung vom %s wiederhergestellt",
     "Die Sicherung konnte nicht wiederhergestellt werden.",
     "Kein Spielstand",
+    "Schnelltausch: %s",
+    "Noch kein anderer Skylander gespielt",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -2080,15 +2086,15 @@ struct LiftedFigure {
   const SkylanderInfo* sky = nullptr;
 };
 
-std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
-  std::vector<LiftedFigure> lifted;
+// The slots of this player's Skylander: the ones the menu placed that still hold a figure; figures
+// placed some other way (start-up figure, the developer tools, a script) belong to player 1.
+std::vector<int> PlayerSkylanderSlots(uint32_t user) {
+  std::vector<int> slots;
   portal::SoftwarePortal* software = GetSoftwarePortal();
-  if (!software) return lifted;
-  auto& slots = g_player_slots[user];
-  slots.erase(std::remove_if(slots.begin(), slots.end(),
-                             [&](int slot) { return !software->HasFigure(slot); }),
-              slots.end());
-  // Figures placed some other way (start-up figure, the developer tools) belong to player 1.
+  if (!software || user >= g_player_slots.size()) return slots;
+  for (int slot : g_player_slots[user]) {
+    if (software->HasFigure(slot)) slots.push_back(slot);
+  }
   if (slots.empty() && user == 0) {
     for (int slot = 0; slot < portal::kMaxFigures; ++slot) {
       if (software->HasFigure(slot) && !OwnedByOther(slot, user) && !IsExtraSlot(slot) &&
@@ -2097,6 +2103,15 @@ std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
       }
     }
   }
+  return slots;
+}
+
+std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
+  std::vector<LiftedFigure> lifted;
+  portal::SoftwarePortal* software = GetSoftwarePortal();
+  if (!software) return lifted;
+  auto& slots = g_player_slots[user];
+  slots = PlayerSkylanderSlots(user);
   for (int slot : slots) {
     LiftedFigure figure;
     figure.slot = slot;
@@ -2515,7 +2530,9 @@ float PillWidth(std::string_view text, float size = 14) {
 class PortalMenuDialog final : public rex::ui::ImGuiDialog {
  public:
   PortalMenuDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> on_done, DeviceId device,
-                   uint32_t user, bool from_keyboard, bool auto_opened)
+                   uint32_t user, bool from_keyboard, bool auto_opened,
+                   const std::vector<std::filesystem::path>& quick_paths = {},
+                   const std::vector<const SkylanderInfo*>& quick_figures = {})
       : ImGuiDialog(drawer),
         on_done_(std::move(on_done)),
         device_(device),
@@ -2552,13 +2569,21 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       OpenFirstTab();
       if (companion_request_) OpenCompanionTab(*companion_request_);
     }
+    // A quick swap (QuickSwap): the figures are chosen already; the dialog only lifts, waits and
+    // places, and never comes up (the waiting state draws nothing).
+    if (software_ && !quick_paths.empty()) {
+      quick_ = true;
+      ConfirmFiles(quick_paths, quick_figures);
+      if (state_ != State::kWaiting) StartCancel();  // refused (on the real portal): put it back
+    }
     // Opened with a button, the figure was just lifted: the menu stays hidden while the game
     // reacts (the camera zooms out to the portal) and comes up with the game's own portal screen.
     // Without a lifted figure there is nothing to wait for.
     revealed_ = auto_opened_ || !software_ || lifted_.empty();
     if (revealed_) reveal_time_ = Clock::now();
     REXLOG_INFO("Portal menu: opened for player {}{}", user_ + 1,
-                companion_request_ ? " (the game asks for a trap or a vehicle)"
+                quick_               ? " (quick swap)"
+                : companion_request_ ? " (the game asks for a trap or a vehicle)"
                 : auto_opened_     ? " (the game asks for a Skylander)"
                                    : "");
   }
@@ -2640,7 +2665,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     SetScale(io.DisplaySize.y / 1080.0f);
     TrackMouse(io);
     if (state_ == State::kWaiting) {
-      if (Clock::now() - lift_time_ >= std::chrono::milliseconds(350)) {
+      // A quick swap waits longer: nobody picked anything, so the game has had no time yet to see
+      // the figure gone.
+      if (Clock::now() - lift_time_ >= std::chrono::milliseconds(quick_ ? 800 : 350)) {
         if (restore_) {
           RestoreLifted(user_, lifted_);
         } else {
@@ -4787,6 +4814,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   uint32_t user_;
   bool keyboard_;
   bool auto_opened_;
+  bool quick_ = false;  // a quick swap: never shown
   std::optional<Element> companion_request_;  // the game asked for a companion when it opened
   bool choosing_companion_ = false;           // the version list is a companion's
   bool keyboard_controls_ = false;
@@ -4905,7 +4933,9 @@ class Toast final : public rex::ui::ImGuiDialog {
 
 void CloseOverviewIfOpen();  // below, with the overview
 
-void OpenMenu(DeviceId device, uint32_t user, bool keyboard, bool auto_opened = false) {
+void OpenMenu(DeviceId device, uint32_t user, bool keyboard, bool auto_opened = false,
+              const std::vector<std::filesystem::path>& quick_paths = {},
+              const std::vector<const SkylanderInfo*>& quick_figures = {}) {
   if (g_menu || !g_drawer) return;
   // The portal overview closes first: taking a vehicle or trap off there makes the game ask for
   // another, the menu opened for it, and the overview behind it went on reading the buttons (A on
@@ -4917,7 +4947,53 @@ void OpenMenu(DeviceId device, uint32_t user, bool keyboard, bool auto_opened = 
         // The dialog finishes inside its own OnDraw; destroy it afterwards.
         g_app_context->CallInUIThreadDeferred([] { g_menu.reset(); });
       },
-      device, user, keyboard, auto_opened);
+      device, user, keyboard, auto_opened, quick_paths, quick_figures);
+}
+
+// portal_quick_swap_buttons / bind_portal_quick_swap: the Skylander this player played before goes
+// back on the portal without the menu. The newest entry of the player's Recent list that has none
+// of the files on the portal now and whose files are all there; pressed again, it swaps back. Not
+// while a menu is open or the game asks for a trap or vehicle. UI thread.
+void QuickSwap(DeviceId device, uint32_t user) {
+  portal::SoftwarePortal* software = GetSoftwarePortal();
+  if (g_menu || !g_drawer || menu_input::MenuOpen() || !software || CompanionRequest()) return;
+  if (user >= g_player_slots.size()) return;
+  std::vector<std::filesystem::path> on_portal;
+  for (int slot : PlayerSkylanderSlots(user)) {
+    if (auto source = software->Source(slot)) on_portal.push_back(source->lexically_normal());
+  }
+  // What is on now goes to the front of Recent first, so the next press swaps back to it even if it
+  // came on some other way (the real portal, a start-up figure, a script) and isn't in Recent yet.
+  if (!on_portal.empty()) AddRecent(user, on_portal);
+  for (const auto& paths : LoadRecentPaths(user)) {
+    bool usable = !paths.empty();
+    std::vector<const SkylanderInfo*> figures;
+    for (const auto& path : paths) {
+      std::error_code ec;
+      const auto normal = path.lexically_normal();
+      if (std::find(on_portal.begin(), on_portal.end(), normal) != on_portal.end() ||
+          !std::filesystem::exists(path, ec)) {
+        usable = false;
+        break;
+      }
+      const std::optional<portal::FigureData> data = portal::LoadFigureFile(path);
+      const SkylanderInfo* sky = data ? portal::FindSkylander(portal::ReadFigureId(*data),
+                                                              portal::ReadFigureVariant(*data))
+                                      : nullptr;
+      if (!sky) {  // a file the catalog doesn't know (ComboName and the log need the figure)
+        usable = false;
+        break;
+      }
+      figures.push_back(sky);
+    }
+    if (!usable) continue;
+    char text[160];
+    std::snprintf(text, sizeof(text), T(Text::kQuickSwapTo), ComboName(figures).c_str());
+    ShowToast(text);
+    OpenMenu(device, user, false, false, paths, figures);
+    return;
+  }
+  ShowToast(T(Text::kQuickSwapNone));
 }
 
 std::unique_ptr<Toast> g_toast;  // UI thread only
@@ -6287,6 +6363,18 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
   SetRealFigureArrivedHandler([](int slot) {
     if (g_app_context) g_app_context->CallInUIThread([slot] { RealFigureArrived(slot); });
   });
+  menu_input::SetButtonHandler(menu_input::ButtonAction::kQuickSwap, [](DeviceId device, uint32_t user) {
+    if (g_app_context) g_app_context->CallInUIThread([device, user] { QuickSwap(device, user); });
+  });
+  rex::ui::RegisterBind("bind_portal_quick_swap", "F2",
+                        "Put the Skylander played before back on the portal, without the menu", [] {
+                          if (menu_input::MenuOpen()) return;
+                          if (auto keyboard = menu_input::KeyboardDevice()) {
+                            QuickSwap(*keyboard, menu_input::UserOf(*keyboard));
+                          } else {
+                            QuickSwap(DeviceId::kInvalid, 0);
+                          }
+                        });
   rex::ui::RegisterBind("bind_portal_item_off", "F5",
                         "The portal overview: take single figures off the portal", [] {
                           if (!menu_input::MenuOpen()) ShowPortalOverview();

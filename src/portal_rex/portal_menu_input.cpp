@@ -40,6 +40,12 @@ REXCVAR_DEFINE_STRING(player_menu_buttons, "ls+rs", "Input",
 REXCVAR_DEFINE_STRING(settings_menu_buttons, "back+rb", "Input",
                       "Controller buttons that open the settings menu; same format as "
                       "portal_menu_open_buttons, empty for none");
+// The Skylander played before back on the portal without the menu (an idea from a PC portal tool:
+// quick swaps between two favourites).
+REXCVAR_DEFINE_STRING(portal_quick_swap_buttons, "back+x", "Portal",
+                      "Controller buttons that put the Skylander played before back on the portal "
+                      "without opening the menu; same format as portal_menu_open_buttons, empty "
+                      "for none");
 // A controller button doing another button's job (F4 > Controller; SwapForceRecomp #71).
 REXCVAR_DEFINE_STRING(pad_map_a, "", "Input",
                       "What the A button does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
@@ -91,7 +97,7 @@ using rex::input::X_INPUT_STATE;
 using skylanders::menu_input::ButtonAction;
 using Clock = std::chrono::steady_clock;
 
-constexpr size_t kActionCount = 4;
+constexpr size_t kActionCount = 5;
 
 class MenuInputDriver;
 
@@ -197,8 +203,8 @@ void ParseEntries(const std::string& value, ButtonAction action, std::vector<Ope
 }
 
 // Every button entry: portal_menu_open_buttons, portal_item_off_buttons, player_menu_buttons,
-// settings_menu_buttons. Parsed again only when one of them changes, so the warnings come once
-// per value.
+// settings_menu_buttons, portal_quick_swap_buttons. Parsed again only when one of them changes, so
+// the warnings come once per value.
 std::vector<OpenEntry> OpenEntries() {
   static std::optional<std::string> cached_value;
   static std::vector<OpenEntry> cached;
@@ -206,7 +212,8 @@ std::vector<OpenEntry> OpenEntries() {
   const std::string item_off = REXCVAR_GET(portal_item_off_buttons);
   const std::string players = REXCVAR_GET(player_menu_buttons);
   const std::string settings = REXCVAR_GET(settings_menu_buttons);
-  const std::string value = open + "|" + item_off + "|" + players + "|" + settings;
+  const std::string quick_swap = REXCVAR_GET(portal_quick_swap_buttons);
+  const std::string value = open + "|" + item_off + "|" + players + "|" + settings + "|" + quick_swap;
   if (value == cached_value) {
     return cached;
   }
@@ -215,6 +222,7 @@ std::vector<OpenEntry> OpenEntries() {
   ParseEntries(item_off, ButtonAction::kItemOff, entries);
   ParseEntries(players, ButtonAction::kPlayerMenu, entries);
   ParseEntries(settings, ButtonAction::kSettingsMenu, entries);
+  ParseEntries(quick_swap, ButtonAction::kQuickSwap, entries);
   cached_value = value;
   cached = entries;
   return entries;
