@@ -1,6 +1,7 @@
 #include "portal/usb/xbox360_portal.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -140,6 +141,10 @@ Xbox360Portal::Xbox360Portal() {
   ULONG timeout = kPipeTimeoutMs;
   WinUsb_SetPipePolicy(winusb, in_pipe_, PIPE_TRANSFER_TIMEOUT, sizeof(timeout), &timeout);
   WinUsb_SetPipePolicy(winusb, out_pipe_, PIPE_TRANSFER_TIMEOUT, sizeof(timeout), &timeout);
+  // A pipe left stalled or with old data by an earlier run starts clean.
+  WinUsb_ResetPipe(winusb, in_pipe_);
+  WinUsb_ResetPipe(winusb, out_pipe_);
+  WinUsb_FlushPipe(winusb, in_pipe_);
   file_ = file;
   winusb_ = winusb;
   REXLOG_INFO("Portal (Xbox 360): opened on WinUSB, pipes in {:02x} out {:02x}", in_pipe_, out_pipe_);
@@ -174,7 +179,12 @@ void Xbox360Portal::ReaderLoop() {
     // read can hold two frames (the answers' counters went up by two, and the replies to the game's
     // commands were among the dropped halves: "incompatible portal", TrapTeamRecomp #19). Each
     // frame goes to the game on its own, as Xenia's 32-byte reads hand them over.
+    if (frames_read_.load() == 0) {
+      const int64_t first = first_command_ms_.load();
+      REXLOG_INFO("Portal (Xbox 360): first answer{}", first ? " after the game's first command" : " (before any command)");
+    }
     for (size_t offset = 0; offset < got; offset += kFrameSize) {
+      frames_read_.fetch_add(1);
       std::array<uint8_t, kFrameSize> frame{};
       const size_t n = std::min<size_t>(got - offset, frame.size());
       std::memcpy(frame.data(), buffer + offset, n);
@@ -209,9 +219,28 @@ bool Xbox360Portal::Write(std::span<const uint8_t> buffer) {
     REXLOG_INFO("Portal (Xbox 360): command {} -> {}", n + 1,
                 Hex(buffer.data(), std::min<size_t>(buffer.size(), 16)));
   }
+  // Silent portal: once, 3 s after the game's first command without any answer.
+  const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now().time_since_epoch())
+                             .count();
+  int64_t expected = 0;
+  first_command_ms_.compare_exchange_strong(expected, now_ms);
+  if (frames_read_.load() == 0 && now_ms - first_command_ms_.load() > 3000 && !warned_silent_.exchange(true)) {
+    REXLOG_WARN("Portal (Xbox 360): no answer 3 s after the game's first command ({} commands so far); "
+                "unplugging the portal and plugging it back in may help",
+                logged_writes_.load());
+  }
+  // The game hands over just the command (4 bytes for 'R'); the portal takes full 32-byte packets,
+  // as the HID portals' reports are (TrapTeamRecomp #19: no answer to 4-byte frames).
+  std::array<uint8_t, kFrameSize> padded{};
+  std::span<const uint8_t> packet = buffer;
+  if (buffer.size() < kFrameSize) {
+    std::memcpy(padded.data(), buffer.data(), buffer.size());
+    packet = std::span<const uint8_t>(padded.data(), padded.size());
+  }
   ULONG written = 0;
-  if (WinUsb_WritePipe(static_cast<WINUSB_INTERFACE_HANDLE>(winusb_), out_pipe_, const_cast<PUCHAR>(buffer.data()),
-                       static_cast<ULONG>(buffer.size()), &written, nullptr)) {
+  if (WinUsb_WritePipe(static_cast<WINUSB_INTERFACE_HANDLE>(winusb_), out_pipe_, const_cast<PUCHAR>(packet.data()),
+                       static_cast<ULONG>(packet.size()), &written, nullptr)) {
     return true;
   }
   const DWORD error = GetLastError();

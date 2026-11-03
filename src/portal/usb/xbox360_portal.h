@@ -38,7 +38,7 @@ class Xbox360Portal {
   // One answer frame for the game in `buffer`, or bytes_read = 0 when none is waiting. False when
   // the device is gone.
   bool Read(std::span<uint8_t> buffer, uint32_t& bytes_read);
-  // The game's frame, unchanged. False when the device is gone.
+  // The game's frame, padded with zeros to a full 32-byte packet. False when the device is gone.
   bool Write(std::span<const uint8_t> buffer);
 
  private:
@@ -52,6 +52,9 @@ class Xbox360Portal {
   std::atomic<bool> stopping_{false};
   std::atomic<bool> failed_{false};
   std::atomic<int> logged_writes_{0};
+  std::atomic<uint32_t> frames_read_{0};         // answer frames since opening
+  std::atomic<int64_t> first_command_ms_{0};     // steady clock ms of the game's first command
+  std::atomic<bool> warned_silent_{false};
   std::mutex answers_mutex_;
   std::deque<std::array<uint8_t, kFrameSize>> answers_;  // guarded by answers_mutex_
 };
