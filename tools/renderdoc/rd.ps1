@@ -12,13 +12,14 @@ command line, so the capture, the output file and the script arguments go in env
     just rd timings <capture.rdc> <out.txt>                    # GPU time per pass and action
     just rd consts  <capture.rdc> <out.txt> "<min> <v>,<v>"    # draws whose PS constants hold these floats
     just rd dumps   <capture.rdc> <out.txt>                    # EDRAM dumps and ownership transfers, timed
+    just rd transfers <capture.rdc> <out.txt>                  # each ownership transfer, timed, and what its target meets next
     just rd vpos_passes <capture.rdc> <out.txt> "<dir> [min width]"  # full-screen pixel-position passes as PNG
     just rd disasm  <capture.rdc> <out.txt> "<eid>,<eid>"      # shader code and PS constants per event
     python3 thirdparty/skylanders-portal/tools/renderdoc/group.py <list out.txt>  # list grouped by target
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("list", "srvs", "dump", "inspect", "timings", "overhead", "consts", "cbuf", "vsout", "dumps", "vpos_passes", "disasm")]
+    [ValidateSet("list", "srvs", "dump", "inspect", "timings", "overhead", "consts", "cbuf", "vsout", "dumps", "transfers", "vpos_passes", "disasm")]
     [string]$Script,
     [Parameter(Mandatory = $true, Position = 1)] [string]$Capture,
     [Parameter(Mandatory = $true, Position = 2)] [string]$Out,
