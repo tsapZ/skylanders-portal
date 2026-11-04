@@ -223,6 +223,7 @@ enum class Text {
   kNoProgressShort,
   kQuickSwapTo,
   kQuickSwapNone,
+  kImaginatorsToysHint,
   kCount,
 };
 
@@ -350,6 +351,9 @@ constexpr const char* kEnglish[] = {
     "No progress saved",
     "Quick swap: %s",
     "No other Skylander played yet",
+    "Senseis, creation crystals and Imaginators' other toys are signed, so the menu can't make them "
+    "itself. They show up here once there's a file of the real toy in the figures folder, for "
+    "example read from a real portal (portal mode \"hybrid\").",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -484,6 +488,10 @@ constexpr const char* kGerman[] = {
     "Kein Spielstand",
     "Schnelltausch: %s",
     "Noch kein anderer Skylander gespielt",
+    "Senseis, Kreationskristalle und die anderen Spielzeuge von Imaginators sind signiert: Das "
+    "Men\xC3\xBC kann sie nicht selbst erzeugen. Sie erscheinen hier, sobald eine Datei des echten "
+    "Spielzeugs im Figurenordner liegt, etwa von einem echten Portal gelesen (Portal-Modus "
+    "\"hybrid\").",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -1045,6 +1053,7 @@ struct Tab {
   std::vector<Element> elements;         // game tabs: the element of each row
   std::vector<std::string> row_titles;   // items tab: the game of each row
   std::vector<std::vector<size_t>> rows;  // character indices per row
+  std::optional<Text> empty_text;         // kept while empty, with this line instead of cards
 };
 
 std::vector<std::string> AllowedGames() {
@@ -1393,7 +1402,13 @@ class Library {
         }
         sorted.rows.push_back(std::move(chars));
       }
-      if (!sorted.elements.empty()) tabs_.push_back(std::move(sorted));
+      // Imaginators' own toys come only with a file of them (listed() above): without any, its tab
+      // stays and says why it is empty, instead of the game's newest toys just missing
+      // (ImaginatorsRecomp #17).
+      if (sorted.elements.empty() && game == "Imaginators" && Contains(games, game)) {
+        sorted.empty_text = Text::kImaginatorsToysHint;
+      }
+      if (!sorted.elements.empty() || sorted.empty_text) tabs_.push_back(std::move(sorted));
     }
 
     // Magic items and adventure packs last, one row per game.
@@ -3709,8 +3724,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     const size_t count = ItemCount();
     if (!count) {
       const bool filtered = REXCVAR_GET(portal_menu_owned_only) && !tab.recent;
-      Label(dl, BoldFont(), S(26), {area0.x, area0.y + S(10)}, kDim,
-            filtered ? T(Text::kNothingOwned) : T(Text::kNothingRecent));
+      const char* text = tab.empty_text  ? T(*tab.empty_text)
+                         : filtered      ? T(Text::kNothingOwned)
+                                         : T(Text::kNothingRecent);
+      Label(dl, BoldFont(), S(26), {area0.x, area0.y + S(10)}, kDim, text, grid1.x - area0.x);
       columns_ = 1;
       if (state_ == State::kOptions) DrawOptions(dl, area0, grid1);
       return;
