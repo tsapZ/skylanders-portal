@@ -7,6 +7,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -998,7 +999,9 @@ std::filesystem::path FiguresDir() { return Utf8Path(REXCVAR_GET(portal_figures_
 
 struct OwnedFigure {
   std::filesystem::path path;
-  const SkylanderInfo* sky = nullptr;
+  const SkylanderInfo* sky = nullptr;      // what it stands for: `catalog`, or a copy (SplitToys)
+  const SkylanderInfo* catalog = nullptr;  // the catalog's entry for the file's id and variant
+  uint32_t uid = 0;                        // the toy's serial number (RealPortalBridge::UidOf)
   std::optional<portal::FigureStats> stats;
   std::optional<portal::TrapContents> trap;  // a trap's villain (TrapTeamRecomp #17)
   std::filesystem::file_time_type mtime{};
@@ -1231,6 +1234,44 @@ void AddRecent(uint32_t user, const std::vector<std::filesystem::path>& paths) {
 
 std::optional<FigureTrait> TraitOf(const SkylanderInfo* sky, const portal::FigureStats* stats = nullptr);
 
+// Toys split off a catalog entry (Library::SplitToys): every copy made, kept for the menu's life
+// (cards and lists point at them), by the catalog key and the toy's UID; and the files that stand
+// for one, by normalized path, so a figure placed from such a file is that entry on the portal too
+// (FigureIn). The copies are made on the UI thread; the file map is read from any thread.
+std::deque<SkylanderInfo> g_split_entries;
+std::map<std::pair<uint32_t, uint32_t>, const SkylanderInfo*> g_split_by_uid;
+std::set<const SkylanderInfo*> g_split_set;
+std::mutex g_file_skies_mutex;
+std::unordered_map<std::string, const SkylanderInfo*> g_file_skies;
+
+// A split toy's name (SplitToys) with its file's: the file's alone when the two differ only in their
+// digits (a dump pack's "Bronze Mystery Chest 22" for the catalog's "Bronze Mystery Chest 1"), else both
+// ("Magic Brawler (Magic Lantern 0)"); the name alone without a note or when they are the same.
+std::string WithFileNote(const std::string& name, const std::string& note) {
+  if (note.empty() || note == name) return name;
+  auto letters = [](const std::string& text) {
+    std::string out;
+    for (char c : text) {
+      if (c < '0' || c > '9') out += c;
+    }
+    return out;
+  };
+  return letters(note) == letters(name) ? note : name + " (" + note + ")";
+}
+
+// The entry a figure stands for: its file's own (SplitToys), else the catalog's.
+const SkylanderInfo* SkyOfFile(const portal::FigureData& data,
+                               const std::optional<std::filesystem::path>& path) {
+  if (path) {
+    std::lock_guard lock(g_file_skies_mutex);
+    if (!g_file_skies.empty()) {
+      auto it = g_file_skies.find(PathUtf8(path->lexically_normal()));
+      if (it != g_file_skies.end()) return it->second;
+    }
+  }
+  return portal::FindSkylander(portal::ReadFigureId(data), portal::ReadFigureVariant(data));
+}
+
 class Library {
  public:
   void Build(uint32_t user) {
@@ -1269,7 +1310,16 @@ class Library {
     std::unordered_map<std::string, std::string> debut;  // character -> first game, unfiltered
     known_ids_.clear();
     std::vector<size_t> items;
+    // The catalog, each entry followed by the toys split off it (SplitToys).
+    std::vector<const SkylanderInfo*> entries;
     for (const SkylanderInfo& sky : portal::AllSkylanders()) {
+      entries.push_back(&sky);
+      if (auto it = splits_.find(&sky); it != splits_.end()) {
+        entries.insert(entries.end(), it->second.begin(), it->second.end());
+      }
+    }
+    for (const SkylanderInfo* entry : entries) {
+      const SkylanderInfo& sky = *entry;
       const bool game_allowed = std::find(games.begin(), games.end(), sky.game) != games.end();
       if (sky.category == "Items" && game_allowed) {
         if (!listed(&sky, nullptr)) continue;
@@ -1513,8 +1563,20 @@ class Library {
 
   const OwnedFigure* Owned(const SkylanderInfo* sky) const {
     if (!sky) return nullptr;
+    if (g_split_set.contains(sky)) {
+      auto it = split_owned_.find(sky);
+      return it == split_owned_.end() ? nullptr : &it->second;
+    }
     auto it = owned_.find(Key(*sky));
     return it == owned_.end() ? nullptr : &it->second;
+  }
+
+  // For a toy that has others of its kind (SplitToys): its file's name, to tell them apart
+  // ("Fire Acorn 1"); empty for every other figure.
+  std::string SplitNote(const SkylanderInfo* sky) const {
+    if (!sky || !(g_split_set.contains(sky) || splits_.contains(sky))) return {};
+    const OwnedFigure* owned = Owned(sky);
+    return owned ? PathUtf8(owned->path.stem()) : std::string();
   }
 
   const OwnedFigure* OwnedAt(const std::filesystem::path& path) const {
@@ -1575,7 +1637,9 @@ class Library {
  private:
   static void Read(OwnedFigure& figure, const portal::FigureData& data) {
     std::error_code ec;
-    figure.sky = portal::FindSkylander(portal::ReadFigureId(data), portal::ReadFigureVariant(data));
+    figure.catalog = portal::FindSkylander(portal::ReadFigureId(data), portal::ReadFigureVariant(data));
+    figure.sky = figure.catalog;
+    figure.uid = portal::RealPortalBridge::UidOf(data);
     figure.stats = portal::ParseFigureStats(data);
     figure.trap = portal::ReadTrapVillain(data);
     figure.mtime = std::filesystem::last_write_time(figure.path, ec);
@@ -1597,18 +1661,68 @@ class Library {
 
   void IndexOwned() {
     owned_.clear();
+    split_owned_.clear();
     by_path_.clear();
+    SplitToys();
     for (const OwnedFigure& figure : storage_) {
       by_path_[PathUtf8(figure.path)] = &figure;
       if (!figure.sky) continue;
-      auto it = owned_.find(Key(*figure.sky));
       // With several files for one figure, the one played last stands for it.
+      if (figure.sky != figure.catalog) {
+        auto it = split_owned_.find(figure.sky);
+        if (it == split_owned_.end() || figure.mtime > it->second.mtime) split_owned_[figure.sky] = figure;
+        continue;
+      }
+      auto it = owned_.find(Key(*figure.sky));
       if (it == owned_.end() || figure.mtime > it->second.mtime) owned_[Key(*figure.sky)] = figure;
     }
   }
 
+  // Imaginators' creation crystals and chests are each a toy of its own (a crystal holds the
+  // Imaginator made on it), and a dump pack has several of one kind ("Fire Acorn 0", "Fire Acorn
+  // 1", ...): one catalog entry, other UIDs. With one card per entry the menu showed only the one
+  // played last (ImaginatorsRecomp #18). The first UID by file name keeps the catalog's entry; each
+  // other UID gets a copy of it, its own version on the crystal's card or its own chest card.
+  // Files with one UID are copies of one toy and stay one, as for every other figure.
+  static bool SplitKind(const SkylanderInfo& sky) {
+    return sky.game == "Imaginators" &&
+           (sky.category == "Creation Crystals" || (sky.category == "Items" && sky.id == 235));
+  }
+
+  void SplitToys() {
+    splits_.clear();
+    std::vector<OwnedFigure*> toys;
+    for (OwnedFigure& figure : storage_) {
+      figure.sky = figure.catalog;
+      if (figure.sky && SplitKind(*figure.sky)) toys.push_back(&figure);
+    }
+    std::sort(toys.begin(), toys.end(),
+              [](const OwnedFigure* a, const OwnedFigure* b) { return a->path < b->path; });
+    std::unordered_map<const SkylanderInfo*, uint32_t> first_uid;  // catalog entry -> its UID
+    std::unordered_map<std::string, const SkylanderInfo*> file_skies;
+    for (OwnedFigure* figure : toys) {
+      auto [first, inserted] = first_uid.emplace(figure->catalog, figure->uid);
+      if (inserted || first->second == figure->uid) continue;
+      auto [made, is_new] =
+          g_split_by_uid.try_emplace(std::make_pair(Key(*figure->catalog), figure->uid), nullptr);
+      if (is_new) {
+        made->second = &g_split_entries.emplace_back(*figure->catalog);
+        g_split_set.insert(made->second);
+      }
+      figure->sky = made->second;
+      std::vector<const SkylanderInfo*>& split = splits_[figure->catalog];
+      if (std::find(split.begin(), split.end(), figure->sky) == split.end()) split.push_back(figure->sky);
+      file_skies[PathUtf8(figure->path.lexically_normal())] = figure->sky;
+    }
+    std::lock_guard lock(g_file_skies_mutex);
+    g_file_skies = std::move(file_skies);
+  }
+
   std::vector<OwnedFigure> storage_;
   std::unordered_map<uint32_t, OwnedFigure> owned_;
+  std::unordered_map<const SkylanderInfo*, OwnedFigure> split_owned_;  // the split-off toys' files
+  // The toys split off each catalog entry in this scan, in file order (SplitToys).
+  std::unordered_map<const SkylanderInfo*, std::vector<const SkylanderInfo*>> splits_;
   std::unordered_map<std::string, const OwnedFigure*> by_path_;
   std::vector<Character> characters_;
   std::vector<Tab> tabs_;
@@ -1972,7 +2086,7 @@ const SkylanderInfo* FigureIn(int slot) {
   if (!software) return nullptr;
   std::optional<portal::FigureData> data = software->Figure(slot);
   if (!data) return nullptr;
-  return portal::FindSkylander(portal::ReadFigureId(*data), portal::ReadFigureVariant(*data));
+  return SkyOfFile(*data, software->Source(slot));
 }
 
 bool IsItem(const SkylanderInfo* sky) { return sky && sky->category == "Items"; }
@@ -2132,10 +2246,7 @@ std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
     figure.slot = slot;
     figure.path = software->Source(slot);
     figure.data = software->Figure(slot);
-    if (figure.data) {
-      figure.sky = portal::FindSkylander(portal::ReadFigureId(*figure.data),
-                                         portal::ReadFigureVariant(*figure.data));
-    }
+    if (figure.data) figure.sky = SkyOfFile(*figure.data, figure.path);
     RemoveFigureFromSlot(slot);
     lifted.push_back(std::move(figure));
   }
@@ -2230,8 +2341,7 @@ std::optional<LiftedFigure> TakenOffSkylander(uint32_t user) {
     if (software->HasFigure(slot) || OwnedByOther(slot, user)) continue;
     std::optional<TakenOffFigure> taken = TakenOffFrom(slot);
     if (!taken || (newest && newest->order > taken->order)) continue;
-    const SkylanderInfo* sky = portal::FindSkylander(portal::ReadFigureId(taken->data),
-                                                     portal::ReadFigureVariant(taken->data));
+    const SkylanderInfo* sky = SkyOfFile(taken->data, taken->path);
     if (sky && !IsItem(sky) && !IsCompanion(sky)) newest = std::move(taken);
   }
   if (!newest) return std::nullopt;
@@ -2239,8 +2349,7 @@ std::optional<LiftedFigure> TakenOffSkylander(uint32_t user) {
   figure.slot = newest->slot;
   figure.path = newest->path;
   figure.data = newest->data;
-  figure.sky = portal::FindSkylander(portal::ReadFigureId(newest->data),
-                                     portal::ReadFigureVariant(newest->data));
+  figure.sky = SkyOfFile(newest->data, newest->path);
   return figure;
 }
 
@@ -2939,7 +3048,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       for (const Version& v : character.versions) {
         if (!game.empty() && (v.sky->game == game) != (pass == 0)) continue;
         if (game.empty() && pass == 1) continue;
-        choices.push_back({FigureName(*v.sky), portal::VersionBadge(*v.sky), {v.sky}});
+        // Crystals of one kind (SplitToys) by their file's name.
+        choices.push_back({WithFileNote(FigureName(*v.sky), library_.SplitNote(v.sky)),
+                           portal::VersionBadge(*v.sky), {v.sky}});
       }
     }
     return choices;
@@ -3888,7 +3999,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                          bool selected) {
     const Version& version = ShownVersion(character);
     const SkylanderInfo* shown = version.sky;
-    const std::string name = character.item ? FigureName(*shown) : character.name;
+    // Chests of one kind (SplitToys) by their file's name.
+    const std::string name = character.item ? WithFileNote(FigureName(*shown), library_.SplitNote(shown))
+                                            : character.name;
     const Element element = character.element != Element::kNone ? character.element : ElementOf(*shown);
     const auto [p0, p1] =
         DrawTile(dl, a, b, element, selected, shown, name, ShortBadge(*shown));
@@ -4994,9 +5107,7 @@ void QuickSwap(DeviceId device, uint32_t user) {
         break;
       }
       const std::optional<portal::FigureData> data = portal::LoadFigureFile(path);
-      const SkylanderInfo* sky = data ? portal::FindSkylander(portal::ReadFigureId(*data),
-                                                              portal::ReadFigureVariant(*data))
-                                      : nullptr;
+      const SkylanderInfo* sky = data ? SkyOfFile(*data, path) : nullptr;
       if (!sky) {  // a file the catalog doesn't know (ComboName and the log need the figure)
         usable = false;
         break;
