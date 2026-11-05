@@ -357,6 +357,12 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
       e.kind = Event::Kind::kPutBack;
     } else if (cmd == "shot") {
       ok = bool(words >> e.text);
+      // "full": every pixel instead of at most 960 wide (frames 1).
+      std::string size;
+      if (ok && words >> size) {
+        ok = size == "full";
+        e.frames = 1;
+      }
       e.kind = Event::Kind::kShot;
     } else if (cmd == "waitfor") {
       ok = bool(words >> e.text >> e.duration) && e.duration > 0.0 && FindCondition(e.text);
@@ -648,13 +654,13 @@ class ScriptInputDriver final : public rex::input::InputDriver {
           }
         } else if (e.kind == Event::Kind::kShot) {
           if (run_in_ui) {
-            run_in_ui([path = g_script_dir / std::filesystem::u8path(e.text + ".png")] {
+            run_in_ui([path = g_script_dir / std::filesystem::u8path(e.text + ".png"), full = e.frames == 1] {
               int width = 0, height = 0;
               std::vector<uint8_t> rgba;
               bool saved = false;
               if (skylanders::CaptureGamePicture(width, height, rgba)) {
-                // Every n-th pixel, so the picture is at most 960 wide.
-                const int step = (width + 959) / 960;
+                // Every n-th pixel, so the picture is at most 960 wide; "full": every pixel.
+                const int step = full ? 1 : (width + 959) / 960;
                 const int w = width / step, h = height / step;
                 std::vector<uint8_t> scaled(size_t(w) * h * 4);
                 for (int y = 0; y < h; ++y) {

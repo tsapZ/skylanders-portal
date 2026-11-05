@@ -49,9 +49,10 @@
 //   putback                  if the game wants back the Skylander just taken off and takes no
 //                            other (portal_menu.h PlayerSkylanderWantedBack, Giants in a shop),
 //                            puts that one back; else nothing
-//   shot <name>              saves the game's picture (without the menus over it, at most 960
-//                            wide) as <name>.png next to the script file: on the game's own
-//                            timeline, so it also comes at the right moment after a waitfor
+//   shot <name> [full]       saves the game's picture (without the menus over it, at most 960
+//                            wide; with "full" every pixel, for comparing sharpness) as <name>.png
+//                            next to the script file: on the game's own timeline, so it also
+//                            comes at the right moment after a waitfor
 //   trap <slot> <villain>    puts a new trap holding that villain (its name, e.g. Chompy Mage)
 //                            onto the slot, as the portal developer tools (F8) make one
 //   waitfor <name> <seconds> waits until a condition the game registered (RegisterScriptCondition)
