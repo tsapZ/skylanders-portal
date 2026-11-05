@@ -36,6 +36,12 @@
 // leaves the Extras page and is switched off (ShowCheatsSetting, SwitchCheatsOffIfHidden).
 REXCVAR_DEFINE_BOOL(show_cheats, true, "Extras",
                     "List the cheats on the Extras page; off also switches them all off");
+// Read by the games' own hooks where a Skylander earns gold or XP (CheatGoldMultiplier and
+// CheatXpMultiplier); only the games that have such a hook list the rows.
+REXCVAR_DEFINE_INT32(cheat_gold_multiplier, 1, "Extras",
+                     "Gold your Skylanders pick up is multiplied by this (1 = as the game gives it)");
+REXCVAR_DEFINE_INT32(cheat_xp_multiplier, 1, "Extras",
+                     "XP your Skylanders pick up is multiplied by this (1 = as the game gives it)");
 
 namespace skylanders {
 namespace {
@@ -564,21 +570,30 @@ Setting AchievementsSetting() {
 
 namespace {
 
+struct CheatCvar {
+  std::string cvar;
+  std::string off;  // "false" for a bool cvar, else the first option's value ("1" for a multiplier)
+};
 std::mutex g_cheat_mutex;
-std::vector<std::string> g_cheat_cvars;  // CheatSetting's, each once
+std::vector<CheatCvar> g_cheat_cvars;  // CheatSetting's, each once
+
+bool CheatOn(const CheatCvar& cheat) {
+  const std::string value = rex::cvar::GetFlagByName(cheat.cvar);
+  return !value.empty() && value != cheat.off;
+}
 
 // show_cheats off: every cheat goes off as well (a hidden cheat can't be on), at start-up too when
 // the settings file still has one on. The cvars are set outside the lock: their change callbacks
 // take it (UpdateCheatHold).
 void SwitchCheatsOffIfHidden() {
   if (REXCVAR_GET(show_cheats)) return;
-  std::vector<std::string> cvars;
+  std::vector<CheatCvar> cheats;
   {
     std::lock_guard lock(g_cheat_mutex);
-    cvars = g_cheat_cvars;
+    cheats = g_cheat_cvars;
   }
-  for (const std::string& cvar : cvars) {
-    if (rex::cvar::GetFlagByName(cvar) == "true") rex::cvar::SetFlagByName(cvar, "false");
+  for (const CheatCvar& cheat : cheats) {
+    if (CheatOn(cheat)) rex::cvar::SetFlagByName(cheat.cvar, cheat.off);
   }
 }
 
@@ -588,8 +603,8 @@ void UpdateCheatHold() {
   std::string on;
   {
     std::lock_guard lock(g_cheat_mutex);
-    for (const std::string& cvar : g_cheat_cvars) {
-      if (rex::cvar::GetFlagByName(cvar) == "true") on += (on.empty() ? "" : ", ") + cvar;
+    for (const CheatCvar& cheat : g_cheat_cvars) {
+      if (CheatOn(cheat)) on += (on.empty() ? "" : ", ") + cheat.cvar;
     }
   }
   if (rex::system::AchievementManager* manager = g_manager()) {
@@ -617,8 +632,11 @@ Setting CheatSetting(Setting setting) {
   bool added = false;
   {
     std::lock_guard lock(g_cheat_mutex);
-    if (std::find(g_cheat_cvars.begin(), g_cheat_cvars.end(), setting.cvar) == g_cheat_cvars.end()) {
-      g_cheat_cvars.push_back(setting.cvar);
+    if (std::none_of(g_cheat_cvars.begin(), g_cheat_cvars.end(),
+                     [&](const CheatCvar& cheat) { return cheat.cvar == setting.cvar; })) {
+      // A cheat with options (a multiplier) is off at its first one.
+      g_cheat_cvars.push_back(
+          {setting.cvar, setting.options.empty() ? std::string("false") : setting.options.front().value});
       added = true;
     }
   }
@@ -637,6 +655,46 @@ Setting ShowCheatsSetting() {
           "again. The page leaves them out from the next time the menu opens.",
           "Aus nimmt alle Cheats von dieser Seite und schaltet sie ab; Erfolge werden wieder normal "
           "freigeschaltet. Ab dem n\xC3\xA4" "chsten \xC3\x96" "ffnen des Men\xC3\xBC" "s fehlen sie hier."};
+}
+
+namespace {
+
+// x1 (off) up to x10, the steps the request named (CoL #48).
+std::vector<SettingOption> MultiplierOptions() {
+  return {{"1", "Off", "Aus"}, {"2", "x2", "x2"}, {"3", "x3", "x3"}, {"5", "x5", "x5"},
+          {"10", "x10", "x10"}};
+}
+
+int Multiplier(int value) { return value < 1 ? 1 : (value > 10 ? 10 : value); }
+
+}  // namespace
+
+Setting GoldMultiplierCheatSetting() {
+  Setting s{"cheat_gold_multiplier", "Gold multiplier", "Gold-Multiplikator",
+            "Gold your Skylanders pick up counts this many times. The game saves it to the figure "
+            "like any gold it earns, up to its limit of 65000.",
+            "Gold, das deine Skylander aufsammeln, z\xC3\xA4hlt so viele Male. Das Spiel speichert "
+            "es auf der Figur wie verdientes Gold, bis zur Grenze von 65000."};
+  s.options = MultiplierOptions();
+  return CheatSetting(std::move(s));
+}
+
+Setting XpMultiplierCheatSetting() {
+  Setting s{"cheat_xp_multiplier", "XP multiplier", "EP-Multiplikator",
+            "XP your Skylanders pick up counts this many times, so they level up faster. The game "
+            "saves the levels to the figure.",
+            "EP, die deine Skylander aufsammeln, z\xC3\xA4hlen so viele Male, sie steigen also "
+            "schneller auf. Das Spiel speichert die Stufen auf der Figur."};
+  s.options = MultiplierOptions();
+  return CheatSetting(std::move(s));
+}
+
+int CheatGoldMultiplier() {
+  return REXCVAR_GET(show_cheats) ? Multiplier(REXCVAR_GET(cheat_gold_multiplier)) : 1;
+}
+
+int CheatXpMultiplier() {
+  return REXCVAR_GET(show_cheats) ? Multiplier(REXCVAR_GET(cheat_xp_multiplier)) : 1;
 }
 
 Setting FullGoldCheatSetting() {

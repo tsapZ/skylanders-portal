@@ -58,14 +58,23 @@ void StartAchievementCache(std::filesystem::path dir);
 // achievements can be seen with a controller too.
 Setting AchievementsSetting();
 
-// A row of a game's Extras page that makes the game easier (a bool cvar): while any such row is
-// on, achievements don't unlock (AchievementManager::SetUnlocksHeld), so an unlocked one still
-// means it was earned (the owner's wish, 2026-10-31). Its help text gets a line saying so.
+// A row of a game's Extras page that makes the game easier (a bool cvar, or one with options whose
+// first is off): while any such row is on, achievements don't unlock
+// (AchievementManager::SetUnlocksHeld), so an unlocked one still means it was earned (the owner's
+// wish, 2026-10-31). Its help text gets a line saying so.
 Setting CheatSetting(Setting setting);
 
 // The same row in every game's Extras page: cheat_full_gold (portal_rex.cpp FillGold), a Skylander
 // put on from a figure file comes with full gold.
 Setting FullGoldCheatSetting();
+
+// Rows for the games with a hook where a Skylander earns gold or XP: off, x2, x3, x5, x10. The
+// hooks scale the amount by CheatGoldMultiplier() / CheatXpMultiplier() (1 while off or while
+// show_cheats is off).
+Setting GoldMultiplierCheatSetting();
+Setting XpMultiplierCheatSetting();
+int CheatGoldMultiplier();
+int CheatXpMultiplier();
 
 // The Extras page's first row: show_cheats. Off, every CheatSetting row is left off the page (from
 // the menu's next opening; greyed right away) and switched off, so achievements unlock again.
