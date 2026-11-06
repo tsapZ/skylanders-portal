@@ -1261,8 +1261,8 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
             marks.push_back({input_pictures::MainKey(key), kGameKeyColour, Tr(k.en, k.de)});
           }
         }
-        lines.emplace_back(kGameKeyColour, Tr("The game: the controller button on each key",
-                                              "Das Spiel: die Controller-Taste auf jeder Taste"));
+        lines.emplace_back(kGameKeyColour, Tr("In the game: the controller button each key presses",
+                                              "Im Spiel: welche Controller-Taste jede Taste dr\xC3\xBC" "ckt"));
       } else {
         lines.emplace_back(kGameKeyColour,
                            Tr("Playing with the keyboard is off (mnk_mode)",
@@ -1414,8 +1414,8 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       Label(dl, BoldFont(), S(19), {std::max(x, p1.x - S(38) - ts.x), y + S(4)}, status_col,
             status);
     } else if (g_state.trimmed && !pending) {
-      const char* note = Tr("Graphics and start-up settings: in the hub before starting",
-                            "Grafik und Start-Einstellungen: im Hub vor dem Start");
+      const char* note = Tr("Graphics and start-up settings are in Core of Light, before the game starts",
+                            "Grafik- und Starteinstellungen findest du in Core of Light, vor dem Start");
       const ImVec2 ts = TextSize(BoldFont(), S(19), note);
       Label(dl, BoldFont(), S(19), {std::max(x, p1.x - S(38) - ts.x), y + S(4)}, kHintGrey,
             note);
