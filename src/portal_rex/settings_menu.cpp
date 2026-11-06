@@ -1649,7 +1649,7 @@ void AddQuitSettings(SettingsPage& page) {
       "Speichert das Bild von genau jetzt und welche Art Problem es ist (auf Wunsch mit ein paar "
       "Worten von der Tastatur).\n"
       "\n"
-      "Problem melden im Hub schickt es mit den Logs mit.";
+      "\xE2\x80\x9EProblem melden\xE2\x80\x9C in Core of Light schickt es mit den Logs mit.";
   report.action = [] { OpenProblemNote(); };
   page.settings.push_back(std::move(report));
   Setting quit;

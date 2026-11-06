@@ -260,7 +260,7 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
     REXLOG_WARN("Problem noted by the player: {}{}{} ({}.txt)", kind.en, note_[0] ? ": " : "", note_, base);
     if (!place_.empty()) REXLOG_INFO("Where (problem note): {}", place_);
     ShowPortalToast(Tr("Noted. Report a problem in Core of Light sends it along.",
-                       "Notiert. Problem melden im Hub schickt es mit."));
+                       "Notiert. \xE2\x80\x9EProblem melden\xE2\x80\x9C in Core of Light schickt es mit."));
     Close();
   }
 
