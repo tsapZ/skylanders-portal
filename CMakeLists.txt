@@ -131,6 +131,7 @@ if(TARGET rex::runtime)
         src/portal_rex/title_music.cpp
         src/portal_rex/png_file.cpp
         src/portal_rex/problem_note.cpp
+        src/portal_rex/movie_skip.cpp
         src/portal/usb/usb_portal.cpp
         src/portal/usb/xbox360_portal.cpp
         src/portal_rex/sdl_audio_sink.cpp
