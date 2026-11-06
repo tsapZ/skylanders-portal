@@ -76,6 +76,7 @@ add_library(skylanders_portal_core STATIC
     src/portal/portal_mode.cpp
     src/portal/xbox_frame.cpp
     src/portal/software/software_portal.cpp
+    src/portal/traffic_log.cpp
     src/portal/trap_villain.cpp
     src/portal/xam_bridge.cpp
     "${REXSDK_DIR}/thirdparty/aes_128/aes.c"
@@ -96,7 +97,7 @@ if(SKYLANDERS_PORTAL_TESTS)
     enable_testing()
     foreach(t portal_framing_test portal_mode_test software_portal_test figure_file_test
               figure_catalog_test figure_stats_test audio_test xam_bridge_test
-              trap_villain_test g726_test figure_info_test real_portal_bridge_test)
+              trap_villain_test g726_test figure_info_test real_portal_bridge_test traffic_log_test)
         add_executable(skylanders_${t} tests/${t}.cpp)
         target_include_directories(skylanders_${t} PRIVATE tests)
         target_link_libraries(skylanders_${t} PRIVATE skylanders_portal_core)

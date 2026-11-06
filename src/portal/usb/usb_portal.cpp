@@ -87,7 +87,7 @@ std::string HexBytes(const uint8_t* data, size_t n) {
 
 }  // namespace
 
-UsbPortal::UsbPortal() {
+UsbPortal::UsbPortal() : traffic_("usb", [](const std::string& line) { REXLOG_INFO("{}", line); }) {
   // The USB mode builds a UsbPortal once a second while none opens (portal_rex's hot-plug retry),
   // so the device lists below go to the log once per run, not with every retry.
   static std::atomic<bool> listed{false};
@@ -197,6 +197,7 @@ void UsbPortal::Write(const Report& report) {
   // A dump in progress owns the device exclusively; the game's own writes are dropped rather than
   // reaching real hardware (see DumpFigure's comment).
   if (dumping_slot_.load() >= 0) return;
+  if (device_ != nullptr) traffic_.OnCommand(report);
   if (report[0] == 0x57) {  // 'W': write one figure block -- log for offset research.
     const int slot = report[1] & 0x0F;
     const int block = report[2];
@@ -274,6 +275,7 @@ Report UsbPortal::Read() {
     return report;  // nothing queued
   }
   ObserveReply(report);
+  traffic_.OnReply(report);
   return report;
 }
 

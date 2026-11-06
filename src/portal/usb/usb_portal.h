@@ -14,6 +14,7 @@
 
 #include "portal/audio.h"
 #include "portal/portal_device.h"
+#include "portal/traffic_log.h"
 
 namespace skylanders::portal {
 
@@ -109,6 +110,8 @@ class UsbPortal final : public PortalDevice {
   Report ReceiveRaw();                 // unlocked -- callers hold io_mutex_
 
   std::mutex io_mutex_;  // serializes every raw HID transfer: Write(), Read(), DumpFigure()
+  // The game's commands and what it got back, in plain lines for a player's log (traffic_log.h).
+  PortalTrafficLog traffic_;
 
   hid_device* device_ = nullptr;
   uint16_t vendor_id_ = 0;   // of the opened device, for the log

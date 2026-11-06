@@ -30,6 +30,8 @@
 #include "portal/hybrid/real_portal_bridge.h"
 #include "portal/portal_device.h"
 #include "portal/portal_mode.h"
+#include "portal/traffic_log.h"
+#include "portal/xbox_frame.h"
 #include "portal/software/software_portal.h"
 #include "portal/usb/usb_portal.h"
 #include "portal/usb/xbox360_portal.h"
@@ -90,6 +92,9 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
     std::lock_guard<std::mutex> lock(mu_);
     if (skylanders::portal::Xbox360Portal* x360 = LiveXbox360()) {
       if (!x360->Read(buffer, bytes_read)) return skylanders::portal::kXamDeviceNotConnected;
+      if (bytes_read >= skylanders::portal::kFrameSize) {
+        if (auto reply = skylanders::portal::ReportFromFrame(buffer.data())) x360_traffic_.OnReply(*reply);
+      }
       state = bytes_read ? 1 : 0;
       return skylanders::portal::kXamSuccess;
     }
@@ -111,12 +116,19 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
       return skylanders::portal::kXamSuccess;
     }
     if (skylanders::portal::Xbox360Portal* x360 = LiveXbox360()) {
+      if (buffer.size() >= skylanders::portal::kFrameSize) {
+        if (auto command = skylanders::portal::ReportFromFrame(buffer.data())) x360_traffic_.OnCommand(*command);
+      }
       return x360->Write(buffer) ? skylanders::portal::kXamSuccess : skylanders::portal::kXamDeviceNotConnected;
     }
     return bridge_.Write(g_portal.load(), buffer);
   }
 
  private:
+  // The Xbox 360 portal's commands and replies in plain lines (traffic_log.h; the HID portals have
+  // their own in UsbPortal).
+  skylanders::portal::PortalTrafficLog x360_traffic_{
+      "Xbox 360", [](const std::string& line) { REXLOG_INFO("{}", line); }};
   // The Xbox 360 portal while it works; one that failed is dropped (never freed, like the other
   // portals), and the USB mode's hot-plug retry looks for a portal again.
   static skylanders::portal::Xbox360Portal* LiveXbox360() {
