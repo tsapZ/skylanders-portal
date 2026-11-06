@@ -78,8 +78,12 @@ def main(controller):
             n_clean += 1
             t_clean += d
         names = ["%s %dx%d" % (str(s), textures[s].width, textures[s].height) for s in srcs]
+        # The dispatch's size: a clean dump with the size of the previous one of its target, and no
+        # other dump between them, most likely copies the same tiles again.
+        dims = "x".join(str(v) for v in a.dispatchDimension)
         log("dispatch", a.eventId, "%.3f ms" % (d * 1000), "clean" if clean else "dirty",
-            "prev dump", ",".join(str(last_dump_eid.get(s, "-")) for s in srcs), "|", "; ".join(names))
+            "prev dump", ",".join(str(last_dump_eid.get(s, "-")) for s in srcs), "|", "; ".join(names),
+            "| groups", dims)
         for s in srcs:
             dirty[s] = False
             last_dump_eid[s] = a.eventId
