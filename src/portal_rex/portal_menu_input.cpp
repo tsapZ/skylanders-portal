@@ -538,7 +538,15 @@ class MenuInputDriver final : public InputDriver {
                         (*action == ButtonAction::kSettingsMenu && g_menu_closable.load()));
       record.swallowed |= fired_buttons;
       record.withheld &= uint16_t(~fired_buttons);
-      const uint16_t shown = VisibleButtonsLocked(record, pad.buttons, previous, Clock::now());
+      uint16_t shown = VisibleButtonsLocked(record, pad.buttons, previous, Clock::now());
+      // A press made in a menu stays there. A short Enter that picks a figure is also the
+      // keyboard's Start; kept back as a possible chord, it came back as a tap on release, just
+      // after the menu closed, and opened the game's pause menu.
+      if (g_menu_open.load() || record.hidden_until_release) {
+        record.withheld = 0;
+        record.replay = 0;
+        shown = 0;
+      }
       if (visible) *visible = shown;
       if (record.hidden_until_release && hide) {
         if (AnyButtonDown(pad)) {
