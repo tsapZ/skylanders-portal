@@ -26,6 +26,12 @@
 #endif
 #include <rex/logging.h>
 
+#include "portal_rex/remapper_check.h"
+
+REXCVAR_DEFINE_BOOL(controller_hide_remapped, true, "Input",
+                    "While DS4Windows or DualSenseX runs, leave out the real PlayStation "
+                    "controller: they also show it as a virtual Xbox controller, and every press "
+                    "would count for two players");
 REXCVAR_DEFINE_STRING(portal_menu_open_buttons, "guide,back+start,hold_back", "Portal",
                       "Controller buttons that open the portal menu, comma-separated: a button "
                       "(guide, back, start, a, b, x, y, lb, rb, ls, rs, up, down, left, right), a "
@@ -106,6 +112,7 @@ struct DeviceRecord {
   uint32_t ordinal = 0;
   bool synthetic = false;
   bool keyboard = false;  // the keyboard/mouse emulation, plays as keyboard_player
+  bool remapped_twin = false;  // a real controller a remapper also shows as a virtual one: left out
   std::string name;
   std::optional<uint32_t> forced_user;  // set by SetDevicePlayer
   // Open-button tracking.
@@ -529,6 +536,9 @@ class MenuInputDriver final : public InputDriver {
       std::lock_guard lock(g_mutex);
       DeviceRecord& record = g_devices[uint64_t(id)];
       record.driver = this;
+      if (record.remapped_twin) {
+        return false;
+      }
       const uint16_t previous = record.last_buttons;
       uint16_t fired_buttons = 0;
       const std::optional<ButtonAction> action = ObserveLocked(record, pad, &fired_buttons);
@@ -611,20 +621,63 @@ class MenuInputDriver final : public InputDriver {
   Clock::time_point last_watch_{};  // guarded by g_mutex
 };
 
+bool NameHas(const std::string& name, const char* part) {
+  return name.find(part) != std::string::npos;
+}
+
+// SDL's guid text has the USB vendor id at characters 8-11, low byte first.
+bool GuidVendorIs(const std::string& guid, const char* vendor) {
+  return guid.size() >= 12 && guid.compare(8, 4, vendor) == 0;
+}
+
+bool IsPlayStationPad(const DeviceInfo& info) {
+  return !info.synthetic &&
+         (GuidVendorIs(info.guid, "4c05") || NameHas(info.name, "DualSense") ||
+          NameHas(info.name, "DualShock") || NameHas(info.name, "PS4 ") ||
+          NameHas(info.name, "PS5 "));
+}
+
+// A virtual pad looks like a real Xbox 360 one; "xinput" as text starts the guid of SDL's XInput
+// devices.
+bool IsXboxPad(const DeviceInfo& info) {
+  return !info.synthetic &&
+         (GuidVendorIs(info.guid, "5e04") || info.guid.rfind("78696e707574", 0) == 0 ||
+          NameHas(info.name, "Xbox") || NameHas(info.name, "XInput"));
+}
+
 // Like the SDK's SlotAssignment (a controller in connection slot N plays as player N, synthetic
 // devices as player 1), except that the keyboard plays as keyboard_player. Keeps each device's
 // slot for the menu.
 class TrackingAssignment final : public rex::input::DeviceAssignment {
  public:
   void OnDevicesChanged(const std::vector<DeviceInfo>& devices) override {
+    // DS4Windows and the like show a PlayStation controller twice: the real one and a virtual Xbox
+    // one, so every press would count for two players (SkylandersCoreOfLight #54). The program is
+    // only looked for when both kinds of controller are there.
+    const bool leave_out_playstation = REXCVAR_GET(controller_hide_remapped) &&
+                                       std::any_of(devices.begin(), devices.end(), IsPlayStationPad) &&
+                                       std::any_of(devices.begin(), devices.end(), IsXboxPad) &&
+                                       skylanders::ControllerRemapperRunning();
     std::lock_guard lock(g_mutex);
     devices_.clear();
     g_connected.clear();
+    uint32_t left_out = 0;
     for (const DeviceInfo& info : devices) {
       DeviceRecord& record = g_devices[uint64_t(info.id)];
-      record.ordinal = info.ordinal;
+      const bool twin = leave_out_playstation && IsPlayStationPad(info);
+      if (twin && !record.remapped_twin) {
+        REXLOG_INFO("Input: {} left out, a remapper also shows it as a virtual controller", info.name);
+      }
+      record.remapped_twin = twin;
       record.synthetic = info.synthetic;
       record.name = info.name;
+      if (twin) {
+        ++left_out;
+        continue;
+      }
+      // The ones after it move up, so the virtual controller plays as player 1. The list is in
+      // ordinal order; synthetic devices share a parked ordinal.
+      record.ordinal = info.synthetic ? info.ordinal : info.ordinal - left_out;
       devices_.push_back(info.id);
       g_connected.push_back(info.id);
     }
