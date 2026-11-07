@@ -34,7 +34,7 @@
 #include <windows.h>
 #endif
 
-REXCVAR_DEFINE_BOOL(discord_presence, false, "General",
+REXCVAR_DEFINE_BOOL(discord_presence, true, "General",
                     "Show the game, the Skylander and the level as your Discord status while the "
                     "Discord app runs on this PC (your Discord friends see it)");
 
@@ -400,10 +400,10 @@ Setting DiscordPresenceSetting() {
   return {"discord_presence", "Discord status", "Discord-Status",
           "Shows on your Discord profile which Skylanders game you play, with which Skylander and "
           "where, while the Discord app runs on this PC.\n"
-          "Your Discord friends see it, so it stays off until you switch it on.",
+          "Your Discord friends see it. Switch it off here if you don't want that.",
           "Zeigt in deinem Discord-Profil, welches Skylanders-Spiel du spielst, mit welchem "
           "Skylander und wo, solange die Discord-App auf diesem PC l\xC3\xA4uft.\n"
-          "Deine Discord-Freunde sehen das, darum bleibt es aus, bis du es einschaltest."};
+          "Deine Discord-Freunde sehen das. Schalte es hier aus, wenn du das nicht willst."};
 }
 
 }  // namespace skylanders
