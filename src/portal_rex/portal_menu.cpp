@@ -225,6 +225,9 @@ enum class Text {
   kQuickSwapTo,
   kQuickSwapNone,
   kImaginatorsToysHint,
+  kPinRecent,
+  kUnpinRecent,
+  kRemoveRecent,
   kCount,
 };
 
@@ -355,6 +358,9 @@ constexpr const char* kEnglish[] = {
     "Senseis, creation crystals and Imaginators' other toys are signed, so the menu can't make them "
     "itself. They show up here once there's a file of the real toy in the figures folder, for "
     "example read from a real portal (portal mode \"hybrid\").",
+    "Pin",
+    "Unpin",
+    "Remove",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -493,6 +499,9 @@ constexpr const char* kGerman[] = {
     "Men\xC3\xBC kann sie nicht selbst erzeugen. Sie erscheinen hier, sobald eine Datei des echten "
     "Spielzeugs im Figurenordner liegt, etwa von einem echten Portal gelesen (Portal-Modus "
     "\"hybrid\").",
+    "Anpinnen",
+    "L\xC3\xB6sen",
+    "Entfernen",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -1044,6 +1053,7 @@ struct Character {
 struct RecentEntry {
   std::vector<std::filesystem::path> paths;
   std::vector<const SkylanderInfo*> figures;
+  bool pinned = false;  // on top of the tab, kept when newer ones come
 };
 
 // A game tab has one row per element; the items tab one row per game.
@@ -1193,9 +1203,15 @@ std::filesystem::path RecentFile(uint32_t user) {
 // The Recent tab keeps this many entries per player, newest first.
 constexpr size_t kMaxRecent = 12;
 
-std::vector<std::vector<std::filesystem::path>> LoadRecentPaths(uint32_t user) {
+// Entries pinned to the top of the Recent tab (R3), one line per entry as in the recent list. A file of its own: the recent list goes on as
+// it is, and the quick swap reads that one (SkylandersCoreOfLight #51).
+std::filesystem::path PinnedFile(uint32_t user) {
+  return FiguresDir() / ("portal_menu_pinned_p" + std::to_string(user + 1) + ".txt");
+}
+
+std::vector<std::vector<std::filesystem::path>> LoadEntries(const std::filesystem::path& file) {
   std::vector<std::vector<std::filesystem::path>> recent;
-  std::ifstream in(RecentFile(user));
+  std::ifstream in(file);
   std::string line;
   while (std::getline(in, line)) {
     std::vector<std::filesystem::path> paths;
@@ -1206,8 +1222,25 @@ std::vector<std::vector<std::filesystem::path>> LoadRecentPaths(uint32_t user) {
     }
     if (!paths.empty()) recent.push_back(std::move(paths));
   }
+  return recent;
+}
+
+std::vector<std::vector<std::filesystem::path>> LoadRecentPaths(uint32_t user) {
+  auto recent = LoadEntries(RecentFile(user));
   if (recent.size() > kMaxRecent) recent.resize(kMaxRecent);  // older files kept 16
   return recent;
+}
+
+void SaveEntries(const std::filesystem::path& file, const std::vector<std::vector<std::filesystem::path>>& entries) {
+  std::ofstream out(file, std::ios::trunc);
+  std::error_code ec;
+  for (const auto& entry : entries) {
+    for (size_t i = 0; i < entry.size(); ++i) {
+      std::filesystem::path rel = std::filesystem::relative(entry[i], FiguresDir(), ec);
+      out << (i ? "|" : "") << PathUtf8(ec ? entry[i] : rel);
+    }
+    out << "\n";
+  }
 }
 
 void AddRecent(uint32_t user, const std::vector<std::filesystem::path>& paths) {
@@ -1221,14 +1254,27 @@ void AddRecent(uint32_t user, const std::vector<std::filesystem::path>& paths) {
   recent.erase(std::remove_if(recent.begin(), recent.end(), shares_file), recent.end());
   recent.insert(recent.begin(), paths);
   if (recent.size() > kMaxRecent) recent.resize(kMaxRecent);
-  std::ofstream out(RecentFile(user), std::ios::trunc);
-  std::error_code ec;
-  for (const auto& entry : recent) {
-    for (size_t i = 0; i < entry.size(); ++i) {
-      std::filesystem::path rel = std::filesystem::relative(entry[i], FiguresDir(), ec);
-      out << (i ? "|" : "") << PathUtf8(ec ? entry[i] : rel);
-    }
-    out << "\n";
+  SaveEntries(RecentFile(user), recent);
+}
+
+// R3 in the Recent tab: on top of the tab, or back to where the recent list has it.
+void TogglePinned(uint32_t user, const std::vector<std::filesystem::path>& paths) {
+  auto pinned = LoadEntries(PinnedFile(user));
+  const auto it = std::find(pinned.begin(), pinned.end(), paths);
+  if (it != pinned.end()) {
+    pinned.erase(it);
+  } else {
+    pinned.push_back(paths);
+  }
+  SaveEntries(PinnedFile(user), pinned);
+}
+
+// L3 in the Recent tab: out of the tab, pinned or not. The figure's file stays.
+void ForgetRecent(uint32_t user, const std::vector<std::filesystem::path>& paths) {
+  for (const auto& file : {RecentFile(user), PinnedFile(user)}) {
+    auto entries = LoadEntries(file);
+    entries.erase(std::remove(entries.begin(), entries.end(), paths), entries.end());
+    SaveEntries(file, entries);
   }
 }
 
@@ -1383,8 +1429,10 @@ class Library {
     recent.title = T(Text::kRecent);
     recent.recent = true;
     tabs_.push_back(recent);
-    for (const auto& paths : LoadRecentPaths(user)) {
+    const auto pinned = LoadEntries(PinnedFile(user));
+    auto add_recent = [&](const std::vector<std::filesystem::path>& paths, bool is_pinned) {
       RecentEntry entry;
+      entry.pinned = is_pinned;
       for (const auto& path : paths) {
         auto it = by_path_.find(PathUtf8(path));
         if (it == by_path_.end() || !it->second->sky) continue;
@@ -1394,6 +1442,10 @@ class Library {
       if (!entry.figures.empty() && known_ids_.contains(entry.figures[0]->id)) {
         recent_.push_back(std::move(entry));
       }
+    };
+    for (const auto& paths : pinned) add_recent(paths, true);
+    for (const auto& paths : LoadRecentPaths(user)) {
+      if (std::find(pinned.begin(), pinned.end(), paths) == pinned.end()) add_recent(paths, false);
     }
     // The game's own tabs, then (with later_versions) the later games that have a version of one
     // of its characters, in release order.
@@ -2506,6 +2558,7 @@ struct Actions {
   bool accept = false, back = false, details = false, lb = false, rb = false, lt = false,
        rt = false;
   bool take_off = false;  // Y: take the item off the portal
+  bool pin = false, forget = false;  // R3, L3: pin or remove the entry in the Recent tab
   bool options = false;   // Start: options (shown games, only my figures, leave the portal)
 
   bool Any() const {
@@ -2524,6 +2577,15 @@ class PadReader {
     a.back = pressed(rex::input::X_INPUT_GAMEPAD_B);
     a.details = pressed(rex::input::X_INPUT_GAMEPAD_X);
     a.take_off = pressed(rex::input::X_INPUT_GAMEPAD_Y);
+    // On release and only alone: both sticks pressed together open the player menu.
+    constexpr uint16_t kSticks = rex::input::X_INPUT_GAMEPAD_LEFT_THUMB | rex::input::X_INPUT_GAMEPAD_RIGHT_THUMB;
+    if (buttons & kSticks) {
+      sticks_seen_ |= buttons & kSticks;
+    } else {
+      a.pin = sticks_seen_ == rex::input::X_INPUT_GAMEPAD_RIGHT_THUMB;
+      a.forget = sticks_seen_ == rex::input::X_INPUT_GAMEPAD_LEFT_THUMB;
+      sticks_seen_ = 0;
+    }
     a.options = pressed(rex::input::X_INPUT_GAMEPAD_START);
     a.lb = pressed(rex::input::X_INPUT_GAMEPAD_LEFT_SHOULDER);
     a.rb = pressed(rex::input::X_INPUT_GAMEPAD_RIGHT_SHOULDER);
@@ -2565,6 +2627,7 @@ class PadReader {
 
  private:
   uint16_t prev_ = 0;
+  uint16_t sticks_seen_ = 0;
   bool prev_lt_ = false, prev_rt_ = false;
   bool held_[4] = {};
   Clock::time_point next_repeat_[4]{};
@@ -2584,6 +2647,8 @@ Actions ReadKeyboard() {
   a.back = once(ImGuiKey_Escape) || once(ImGuiKey_Backspace);
   a.details = once(ImGuiKey_L) || once(ImGuiKey_Tab);
   a.take_off = once(ImGuiKey_P);
+  a.pin = once(ImGuiKey_F);
+  a.forget = once(ImGuiKey_Delete);
   a.options = once(ImGuiKey_O);
   a.lb = once(ImGuiKey_1);
   a.rb = once(ImGuiKey_3);
@@ -2605,6 +2670,8 @@ void Merge(Actions& into, const Actions& from) {
   into.lt |= from.lt;
   into.rt |= from.rt;
   into.take_off |= from.take_off;
+  into.pin |= from.pin;
+  into.forget |= from.forget;
   into.options |= from.options;
 }
 
@@ -3183,6 +3250,19 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     if (a.options) {
       OpenOptions();
+      return;
+    }
+    if (const RecentEntry* entry = SelectedRecent(); entry && (a.pin || a.forget)) {
+      const std::vector<std::filesystem::path> paths = entry->paths;
+      const size_t keep = selected_;
+      if (a.pin) {
+        TogglePinned(user_, paths);
+      } else {
+        ForgetRecent(user_, paths);
+      }
+      RebuildLibrary();
+      // The same place in the list, not back to its start.
+      selected_ = ItemCount() ? std::min(keep, ItemCount() - 1) : 0;
       return;
     }
     // A swapper in Recent: LB changes its top, RB its bottom, the other half stays (the owner's
@@ -3783,6 +3863,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       } else if (SelectedRecentSwapper()) {
         x += Hint(dl, {x, y}, "LB / RB", grey, T(Text::kChangeHalves), false, "1 / 3");
       }
+      if (const RecentEntry* entry = SelectedRecent()) {
+        x += Hint(dl, {x, y}, "R3", grey, T(entry->pinned ? Text::kUnpinRecent : Text::kPinRecent), false, "F");
+        x += Hint(dl, {x, y}, "L3", grey, T(Text::kRemoveRecent), false, "Del");
+      }
       if (current_item_) {
         x += Hint(dl, {x, y}, "Y", Rgba(230, 180, 40), T(Text::kTakeOffItem), true, "P");
       }
@@ -4098,6 +4182,13 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (const OwnedFigure* owned = library_.OwnedAt(entry.paths[0]); owned && owned->stats) {
       const std::string lv = "Lv " + std::to_string(owned->stats->level);
       Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
+    }
+    if (entry.pinned) {
+      // A gold diamond at the top: pinned, nothing pushes it out.
+      const ImVec2 c{(p0.x + p1.x) / 2, p0.y + S(13)};
+      const float r = S(10);
+      dl->AddQuadFilled({c.x, c.y - r}, {c.x + r, c.y}, {c.x, c.y + r}, {c.x - r, c.y}, kGold);
+      dl->AddQuad({c.x, c.y - r}, {c.x + r, c.y}, {c.x, c.y + r}, {c.x - r, c.y}, kInk, S(2));
     }
     if (auto owner = TakenBy(entry)) DrawTaken(dl, a, b, *owner);
   }
