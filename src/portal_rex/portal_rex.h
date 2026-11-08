@@ -117,6 +117,9 @@ void SetRealFigureArrivedHandler(std::function<void(int slot)> handler);
 // overlay. nullptr if portal_mode is not "usb" or no device was found.
 portal::UsbPortal* GetUsbPortal();
 
+// Whether a real portal of any kind (HID, or the Xbox 360 one on WinUSB) is in use right now.
+bool RealPortalConnected();
+
 // Best-effort figure data for a real figure in `slot`, assembled passively from whatever the
 // game's own portal polling has already read (see UsbPortal::CachedFigureData) -- never an
 // active read, cheap enough to call every frame. Returns nullopt if there's no active USB

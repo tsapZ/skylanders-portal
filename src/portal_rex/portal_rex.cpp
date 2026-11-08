@@ -75,6 +75,8 @@ std::atomic<skylanders::portal::UsbPortal*> g_usb_portal{nullptr};
 // A real Xbox 360 portal on WinUSB (portal/usb/xbox360_portal.h), set by the USB mode when no HID
 // portal opens: the game's frames then go to it unchanged, bypassing g_portal and the bridge.
 std::atomic<skylanders::portal::Xbox360Portal*> g_xbox360{nullptr};
+// The hybrid bridge has a real portal of either kind (RealPortalConnected).
+std::atomic<bool> g_bridge_has_real{false};
 
 // Set once a game hook has sent clean speaker PCM (SubmitSpeakerPcm).
 std::atomic<bool> g_speaker_pcm_tap{false};
@@ -116,6 +118,12 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
       return skylanders::portal::kXamSuccess;
     }
     if (skylanders::portal::Xbox360Portal* x360 = LiveXbox360()) {
+      // Portal speaker off: the Xbox 360 portal's speaker frames don't go out (TrapTeamRecomp #22;
+      // the HID portals' audio already stops in UsbHotPlugPortal::WriteAudio).
+      if (buffer.size() > 2 && buffer[0] == 0x0B && buffer[1] == 0x17 &&
+          REXCVAR_GET(portal_audio) == "off") {
+        return skylanders::portal::kXamSuccess;
+      }
       if (buffer.size() >= skylanders::portal::kFrameSize) {
         if (auto command = skylanders::portal::ReportFromFrame(buffer.data())) x360_traffic_.OnCommand(*command);
       }
@@ -349,8 +357,37 @@ class HybridPortal final : public skylanders::portal::PortalDevice {
 
 // Drives the bridge every few milliseconds and keeps looking for the USB portal (once a second)
 // while none is connected; ends when another portal mode takes over.
+// A real Xbox 360 portal (WinUSB) for the hybrid bridge, which speaks reports: the portal's frames
+// are a two-byte header and the report (xbox_frame.h). "Both" only ever looked for the HID portals
+// (TrapTeamRecomp #22). Its own thread queues the answers, so Read never waits.
+class Xbox360BridgeDevice final : public skylanders::portal::PortalDevice {
+ public:
+  explicit Xbox360BridgeDevice(skylanders::portal::Xbox360Portal* x360) : x360_(x360) {}
+
+  void Write(const skylanders::portal::Report& report) override {
+    std::array<uint8_t, skylanders::portal::kFrameSize> frame{};
+    skylanders::portal::FrameFromReport(report, frame.data());
+    x360_->Write(frame);
+  }
+
+  skylanders::portal::Report Read() override {
+    std::array<uint8_t, skylanders::portal::kFrameSize> frame{};
+    uint32_t bytes_read = 0;
+    if (x360_->Read(frame, bytes_read) && bytes_read >= skylanders::portal::kFrameSize) {
+      if (auto report = skylanders::portal::ReportFromFrame(frame.data())) return *report;
+    }
+    return {};
+  }
+
+  bool SeemsDisconnected() const { return x360_->SeemsDisconnected(); }
+
+ private:
+  skylanders::portal::Xbox360Portal* x360_;
+};
+
 void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generation) {
   skylanders::portal::UsbPortal* usb = nullptr;
+  Xbox360BridgeDevice* x360 = nullptr;  // never freed, like every portal
   auto last_attempt = std::chrono::steady_clock::now() - std::chrono::seconds(10);
   while (g_bridge_generation.load() == generation) {
     if (usb && usb->SeemsDisconnected()) {
@@ -358,14 +395,34 @@ void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generat
       usb = nullptr;  // never freed, like every portal
       g_usb_portal.store(nullptr);
     }
-    if (!usb && std::chrono::steady_clock::now() - last_attempt >= std::chrono::seconds(1)) {
+    if (x360 && x360->SeemsDisconnected()) {
+      REXLOG_WARN("Hybrid portal: the Xbox 360 portal seems unplugged; looking for it again");
+      x360 = nullptr;
+    }
+    if (!usb && !x360 && std::chrono::steady_clock::now() - last_attempt >= std::chrono::seconds(1)) {
       last_attempt = std::chrono::steady_clock::now();
       usb = SetUpUsbPortal();
       g_usb_portal.store(usb);
+      if (!usb) {
+        // Not g_xbox360: that would send the game's frames to the portal past the bridge.
+        auto* portal = new skylanders::portal::Xbox360Portal();
+        if (portal->IsOpen()) {
+          x360 = new Xbox360BridgeDevice(portal);
+          REXLOG_INFO("Hybrid portal: Xbox 360 portal found (WinUSB)");
+        } else {
+          delete portal;  // never published, so nothing else could have seen it
+        }
+      }
     }
-    bridge->Step(usb);
+    g_bridge_has_real.store(usb != nullptr || x360 != nullptr);
+    if (usb) {
+      bridge->Step(usb);
+    } else {
+      bridge->Step(x360);
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(4));
   }
+  g_bridge_has_real.store(false);
   bridge->Step(nullptr);  // takes the copies off
 }
 
@@ -768,6 +825,10 @@ void SetRealFigureArrivedHandler(std::function<void(int slot)> handler) {
 }
 
 portal::UsbPortal* GetUsbPortal() { return g_usb_portal.load(); }
+
+bool RealPortalConnected() {
+  return g_usb_portal.load() != nullptr || g_xbox360.load() != nullptr || g_bridge_has_real.load();
+}
 
 std::optional<portal::FigureData> ReadRealFigureBlocks(int slot) {
   portal::UsbPortal* usb = g_usb_portal.load();
