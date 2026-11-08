@@ -5888,7 +5888,8 @@ void AutoOpenPortalMenu(uint32_t user) {
       if (g_menu->user() == user) g_menu->Reveal();
       return;
     }
-    if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal()) return;
+    // With a real portal plugged in the player puts real figures on; the menu opens by hand.
+  if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal() || GetUsbPortal()) return;
     // The player's Skylander already on the portal (put on before the game asked, or left on):
     // the game is in its prompt state for a moment only (about 0.1 s in Imaginators) and then
     // loads it. Opening now lifted the figure while it loaded, the game asked again, and so on
@@ -5902,7 +5903,8 @@ void AutoOpenPortalMenu(uint32_t user) {
         if (!g_app_context || g_auto_open_generation.load() != generation) return;
         g_app_context->CallInUIThread([user, generation] {
           if (g_menu || g_auto_open_generation.load() != generation) return;
-          if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal()) return;
+          // With a real portal plugged in the player puts real figures on; the menu opens by hand.
+  if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal() || GetUsbPortal()) return;
           REXLOG_INFO("Portal menu: the game still asks player {} although a Skylander is on", user + 1);
           OpenAutoMenu(user);
         });
@@ -6045,7 +6047,8 @@ void PlayerSkylanderWantedBack(uint32_t user) {
       ++g_wanted_back_count;
     }
     if (!g_menu) {
-      if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal()) return;
+      // With a real portal plugged in the player puts real figures on; the menu opens by hand.
+  if (!REXCVAR_GET(portal_menu_auto_open) || !GetSoftwarePortal() || GetUsbPortal()) return;
       OpenAutoMenu(user);
     }
     if (g_menu && g_menu->user() == user) g_menu->WantBack(g_wanted_figure);

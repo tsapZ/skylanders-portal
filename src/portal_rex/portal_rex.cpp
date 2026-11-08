@@ -41,10 +41,10 @@
 #include "portal_rex/sdl_audio_sink.h"
 #include "portal_rex/utf8_path.h"
 
-REXCVAR_DEFINE_STRING(portal_mode, "software", "Portal",
-                      "Portal backend: 'software', 'usb' (a real, physical Portal of Power over "
-                      "USB -- no driver changes needed), 'hybrid' (the portal menu and a real "
-                      "portal together), or 'none'")
+REXCVAR_DEFINE_STRING(portal_mode, "hybrid", "Portal",
+                      "Portal backend: 'hybrid' (the default: the portal menu, and a real Portal of "
+                      "Power over USB as soon as one is plugged in), 'software' (the menu only), "
+                      "'usb' (a real portal only -- no driver changes needed), or 'none'")
     .allowed({"software", "usb", "hybrid", "none"});
 REXCVAR_DEFINE_STRING(portal_audio, "auto", "Portal",
                       "Portal speaker audio: 'auto' (the real portal's speaker in usb mode, PC "
