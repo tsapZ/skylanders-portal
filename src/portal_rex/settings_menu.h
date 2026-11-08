@@ -67,6 +67,9 @@ struct Setting {
   // With an action: it runs with the menu left open, and what it changes is saved with Y like the
   // other rows (F4 > Tastatur's "put every key back").
   bool keep_open = false;
+  // Started from Core of Light: a start-up setting the launcher changes, shown greyed with a note
+  // saying so (the portal mode, Core of Light #58).
+  bool launcher_only = false;
 };
 
 struct SettingsPage {

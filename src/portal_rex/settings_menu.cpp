@@ -936,7 +936,9 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     if (a.back) listen_cvar_.clear();
   }
 
-  static bool Enabled(const Setting& s) { return s.enabled_by.empty() || CvarOn(s.enabled_by.c_str()); }
+  static bool Enabled(const Setting& s) {
+    return !s.launcher_only && (s.enabled_by.empty() || CvarOn(s.enabled_by.c_str()));
+  }
 
   // The setting of any page with that cvar (for "only with ... on"), or null.
   static const Setting* FindSetting(const std::string& cvar) {
@@ -1187,7 +1189,11 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
         "Einstellungsdatei).";
     const bool keyboard_help = keyboard_view_ && IsOverview(*s);
     std::string help = keyboard_help ? Tr(kKeyboardHelpEn, kKeyboardHelpDe) : Tr(s->help_en, s->help_de);
-    if (const Setting* needs = Enabled(*s) ? nullptr : FindSetting(s->enabled_by)) {
+    if (s->launcher_only) {
+      help = Tr("Changed in Core of Light: the game's settings, before it starts. ",
+                "Wird in Core of Light ge\xC3\xA4ndert: Einstellungen des Spiels, vor dem Start. ") +
+             help;
+    } else if (const Setting* needs = Enabled(*s) ? nullptr : FindSetting(s->enabled_by)) {
       help = (g_german ? "Nur mit \xE2\x80\x9E" + needs->de + "\xE2\x80\x9C an. " : "Only with \"" + needs->en + "\" on. ") + help;
     }
     if (!help.empty()) {
@@ -1214,7 +1220,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       }
       y += S(54);
     }
-    if (ApplyLater(*s)) {
+    if (ApplyLater(*s) && !s->launcher_only) {  // a launcher-only row can't change here
       const char* text = Pending(*s) ? Tr("Changed: applies at the next start",
                                           "Ge\xC3\xA4ndert: gilt ab dem n\xC3\xA4" "chsten Start")
                                      : Tr("Applies at the next start",
@@ -1526,7 +1532,11 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
     std::vector<SettingsPage> kept;
     for (SettingsPage& page : g_state.pages) {
       if (page.en == "Graphics") continue;
-      std::erase_if(page.settings, [](const Setting& s) { return ApplyLater(s); });
+      // The portal mode stays in sight, greyed: players look for it here (Core of Light #58).
+      for (Setting& s : page.settings) {
+        if (s.cvar == "portal_mode") s.launcher_only = true;
+      }
+      std::erase_if(page.settings, [](const Setting& s) { return ApplyLater(s) && !s.launcher_only; });
       if (!page.settings.empty()) kept.push_back(std::move(page));
     }
     g_state.trimmed = true;
