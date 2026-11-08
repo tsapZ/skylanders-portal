@@ -33,7 +33,8 @@ class SoftwarePortal : public PortalDevice {
   // that instant — even across a swap (PlaceFigure called again on an already-present slot) with
   // no separate, independently-lockable bookkeeping that could ever fall out of step with it.
   bool PlaceFigure(int slot, const FigureData& data,
-                   std::optional<std::filesystem::path> source = std::nullopt);  // false if out of range
+                   std::optional<std::filesystem::path> source = std::nullopt);  // false if out of range,
+                                                                                  // or `source` is in another slot
   bool RemoveFigure(int slot);  // false if out of range or empty; also forgets the source
   bool HasFigure(int slot) const;
   std::optional<FigureData> Figure(int slot) const;

@@ -1,6 +1,7 @@
 #include "portal/software/software_portal.h"
 
 #include <algorithm>
+#include <system_error>
 #include <initializer_list>
 
 namespace skylanders::portal {
@@ -138,10 +139,31 @@ Report SoftwarePortal::StatusReportLocked() {
   return r;
 }
 
+namespace {
+
+// The same file under two spellings (relative and absolute, other case) counts as the same.
+bool SameFigureFile(const std::filesystem::path& a, const std::filesystem::path& b) {
+  if (a == b) return true;
+  std::error_code ec;
+  const bool same = std::filesystem::equivalent(a, b, ec);
+  return !ec && same;
+}
+
+}  // namespace
+
 bool SoftwarePortal::PlaceFigure(int slot, const FigureData& data,
                                  std::optional<std::filesystem::path> source) {
   if (slot < 0 || slot >= kMaxFigures) return false;
   std::lock_guard<std::mutex> lock(mu_);
+  // One file, one slot: two slots on the same file save over each other, and one of them loses its
+  // progress (Core of Light #60, TheBiemGamer). The menus show such a figure as taken; this catches
+  // every other way in. The same slot again (a swap to the same file) is fine.
+  if (source) {
+    for (int other = 0; other < kMaxFigures; ++other) {
+      const Slot& o = slots_[other];
+      if (other != slot && o.present && o.source && SameFigureFile(*o.source, *source)) return false;
+    }
+  }
   Slot& s = slots_[slot];
   s.present = true;
   s.data = data;
