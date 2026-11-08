@@ -524,8 +524,10 @@ skylanders::portal::SoftwarePortal* SetUpSoftwarePortal() {
     BackUpBeforeFirstSave(*source);
     if (skylanders::portal::SaveFigureFileAtomic(*source, data)) {
       REXLOG_INFO("Portal: saved changes back to slot {}'s figure file", slot);
+      skylanders::NoteFigureSave(*source, true);
     } else {
       REXLOG_WARN("Portal: could not save changes back to slot {}'s figure file", slot);
+      skylanders::NoteFigureSave(*source, false);
     }
   });
   // Trace-log every 'Q'/'W' figure block, matching UsbPortal's own research logging, so both

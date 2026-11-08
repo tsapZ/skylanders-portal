@@ -66,6 +66,11 @@ std::filesystem::path SharedFiguresDir(const std::filesystem::path& user_data_ro
 // there is no active software portal or `path` cannot be loaded as a figure.
 bool PlaceFigureFromFile(int slot, const std::filesystem::path& path);
 
+// From any thread: whether saving a figure's changes back to `file` worked. The first failure since
+// the file last saved fine shows a message, so a read-only or locked file doesn't lose progress
+// unnoticed (Core of Light #60). Defined with the portal menu's messages.
+void NoteFigureSave(const std::filesystem::path& file, bool saved);
+
 // Removes the figure from `slot`, if any, and forgets what file it was saving to. Returns false if
 // there is no active software portal or the slot was already empty.
 bool RemoveFigureFromSlot(int slot);

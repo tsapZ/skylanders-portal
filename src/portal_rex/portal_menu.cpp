@@ -2235,7 +2235,7 @@ std::string BackupTime(const std::filesystem::path& backup) {
   return g_german ? day + "." + month + "." + year + ", " + time : year + "-" + month + "-" + day + ", " + time;
 }
 
-void ShowToast(std::string text);
+void ShowToast(std::string text, float seconds = 2.4f);
 
 // The player whose figure is in a slot. Figures placed some other way (start-up figure, the
 // developer tools) belong to player 1.
@@ -5120,13 +5120,13 @@ rex::ui::WindowedAppContext* g_app_context = nullptr;
 // A short message at the top of the screen, fading out after two seconds.
 class Toast final : public rex::ui::ImGuiDialog {
  public:
-  Toast(rex::ui::ImGuiDrawer* drawer, std::string text, std::function<void()> on_done)
-      : ImGuiDialog(drawer), text_(std::move(text)), on_done_(std::move(on_done)) {}
+  Toast(rex::ui::ImGuiDrawer* drawer, std::string text, std::function<void()> on_done, float seconds = 2.4f)
+      : ImGuiDialog(drawer), text_(std::move(text)), on_done_(std::move(on_done)), seconds_(seconds) {}
 
  protected:
   void OnDraw(ImGuiIO& io) override {
     const float t = std::chrono::duration<float>(Clock::now() - start_).count();
-    if (t > 2.4f) {
+    if (t > seconds_) {
       if (on_done_) on_done_();
       on_done_ = nullptr;
       return;
@@ -5154,6 +5154,7 @@ class Toast final : public rex::ui::ImGuiDialog {
  private:
   std::string text_;
   std::function<void()> on_done_;
+  float seconds_;
   Clock::time_point start_ = Clock::now();
 };
 
@@ -5801,11 +5802,11 @@ void ShowPortalOverview() {
   });
 }
 
-void ShowToast(std::string text) {
+void ShowToast(std::string text, float seconds) {
   if (!g_drawer || !g_app_context) return;
   g_toast = std::make_unique<Toast>(g_drawer, std::move(text), [] {
     g_app_context->CallInUIThreadDeferred([] { g_toast.reset(); });
-  });
+  }, seconds);
 }
 
 }  // namespace
@@ -5850,6 +5851,31 @@ std::string PortalFiguresText() {
 }
 
 void ShowPortalToast(std::string text) { ShowToast(std::move(text)); }
+
+void NoteFigureSave(const std::filesystem::path& file, bool saved) {
+  static std::mutex mutex;
+  static std::set<std::string> failing;  // files whose last save failed
+  const std::string key = PathUtf8(file);
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (saved) {
+      failing.erase(key);
+      return;
+    }
+    if (!failing.insert(key).second) return;  // already told, until it saves fine again
+  }
+  if (!g_app_context) return;
+  const std::string name = PathUtf8(file.stem());
+  g_app_context->CallInUIThreadDeferred([name] {
+    ShowToast(menu_draw::GermanText()
+                  ? "Figurdatei \xE2\x80\x9E" + name +
+                        "\xE2\x80\x9C l\xC3\xA4sst sich nicht speichern (schreibgesch\xC3\xBCtzt oder gesperrt?): "
+                        "der Fortschritt geht verloren"
+                  : "Can't save the figure file \"" + name +
+                        "\" (read-only or locked?): its progress won't be kept",
+              7.0f);
+  });
+}
 
 ImTextureID menu_draw::GameArtTexture(const std::string& key) { return ArtTexture(key); }
 
