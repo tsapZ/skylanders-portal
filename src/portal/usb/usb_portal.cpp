@@ -1,5 +1,6 @@
 #include "portal/usb/usb_portal.h"
 
+#include "portal/figure_crypto.h"
 #include "portal/usb/winusb_portal_io.h"
 
 #include <algorithm>
@@ -437,7 +438,10 @@ std::optional<FigureData> UsbPortal::DumpFigure(int slot, std::string* error) {
           }
           continue;
         }
-        if (reply[0] == 0x51 && (reply[1] & 0x10) != 0 && reply[2] == block) {
+        // This slot's reply to this block: a read the game sent for another slot (a trap, say) just
+        // before the dump began can still be answered now, with the same block number (Core of
+        // Light #60, TheBiemGamer).
+        if (reply[0] == 0x51 && (reply[1] & 0x10) != 0 && (reply[1] & 0x0F) == slot && reply[2] == block) {
           matched = true;
           break;
         }
@@ -449,8 +453,14 @@ std::optional<FigureData> UsbPortal::DumpFigure(int slot, std::string* error) {
       }
       std::copy_n(reply.begin() + 3, kBlockSize, data.begin() + block * kBlockSize);
     }
+    // Under the lock: Read() and Write() look at it under the same lock.
+    dumping_slot_.store(-1);
   }
-  dumping_slot_.store(-1);
+  // The header (blocks 0 and 1) carries a CRC over its first 30 bytes: a dump that doesn't match
+  // isn't saved as this figure.
+  if (ok && static_cast<uint16_t>(data[0x1E] | (data[0x1F] << 8)) != FigureCrc16(data.data(), 0x1E)) {
+    return Fail("the figure's header didn't check out (CRC); try again");
+  }
 
   if (!ok) return Fail("the figure was removed or stopped responding during the dump");
   return data;
