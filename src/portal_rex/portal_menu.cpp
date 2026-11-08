@@ -118,6 +118,7 @@ enum class Text {
   kBottom,
   kNewFigure,
   kUsbActive,
+  kUsbNotFound,
   kNoPortal,
   kNothingRecent,
   kChooseVersion,
@@ -244,6 +245,7 @@ constexpr const char* kEnglish[] = {
     "Bottom",
     "New figure, created when placed",
     "The real USB portal is active. Put your figures on it.",
+    "No real portal found. Plug it in; the game keeps looking for it.",
     "No portal is active (portal_mode = none).",
     "Nothing placed yet. Choose a game with LT / RT.",
     "Which version?",
@@ -376,6 +378,7 @@ constexpr const char* kGerman[] = {
     "Unten",
     "Neue Figur, wird beim Auflegen angelegt",
     "Das echte USB-Portal ist aktiv. Stell deine Figuren direkt aufs Portal.",
+    "Kein echtes Portal gefunden. Steck es an; das Spiel sucht weiter danach.",
     "Kein Portal aktiv (portal_mode = none).",
     "Noch nichts aufgelegt. W\xC3\xA4hle mit LT / RT ein Spiel.",
     "Welche Variante?",
@@ -3788,8 +3791,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   }
 
   void DrawMessage(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const Actions& a) {
-    std::string text = GetUsbPortal() || REXCVAR_GET(portal_mode) == "usb" ? T(Text::kUsbActive)
-                                                                           : T(Text::kNoPortal);
+    // Only a portal really there is "active"; Real USB portal only without one says it isn't found.
+    std::string text = RealPortalConnected()                ? T(Text::kUsbActive)
+                       : REXCVAR_GET(portal_mode) == "usb" ? T(Text::kUsbNotFound)
+                                                           : T(Text::kNoPortal);
     if (wants_back_ && wanted_name_.empty()) {
       text = T(Text::kWantedBackAny);
     } else if (wants_back_) {
