@@ -1,5 +1,7 @@
 #include "portal/usb/xbox360_portal.h"
 
+#include "portal/usb/winusb_portal_io.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -48,65 +50,10 @@ std::string Utf8(const wchar_t* text) {
   return rex::string::to_utf8(std::u16string_view(reinterpret_cast<const char16_t*>(text)));
 }
 
-// The device interface path of the first present 1430:1F17 that has the WinUSB driver, or empty.
-// Zadig (like any WinUSB install) records the interface GUID in the device's registry key as
-// DeviceInterfaceGUIDs (or DeviceInterfaceGUID); the path comes from that interface.
-std::wstring FindWinUsbPortalPath() {
-  HDEVINFO devices = SetupDiGetClassDevsW(nullptr, L"USB", nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
-  if (devices == INVALID_HANDLE_VALUE) return {};
-  std::wstring path;
-  SP_DEVINFO_DATA info{};
-  info.cbSize = sizeof(info);
-  for (DWORD i = 0; path.empty() && SetupDiEnumDeviceInfo(devices, i, &info); ++i) {
-    wchar_t ids[512] = {};
-    wchar_t service[64] = {};
-    if (!SetupDiGetDeviceRegistryPropertyW(devices, &info, SPDRP_HARDWAREID, nullptr, reinterpret_cast<PBYTE>(ids),
-                                           sizeof(ids) - 2 * sizeof(wchar_t), nullptr) ||
-        wcsstr(ids, L"VID_1430&PID_1F17") == nullptr) {
-      continue;
-    }
-    SetupDiGetDeviceRegistryPropertyW(devices, &info, SPDRP_SERVICE, nullptr, reinterpret_cast<PBYTE>(service),
-                                      sizeof(service) - sizeof(wchar_t), nullptr);
-    if (_wcsicmp(service, L"WinUSB") != 0) continue;
-    HKEY key = SetupDiOpenDevRegKey(devices, &info, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
-    if (key == INVALID_HANDLE_VALUE) continue;
-    wchar_t guid_text[512] = {};
-    DWORD size = sizeof(guid_text) - 2 * sizeof(wchar_t);
-    DWORD type = 0;
-    LSTATUS status = RegQueryValueExW(key, L"DeviceInterfaceGUIDs", nullptr, &type,
-                                      reinterpret_cast<LPBYTE>(guid_text), &size);
-    if (status != ERROR_SUCCESS) {
-      size = sizeof(guid_text) - 2 * sizeof(wchar_t);
-      status = RegQueryValueExW(key, L"DeviceInterfaceGUID", nullptr, &type, reinterpret_cast<LPBYTE>(guid_text),
-                                &size);
-    }
-    RegCloseKey(key);
-    GUID guid{};
-    if (status != ERROR_SUCCESS || FAILED(CLSIDFromString(guid_text, &guid))) continue;  // the first GUID
-    HDEVINFO interfaces = SetupDiGetClassDevsW(&guid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-    if (interfaces == INVALID_HANDLE_VALUE) continue;
-    SP_DEVICE_INTERFACE_DATA interface_data{};
-    interface_data.cbSize = sizeof(interface_data);
-    if (SetupDiEnumDeviceInterfaces(interfaces, nullptr, &guid, 0, &interface_data)) {
-      DWORD needed = 0;
-      SetupDiGetDeviceInterfaceDetailW(interfaces, &interface_data, nullptr, 0, &needed, nullptr);
-      std::vector<uint8_t> detail_buffer(needed + sizeof(wchar_t));
-      auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(detail_buffer.data());
-      detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
-      if (needed && SetupDiGetDeviceInterfaceDetailW(interfaces, &interface_data, detail, needed, nullptr, nullptr)) {
-        path = detail->DevicePath;
-      }
-    }
-    SetupDiDestroyDeviceInfoList(interfaces);
-  }
-  SetupDiDestroyDeviceInfoList(devices);
-  return path;
-}
-
 }  // namespace
 
 Xbox360Portal::Xbox360Portal() {
-  const std::wstring path = FindWinUsbPortalPath();
+  const std::wstring path = FindWinUsbDevicePath(L"VID_1430&PID_1F17");
   if (path.empty()) return;
   HANDLE file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);

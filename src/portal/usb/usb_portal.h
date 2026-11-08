@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include <memory>
+
 #include <hidapi.h>
 
 #include "portal/audio.h"
@@ -17,6 +19,8 @@
 #include "portal/traffic_log.h"
 
 namespace skylanders::portal {
+
+class WinUsbPortalIo;
 
 // A small set of VID/PID pairs known to be a real Skylanders Portal of Power, matching Cemu's own
 // nsyshid whitelist for this device family (read for this fact only, not copied code).
@@ -50,7 +54,7 @@ class UsbPortal final : public PortalDevice {
   UsbPortal(const UsbPortal&) = delete;
   UsbPortal& operator=(const UsbPortal&) = delete;
 
-  bool IsOpen() const { return device_ != nullptr; }
+  bool IsOpen() const { return device_ != nullptr || winusb_ != nullptr; }
 
   void Write(const Report& report) override;
   Report Read() override;
@@ -114,6 +118,9 @@ class UsbPortal final : public PortalDevice {
   PortalTrafficLog traffic_;
 
   hid_device* device_ = nullptr;
+  // Instead of device_: a 1430:0150 portal on the WinUSB driver (Zadig, for Dolphin or Cemu; Core of
+  // Light #58), which hidapi can't open. Same reports, see winusb_portal_io.h.
+  std::unique_ptr<WinUsbPortalIo> winusb_;
   uint16_t vendor_id_ = 0;   // of the opened device, for the log
   uint16_t product_id_ = 0;
   // The first few raw commands and replies go to the log (TrapTeamRecomp #19: an Xbox 360
