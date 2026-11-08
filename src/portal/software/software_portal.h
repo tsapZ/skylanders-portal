@@ -70,7 +70,16 @@ class SoftwarePortal : public PortalDevice {
     int reports_left = 0;  // status reports still to show kAdded
     FigureData data{};
     std::optional<std::filesystem::path> source;
+    // A swap onto this slot while the game watches (Core of Light #60): the old figure is reported
+    // as removing for one status report, its writes still going to its own file, then this one
+    // comes in as added.
+    bool swap_pending = false;
+    FigureData next_data{};
+    std::optional<std::filesystem::path> next_source;
   };
+
+  // Puts a pending swap's figure into the slot (as added while active).
+  void ApplySwapLocked(Slot& s);
 
   Report StatusReportLocked();
 

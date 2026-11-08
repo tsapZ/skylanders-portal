@@ -49,7 +49,10 @@ void SoftwarePortal::Write(const Report& in) {
             }
           }
         } else if (!activate) {
-          for (Slot& s : slots_) s.state = SlotState::kEmpty;  // figures stay; just not reported
+          for (Slot& s : slots_) {
+            if (s.swap_pending) ApplySwapLocked(s);  // nobody watches: the swap happens at once
+            s.state = SlotState::kEmpty;  // figures stay; just not reported
+          }
         }
         active_ = activate;
         replies_.push_back(MakeReport({0x41, in[1], 0xFF, 0x77}));
@@ -133,10 +136,29 @@ Report SoftwarePortal::StatusReportLocked() {
     if (s.state == SlotState::kAdded) {
       if (--s.reports_left <= 0) s.state = SlotState::kReady;
     } else if (s.state == SlotState::kRemoving) {
-      s.state = SlotState::kEmpty;
+      if (s.swap_pending) {
+        ApplySwapLocked(s);  // the old figure was reported as removing: now the new one
+      } else {
+        s.state = SlotState::kEmpty;
+      }
     }
   }
   return r;
+}
+
+void SoftwarePortal::ApplySwapLocked(Slot& s) {
+  s.swap_pending = false;
+  s.present = true;
+  s.data = s.next_data;
+  s.source = std::move(s.next_source);
+  s.next_data = FigureData{};
+  s.next_source.reset();
+  if (active_) {
+    s.state = SlotState::kAdded;
+    s.reports_left = kAddedReports;
+  } else {
+    s.state = SlotState::kEmpty;
+  }
 }
 
 namespace {
@@ -162,9 +184,22 @@ bool SoftwarePortal::PlaceFigure(int slot, const FigureData& data,
     for (int other = 0; other < kMaxFigures; ++other) {
       const Slot& o = slots_[other];
       if (other != slot && o.present && o.source && SameFigureFile(*o.source, *source)) return false;
+      if (other != slot && o.swap_pending && o.next_source && SameFigureFile(*o.next_source, *source)) return false;
     }
   }
   Slot& s = slots_[slot];
+  // A swap while the game watches: writes it still sends for the old figure (right after a villain
+  // capture, say) would land in the new figure's file (Core of Light #60, TheBiemGamer). The old one
+  // is reported as removing for one status report first, its writes still going to its own file.
+  if (active_ && s.present) {
+    s.swap_pending = true;
+    s.next_data = data;
+    s.next_source = std::move(source);
+    s.state = SlotState::kRemoving;
+    return true;
+  }
+  s.swap_pending = false;
+  s.next_source.reset();
   s.present = true;
   s.data = data;
   s.source = std::move(source);
@@ -185,6 +220,9 @@ bool SoftwarePortal::RemoveFigure(int slot) {
   s.present = false;
   s.data = FigureData{};
   s.source.reset();
+  s.swap_pending = false;
+  s.next_data = FigureData{};
+  s.next_source.reset();
   s.state = active_ ? SlotState::kRemoving : SlotState::kEmpty;
   return true;
 }

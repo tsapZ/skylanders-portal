@@ -363,6 +363,42 @@ int main() {
     CHECK(sources_seen[3] == path_b);
   }
 
+  // A swap while the game watches the portal (Core of Light #60): the old figure is reported as
+  // removing for one status report, a late write still goes to the old figure's own file, then the
+  // new figure comes in as added and takes the writes.
+  {
+    SoftwarePortal p;
+    std::vector<std::optional<std::filesystem::path>> sources_seen;
+    p.SetWriteCallback([&](int, const FigureData&, const std::optional<std::filesystem::path>& source) {
+      sources_seen.push_back(source);
+    });
+    const std::filesystem::path path_a = "figure_a.dump";
+    const std::filesystem::path path_b = "figure_b.dump";
+    p.Write(Cmd({'A', 0x01}));
+    p.Read();  // the 'A' reply
+    p.PlaceFigure(0, pattern(), path_a);
+    for (int i = 0; i < 20; ++i) p.Read();  // past the "added" reports
+    p.PlaceFigure(0, pattern(), path_b);  // swap
+    CHECK(p.Source(0) == path_a);         // still the old figure until it was reported gone
+    p.Write(Cmd({'W', 0x00, 0x01}));      // a late write meant for the old figure
+    p.Read();                             // its reply
+    CHECK(sources_seen.size() == 1 && sources_seen[0] == path_a);
+    Report gone = p.Read();
+    CHECK(gone[0] == 0x53 && (gone[1] & 0x03) == 0x02);  // slot 0 removing
+    Report added = p.Read();
+    CHECK(added[0] == 0x53 && (added[1] & 0x03) == 0x03);  // slot 0 added: the new figure
+    CHECK(p.Source(0) == path_b);
+    p.Write(Cmd({'W', 0x00, 0x01}));
+    p.Read();
+    CHECK(sources_seen.size() == 2 && sources_seen[1] == path_b);
+    // The same file can't go into a second slot, not even while a swap to it is pending.
+    p.PlaceFigure(1, pattern(), path_a);
+    for (int i = 0; i < 20; ++i) p.Read();
+    p.PlaceFigure(1, pattern(), path_b);  // path_b is in slot 0
+    CHECK(p.Source(1) == path_a);
+    CHECK(!p.PlaceFigure(2, pattern(), path_a));
+  }
+
   // The overlay thread and the game thread use the portal at the same time.
   {
     SoftwarePortal p;
