@@ -54,6 +54,15 @@ void RealPortalBridge::Log(const std::string& text) const {
   if (options_.log) options_.log(text);
 }
 
+// Ready first; activate once the ready is answered (Handle): a portal just plugged in can miss an A
+// sent right after the R (Core of Light #62, TheBiemGamer), and then stays switched off.
+void RealPortalBridge::SetUpPortal() {
+  pending_.reset();
+  wake_ = Wake::kReady;
+  last_alive_ = Clock::now();
+  real_->Write(Make({'R'}));
+}
+
 void RealPortalBridge::Step(PortalDevice* real) {
   if (real != real_) {
     for (int slot = 0; slot < kMaxFigures; ++slot) {
@@ -63,8 +72,8 @@ void RealPortalBridge::Step(PortalDevice* real) {
     pending_.reset();
     if (real_) {
       // Ready, then activate: the portal then reports its figures, each as "added".
-      real_->Write(Make({'R'}));
-      real_->Write(Make({'A', 0x01}));
+      restart_logged_ = false;
+      SetUpPortal();
       Log("Hybrid portal: real portal connected");
     }
   }
@@ -73,6 +82,16 @@ void RealPortalBridge::Step(PortalDevice* real) {
     const Report report = real_->Read();
     if (report[0] == 0) break;
     Handle(report);
+  }
+  // No sign of an active portal for a while (it answered R but missed A, or lost power): set it up
+  // again. A busy portal sends no status while it answers block reads, so those replies count too.
+  if (Clock::now() - last_alive_ > options_.restart_after) {
+    if (!restart_logged_) {
+      Log("Hybrid portal: the real portal isn't switched on; setting it up again");
+      restart_logged_ = true;
+    }
+    SetUpPortal();
+    return;
   }
   if (pending_ && Clock::now() - pending_->sent > kReplyTimeout) {
     const Command timed_out = *pending_;
@@ -99,10 +118,30 @@ void RealPortalBridge::Step(PortalDevice* real) {
 
 void RealPortalBridge::Handle(const Report& report) {
   switch (report[0]) {
+    case 0x52:  // ready answered: now activate
+      last_alive_ = Clock::now();
+      if (wake_ == Wake::kReady) {
+        wake_ = Wake::kActivate;
+        real_->Write(Make({'A', 0x01}));
+      }
+      break;
+    case 0x41:  // activate answered: the portal is on; its lights again
+      last_alive_ = Clock::now();
+      if (wake_ == Wake::kActivate && report[1] != 0) {
+        wake_ = Wake::kActive;
+        std::lock_guard lock(mu_);
+        for (auto& [key, light] : lights_) light.second = true;
+      }
+      break;
     case 0x53:
+      // Until A is answered a status may be a stale one from a portal still on from an earlier run;
+      // reading on it, the portal refused and the figure waited until it was lifted (#62).
+      if (wake_ != Wake::kActive) break;
+      if (report[6] != 0) last_alive_ = Clock::now();
       HandleStatus(report);
       break;
     case 0x51: {  // a block read: 51, slot | 10 if a figure is there, block, 16 bytes
+      last_alive_ = Clock::now();
       if (!pending_ || pending_->cmd != 'Q') break;
       const int slot = report[1] & 0x0F;
       const int block = report[2];
@@ -119,6 +158,7 @@ void RealPortalBridge::Handle(const Report& report) {
       break;
     }
     case 0x57: {  // a block write: 57, slot | 10 if it was written, block
+      last_alive_ = Clock::now();
       if (!pending_ || pending_->cmd != 'W') break;
       const int slot = report[1] & 0x0F;
       const int block = report[2];
@@ -159,6 +199,7 @@ void RealPortalBridge::HandleStatus(const Report& report) {
 }
 
 void RealPortalBridge::SendNext() {
+  if (wake_ != Wake::kActive) return;  // nothing goes out before the portal is on
   // Writes first, so the real figure keeps up with the game; then figures still being read. The
   // write goes out after the lock is released: the game's thread takes it for OnEmulatedWrite.
   std::optional<Report> write;
@@ -186,9 +227,13 @@ void RealPortalBridge::SendNext() {
   std::optional<Report> light;
   {
     std::lock_guard lock(mu_);
-    if (light_ && Clock::now() - last_light_ >= kLightInterval) {
-      light = light_;
-      light_.reset();
+    if (Clock::now() - last_light_ >= kLightInterval) {
+      for (auto& [key, entry] : lights_) {
+        if (!entry.second) continue;
+        light = entry.first;
+        entry.second = false;
+        break;
+      }
     }
   }
   if (light) {
@@ -206,6 +251,21 @@ void RealPortalBridge::Arrived(int real_slot) {
     std::error_code ec;
     std::filesystem::create_directories(options_.backup_dir, ec);
     s.source = options_.backup_dir / (name + " " + Hex(s.uid) + ".dump");
+    // Its backup file already on the emulated portal through the menu (it lists that folder): the
+    // toy would take over that slot and the game's writes from another state would go onto it
+    // (#62). Left out, before the file in use is renamed or saved over.
+    for (int slot = 0; slot < kMaxFigures; ++slot) {
+      const std::optional<std::filesystem::path> in_use = emulated_->Source(slot);
+      std::error_code same_ec;
+      if (in_use && (*in_use == s.source || std::filesystem::equivalent(*in_use, s.source, same_ec))) {
+        s.phase = RealSlot::Phase::kFailed;
+        s.source.clear();
+        Log("Hybrid portal: " + name + "'s backup file is on the portal through the menu; the toy is "
+            "left out until that is taken off and the toy put on again");
+        if (options_.on_backup_in_use) options_.on_backup_in_use(name);
+        return;
+      }
+    }
     // A backup with other data (played from the portal menu meanwhile, or an older state) is kept
     // under another name rather than overwritten.
     if (std::filesystem::exists(s.source)) {
@@ -330,8 +390,11 @@ void RealPortalBridge::OnEmulatedWrite(int emulated_slot, const FigureData& data
 }
 
 void RealPortalBridge::OnLight(const Report& report) {
+  if (report[0] != 'C' && report[0] != 'J' && report[0] != 'L') return;
+  // C sets the whole portal; J (a side's colour with a fade) and L (the trap light) say which side.
+  const uint16_t key = uint16_t(report[0] << 8) | (report[0] == 'C' ? 0 : report[1]);
   std::lock_guard lock(mu_);
-  light_ = report;
+  lights_[key] = {report, true};
 }
 
 std::vector<uint32_t> RealPortalBridge::RealUids() const {

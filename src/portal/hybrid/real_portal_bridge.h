@@ -9,7 +9,7 @@
 //     (never block 0 or 1 or a sector trailer, which hold the tag's identity and keys);
 //   - lifting the figure off the real portal takes the copy off; a copy the portal menu lifted is
 //     followed by its source path, so it is written again once the menu puts it back;
-//   - the game's light command goes on to the real portal.
+//   - the game's light commands (C, and Trap Team's J and L) go on to the real portal.
 // No ReXGlue dependency: tested with a second SoftwarePortal standing in for the real one.
 
 #include <array>
@@ -18,6 +18,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -37,6 +38,12 @@ class RealPortalBridge {
     std::function<void(const std::string&)> log;  // optional
     // A copy was put into this emulated slot; called on the bridge's thread.
     std::function<void(int emulated_slot)> on_arrived;
+    // A toy was left out because its backup file is already on the emulated portal through the
+    // portal menu (its name); called on the bridge's thread. Optional.
+    std::function<void(const std::string& name)> on_backup_in_use;
+    // With no sign of an active real portal for this long (a status saying active, a reply), it is
+    // set up again (R, then A): a portal can miss the A right after it is plugged in.
+    std::chrono::milliseconds restart_after{1000};
   };
 
   RealPortalBridge(SoftwarePortal* emulated, Options options);
@@ -50,8 +57,12 @@ class RealPortalBridge {
   // changed, for writing to the real figure.
   void OnEmulatedWrite(int emulated_slot, const FigureData& data);
 
-  // The game's light command ('C') for the portal; the newest one goes to the real portal.
+  // The game's light commands ('C', and Trap Team's 'J' and 'L') for the portal: the newest per
+  // command and side goes to the real portal once it is active, and again after it is set up anew.
   void OnLight(const Report& report);
+
+  // Waiting for the real portal's reply to a command: the caller polls again soon instead of sleeping.
+  bool Busy() const { return pending_.has_value() || wake_ != Wake::kActive; }
 
   // UIDs (the first four bytes of block 0) of the figures read from the real portal now.
   std::vector<uint32_t> RealUids() const;
@@ -62,6 +73,8 @@ class RealPortalBridge {
 
  private:
   using Clock = std::chrono::steady_clock;
+  // Setting the real portal up: R sent (waiting for its reply), then A (waiting), then active.
+  enum class Wake { kReady, kActivate, kActive };
 
   struct RealSlot {
     enum class Phase { kEmpty, kReading, kMirrored, kFailed } phase = Phase::kEmpty;
@@ -85,6 +98,7 @@ class RealPortalBridge {
   };
 
   void Log(const std::string& text) const;
+  void SetUpPortal();
   void Handle(const Report& report);
   void HandleStatus(const Report& report);
   void SendNext();
@@ -101,6 +115,9 @@ class RealPortalBridge {
   std::array<RealSlot, kMaxFigures> slots_{};
   std::optional<Command> pending_;
   Clock::time_point last_light_{};
+  Wake wake_ = Wake::kActive;
+  Clock::time_point last_alive_{};  // the last sign of an active real portal
+  bool restart_logged_ = false;
 
   // Shared with OnEmulatedWrite / OnLight / the queries (any thread).
   mutable std::mutex mu_;
@@ -109,7 +126,9 @@ class RealPortalBridge {
   std::array<uint32_t, kMaxFigures> uid_{};
   std::array<bool, kMaxFigures> mirrored_{};
   std::deque<PendingWrite> writes_;
-  std::optional<Report> light_;
+  // The newest light per command and side (C: one, J / L: per side byte), and whether it still has
+  // to go out.
+  std::map<uint16_t, std::pair<Report, bool>> lights_;
 };
 
 }  // namespace skylanders::portal

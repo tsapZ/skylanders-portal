@@ -71,6 +71,11 @@ bool PlaceFigureFromFile(int slot, const std::filesystem::path& path);
 // unnoticed (Core of Light #60). Defined with the portal menu's messages.
 void NoteFigureSave(const std::filesystem::path& file, bool saved);
 
+// From any thread: a real toy was left out in hybrid mode because its backup file is already on the
+// portal through the menu (Core of Light #62); shows a message. Defined with the portal menu's
+// messages.
+void NoteRealToyLeftOut(const std::string& name);
+
 // Removes the figure from `slot`, if any, and forgets what file it was saving to. Returns false if
 // there is no active software portal or the slot was already empty.
 bool RemoveFigureFromSlot(int slot);

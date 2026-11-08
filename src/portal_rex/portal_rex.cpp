@@ -394,7 +394,7 @@ class HybridPortal final : public skylanders::portal::PortalDevice {
 
   void Write(const skylanders::portal::Report& report) override {
     software_->Write(report);
-    if (report[0] == 'C') bridge_->OnLight(report);
+    if (report[0] == 'C' || report[0] == 'J' || report[0] == 'L') bridge_->OnLight(report);
   }
   void WriteAudio(std::span<const int16_t> pcm) override { software_->WriteAudio(pcm); }
   skylanders::portal::Report Read() override {
@@ -475,7 +475,13 @@ void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generat
     } else {
       bridge->Step(x360);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(4));
+    // Waiting for a reply: poll again at once (a 4 ms sleep is ~15 ms on Windows' default timer, per
+    // block of a figure being read; #62). Otherwise the status reports come every few milliseconds.
+    if (bridge->Busy()) {
+      std::this_thread::yield();
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(4));
+    }
   }
   g_bridge_has_real.store(false);
   bridge->Step(nullptr);  // takes the copies off
@@ -604,6 +610,7 @@ void SwitchPortalMode(std::string_view mode_text) {
     skylanders::portal::RealPortalBridge::Options options;
     if (!dir_utf8.empty()) options.backup_dir = Utf8ToPath(dir_utf8) / "real";
     options.log = [](const std::string& text) { REXLOG_INFO("{}", text); };
+    options.on_backup_in_use = [](const std::string& name) { skylanders::NoteRealToyLeftOut(name); };
     options.on_arrived = [](int slot) {
       std::function<void(int)> handler;
       {

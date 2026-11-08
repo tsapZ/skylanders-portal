@@ -5852,6 +5852,18 @@ std::string PortalFiguresText() {
 
 void ShowPortalToast(std::string text) { ShowToast(std::move(text)); }
 
+void NoteRealToyLeftOut(const std::string& name) {
+  if (!g_app_context) return;
+  g_app_context->CallInUIThreadDeferred([name] {
+    ShowToast(menu_draw::GermanText()
+                  ? name + " steht schon \xC3\xBC" "ber das Men\xC3\xBC auf dem Portal: dort herunternehmen, "
+                           "dann die Figur neu auflegen"
+                  : name + " is already on the portal through the menu: take it off there, then put the "
+                           "toy on again",
+              7.0f);
+  });
+}
+
 void NoteFigureSave(const std::filesystem::path& file, bool saved) {
   static std::mutex mutex;
   static std::set<std::string> failing;  // files whose last save failed

@@ -2,8 +2,10 @@
 // talks to it with the real portal's commands, which SoftwarePortal answers the same way.
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <thread>
 #include <initializer_list>
 #include <optional>
 #include <string>
@@ -47,6 +49,48 @@ void GameWrite(SoftwarePortal& emulated, int slot, int block, uint8_t fill) {
 bool BlockIs(const FigureData& data, int block, uint8_t fill) {
   return std::all_of(data.begin() + block * kBlockSize, data.begin() + (block + 1) * kBlockSize,
                      [&](uint8_t b) { return b == fill; });
+}
+
+// The real portal with a few of a real one's habits (Core of Light #62): it can miss the first A,
+// send a stale "figure present" status before it is set up, and it keeps what was sent to it.
+class Habits final : public PortalDevice {
+ public:
+  explicit Habits(SoftwarePortal* inner) : inner_(inner) {}
+  void Write(const Report& report) override {
+    sent.push_back(report);
+    if (report[0] == 'A' && miss_first_activate) {
+      miss_first_activate = false;
+      return;
+    }
+    inner_->Write(report);
+  }
+  Report Read() override {
+    if (stale_status) {
+      stale_status = false;
+      Report status{};
+      status[0] = 0x53;
+      status[1] = 0x01;  // slot 0 present
+      status[6] = 0x01;  // active
+      return status;
+    }
+    return inner_->Read();
+  }
+  std::vector<Report> sent;
+  bool miss_first_activate = false;
+  bool stale_status = false;
+
+ private:
+  SoftwarePortal* inner_;
+};
+
+// Steps for a while, for the bridge's time-based rules. Not sleeping between them: a 1 ms sleep is
+// about 15 ms on Windows' default timer, too few steps to read a figure (one block a step).
+void RunFor(RealPortalBridge& bridge, PortalDevice* real, std::chrono::milliseconds total) {
+  const auto end = std::chrono::steady_clock::now() + total;
+  while (std::chrono::steady_clock::now() < end) {
+    bridge.Step(real);
+    std::this_thread::yield();
+  }
 }
 
 }  // namespace
@@ -155,6 +199,100 @@ int main() {
     Run(bridge, &real);
     CHECK(LoadFigureFile(backup) == chop);
     CHECK(LoadFigureFile(dir / "Chop Chop 44332211 before.dump") == played);
+  }
+
+  // #62 1: a portal that misses the first A stays switched off; with no sign of an active portal the
+  // bridge sets it up again, and the figure is read.
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    real.miss_first_activate = true;
+    RealPortalBridge::Options options{dir, nullptr, nullptr};
+    options.restart_after = std::chrono::milliseconds(20);
+    RealPortalBridge bridge(&emulated, options);
+    inner.PlaceFigure(0, chop);
+    RunFor(bridge, &real, std::chrono::milliseconds(300));
+    CHECK(FirstFigure(emulated) == kMaxFigures - 1);
+    // A goes out only after R is answered, and again after the restart.
+    const auto activates = std::count_if(real.sent.begin(), real.sent.end(),
+                                         [](const Report& r) { return r[0] == 'A'; });
+    CHECK(activates >= 2);
+    CHECK(real.sent.size() >= 2 && real.sent[0][0] == 'R' && real.sent[1][0] == 'A');
+  }
+
+  // #62 2: a stale "figure present" status before the portal is set up doesn't start a read (the
+  // portal refused it three times and the figure waited until it was lifted).
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    real.stale_status = true;
+    real.miss_first_activate = true;  // so the portal isn't on when the stale status comes
+    RealPortalBridge::Options options{dir, nullptr, nullptr};
+    options.restart_after = std::chrono::milliseconds(20);
+    RealPortalBridge bridge(&emulated, options);
+    inner.PlaceFigure(0, chop);
+    RunFor(bridge, &real, std::chrono::milliseconds(300));
+    CHECK(FirstFigure(emulated) == kMaxFigures - 1);
+    // The first block read goes out only after the second (answered) A.
+    std::vector<size_t> activates;
+    size_t first_read = real.sent.size();
+    for (size_t i = 0; i < real.sent.size(); ++i) {
+      if (real.sent[i][0] == 'A') activates.push_back(i);
+      if (real.sent[i][0] == 'Q' && first_read == real.sent.size()) first_read = i;
+    }
+    CHECK(activates.size() >= 2 && first_read > activates[1]);
+  }
+
+  // #62 3: C, J and L go to the real portal once it is on, the newest per command and side.
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+    bridge.OnLight(Cmd({'J', 0x00, 0x10, 0x00, 0x00}));  // left, replaced below
+    bridge.OnLight(Cmd({'J', 0x00, 0xFF, 0xC8, 0x00}));  // left, the newest
+    bridge.OnLight(Cmd({'J', 0x01, 0x00, 0xFF, 0x00}));  // right
+    bridge.OnLight(Cmd({'L', 0x00, 0x01}));              // trap light
+    bridge.OnLight(Cmd({'C', 0x00, 0x00, 0xFF}));
+    RunFor(bridge, &real, std::chrono::milliseconds(700));
+    std::vector<Report> lights;
+    size_t activate_at = real.sent.size();
+    for (size_t i = 0; i < real.sent.size(); ++i) {
+      const Report& r = real.sent[i];
+      if (r[0] == 'A' && activate_at == real.sent.size()) activate_at = i;
+      if (r[0] == 'C' || r[0] == 'J' || r[0] == 'L') {
+        CHECK(i > activate_at);  // never before the portal is on
+        lights.push_back(r);
+      }
+    }
+    CHECK(lights.size() == 4);
+    CHECK(std::count_if(lights.begin(), lights.end(),
+                        [](const Report& r) { return r[0] == 'J' && r[1] == 0 && r[2] == 0xFF; }) == 1);
+    CHECK(std::none_of(lights.begin(), lights.end(),
+                       [](const Report& r) { return r[0] == 'J' && r[1] == 0 && r[2] == 0x10; }));
+  }
+
+  // #62 4: a toy whose backup file is already on the emulated portal through the menu is left out,
+  // and that file isn't renamed or saved over.
+  {
+    SoftwarePortal real, emulated;
+    std::vector<std::string> left_out;
+    RealPortalBridge::Options options{dir, nullptr, nullptr};
+    options.on_backup_in_use = [&](const std::string& name) { left_out.push_back(name); };
+    RealPortalBridge bridge(&emulated, options);
+    FigureData played = chop;
+    played[8 * kBlockSize] ^= 0x55;
+    const std::filesystem::path backup = dir / "Chop Chop 44332211.dump";
+    std::filesystem::remove(dir / "Chop Chop 44332211 before.dump");
+    CHECK(SaveFigureFileAtomic(backup, played));
+    emulated.PlaceFigure(2, played, backup);  // loaded through the menu
+    real.PlaceFigure(0, chop);
+    Run(bridge, &real);
+    CHECK(left_out.size() == 1 && left_out[0] == "Chop Chop");
+    CHECK(!emulated.HasFigure(kMaxFigures - 1));
+    CHECK(emulated.Source(2) == backup);
+    CHECK(LoadFigureFile(backup) == played);
+    CHECK(!std::filesystem::exists(dir / "Chop Chop 44332211 before.dump"));
+    CHECK(bridge.RealUids().empty());
   }
 
   std::filesystem::remove_all(dir);
