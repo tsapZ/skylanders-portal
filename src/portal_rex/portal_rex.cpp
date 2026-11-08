@@ -265,6 +265,14 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
 
   void Write(const skylanders::portal::Report& report) override {
     MaybeReconnect();
+    // The game's last ready ('R') and activate ('A') commands, for a portal plugged back in.
+    if (report[0] == 'R') {
+      last_ready_ = report;
+      have_ready_ = true;
+    } else if (report[0] == 'A') {
+      last_activate_ = report;
+      have_activate_ = true;
+    }
     if (current_) current_->Write(report);
   }
 
@@ -274,8 +282,36 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
 
   skylanders::portal::Report Read() override {
     MaybeReconnect();
-    skylanders::portal::Report report =
-        current_ ? current_->Read() : skylanders::portal::Report{};
+    if (!current_) {
+      if (!was_connected_) return skylanders::portal::Report{};
+      // Unplugged: every slot empty, so the figures leave the game instead of staying in it with
+      // nothing behind them (Core of Light #60, TheBiemGamer).
+      skylanders::portal::Report empty{};
+      empty[0] = 0x53;
+      empty[5] = unplugged_counter_++;
+      empty[6] = 1;
+      return empty;
+    }
+    skylanders::portal::Report report = current_->Read();
+    // The answers to the commands replayed for a portal plugged back in aren't the game's: R's,
+    // then A's (sent once R is answered, as the game does it). Within a second only, so an answer the
+    // game waits for itself is never kept from it.
+    const auto now = std::chrono::steady_clock::now();
+    if (hide_ready_reply_ && now - replayed_at_ > std::chrono::seconds(1)) hide_ready_reply_ = false;
+    if (hide_activate_reply_ && now - replayed_at_ > std::chrono::seconds(1)) hide_activate_reply_ = false;
+    if (hide_ready_reply_ && report[0] == 'R') {
+      hide_ready_reply_ = false;
+      if (have_activate_) {
+        current_->Write(last_activate_);
+        hide_activate_reply_ = true;
+        replayed_at_ = now;
+      }
+      return skylanders::portal::Report{};
+    }
+    if (hide_activate_reply_ && report[0] == 'A') {
+      hide_activate_reply_ = false;
+      return skylanders::portal::Report{};
+    }
     ApplyAnnounceStep(report, phase_, added_reports_);
     return report;
   }
@@ -287,7 +323,16 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
     if (current_) {
       phase_ = AnnouncePhase::kForceEmpty;
       added_reports_ = 0;
-      REXLOG_INFO("Portal: usb device connected");
+      // Plugged in (again) after the game set the portal up: a portal comes up switched off, and the
+      // game, which didn't see it go, won't set it up again. Its last R, then its A, are sent for it.
+      if (have_ready_) {
+        current_->Write(last_ready_);
+        hide_ready_reply_ = true;
+        hide_activate_reply_ = false;
+        replayed_at_ = std::chrono::steady_clock::now();
+      }
+      REXLOG_INFO("Portal: usb device connected{}", have_ready_ ? " (the game's set-up sent again)" : "");
+      was_connected_ = true;
       return;
     }
     // No HID portal: maybe an Xbox 360 one on WinUSB. Once it is set, the XAM handler talks to it
@@ -320,6 +365,16 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
   AnnouncePhase phase_ = AnnouncePhase::kForceEmpty;
   int added_reports_ = 0;
   std::chrono::steady_clock::time_point last_attempt_{};
+  // Replug recovery (Core of Light #60): the game's last R and A, and which replies to hide.
+  skylanders::portal::Report last_ready_{};
+  skylanders::portal::Report last_activate_{};
+  bool have_ready_ = false;
+  bool have_activate_ = false;
+  bool hide_ready_reply_ = false;
+  bool hide_activate_reply_ = false;
+  std::chrono::steady_clock::time_point replayed_at_{};
+  bool was_connected_ = false;
+  uint8_t unplugged_counter_ = 0;
 };
 
 // portal_mode "hybrid" (portal/hybrid/real_portal_bridge.h). The bridge, its thread and the USB

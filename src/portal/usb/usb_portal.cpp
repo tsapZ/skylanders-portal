@@ -280,41 +280,37 @@ Report UsbPortal::Read() {
   // the HID input queue grows and command replies reach the game seconds late; it then resets the
   // portal every ~20 s and never reads a figure. Drain what is queued: command replies are passed
   // on in order, status frames collapse to the newest one, keeping a slot's "added" state (3) if a
-  // dropped frame had it. All state below is guarded by io_mutex_.
-  static std::deque<Report> pending_replies;
-  static Report newest_status{};
-  static bool have_status = false;
-  static uint32_t added_mask = 0;  // bit per slot: a dropped frame reported "added"
+  // dropped frame had it. The queue (members) is guarded by io_mutex_.
   for (int i = 0; i < 64; ++i) {
     Report r = ReceiveRaw();
     if (r[0] == 0) break;
     if (r[0] != 0x53) {
-      pending_replies.push_back(r);
+      pending_replies_.push_back(r);
       continue;
     }
     const uint32_t states = static_cast<uint32_t>(r[1]) | (static_cast<uint32_t>(r[2]) << 8) |
                             (static_cast<uint32_t>(r[3]) << 16) | (static_cast<uint32_t>(r[4]) << 24);
     for (int slot = 0; slot < kMaxFigures; ++slot) {
-      if (((states >> (2 * slot)) & 0x03) == 0x03) added_mask |= 1u << slot;
+      if (((states >> (2 * slot)) & 0x03) == 0x03) added_mask_ |= 1u << slot;
     }
-    newest_status = r;
-    have_status = true;
+    newest_status_ = r;
+    have_status_ = true;
   }
   Report report{};
-  if (!pending_replies.empty()) {
-    report = pending_replies.front();
-    pending_replies.pop_front();
-  } else if (have_status) {
-    report = newest_status;
-    have_status = false;
+  if (!pending_replies_.empty()) {
+    report = pending_replies_.front();
+    pending_replies_.pop_front();
+  } else if (have_status_) {
+    report = newest_status_;
+    have_status_ = false;
     uint32_t states = static_cast<uint32_t>(report[1]) | (static_cast<uint32_t>(report[2]) << 8) |
                       (static_cast<uint32_t>(report[3]) << 16) | (static_cast<uint32_t>(report[4]) << 24);
     for (int slot = 0; slot < kMaxFigures; ++slot) {
-      if ((added_mask >> slot & 1u) && ((states >> (2 * slot)) & 0x03) == 0x01) {
+      if ((added_mask_ >> slot & 1u) && ((states >> (2 * slot)) & 0x03) == 0x01) {
         states |= 0x03u << (2 * slot);  // present -> added, so the game sees the new figure
       }
     }
-    added_mask = 0;
+    added_mask_ = 0;
     report[1] = static_cast<uint8_t>(states);
     report[2] = static_cast<uint8_t>(states >> 8);
     report[3] = static_cast<uint8_t>(states >> 16);
