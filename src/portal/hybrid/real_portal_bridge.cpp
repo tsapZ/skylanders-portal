@@ -7,6 +7,7 @@
 
 #include "portal/figure_catalog.h"
 #include "portal/figure_file.h"
+#include "portal_rex/utf8_path.h"
 
 namespace skylanders::portal {
 
@@ -214,7 +215,7 @@ void RealPortalBridge::Arrived(int real_slot) {
             UniqueFigurePath(options_.backup_dir, name + " " + Hex(s.uid) + " before");
         std::filesystem::rename(s.source, kept, ec);
         Log("Hybrid portal: the backup of " + name + " had other data; kept as " +
-            kept.filename().string());
+            Utf8Path(kept.filename()));
       }
     }
     if (!SaveFigureFileAtomic(s.source, s.data)) {

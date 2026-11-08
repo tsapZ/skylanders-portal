@@ -14,6 +14,8 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+
+#include "portal_rex/utf8_path.h"
 #include <thread>
 #include <vector>
 
@@ -671,7 +673,7 @@ class ScriptInputDriver final : public rex::input::InputDriver {
                 }
                 saved = skylanders::WritePng(path, w, h, scaled.data());
               }
-              REXLOG_INFO("Input script: shot {}{}", path.filename().string(), saved ? "" : " (no picture)");
+              REXLOG_INFO("Input script: shot {}{}", skylanders::Utf8Path(path.filename()), saved ? "" : " (no picture)");
             });
           }
         } else if (e.kind == Event::Kind::kWaitFor) {

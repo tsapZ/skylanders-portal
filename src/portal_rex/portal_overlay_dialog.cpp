@@ -357,7 +357,7 @@ void PortalOverlayDialog::OnDraw(ImGuiIO& io) {
     ImGui::SameLine(ImGui::GetWindowWidth() - 80);
     if (ImGui::Button("Place")) {
       if (!PlaceFigureFromFile(selected_slot_, entry.path)) {
-        REXLOG_WARN("Portal overlay: could not place '{}'", entry.path.string());
+        REXLOG_WARN("Portal overlay: could not place '{}'", Utf8Path(entry.path));
       }
     }
     ImGui::PopID();

@@ -8,6 +8,7 @@
 #include "portal/figure_file.h"
 #include "portal/trap_villain.h"
 #include "portal/skylander_catalog_data.h"
+#include "portal_rex/utf8_path.h"
 
 namespace skylanders::portal {
 
@@ -102,8 +103,10 @@ std::vector<FigureCatalogEntry> ScanFigureCatalog(const std::filesystem::path& r
   for (; !ec && it != end; it.increment(ec)) {
     if (!it->is_regular_file(ec) || ec) continue;
     const auto& path = it->path();
-    if (Lower(path.extension().string()) != ".dump") continue;
-    const std::string name = path.stem().string();
+    // UTF-8, not path::string(): that throws for a name outside the Windows code page (a star or
+    // Japanese letters; Core of Light #60, TheBiemGamer) and took the whole list down.
+    if (Lower(Utf8Path(path.extension())) != ".dump") continue;
+    const std::string name = Utf8Path(path.stem());
     entries.push_back({name, ResolveDisplayName(path, name), TopLevelFolder(root, path), path});
   }
 
