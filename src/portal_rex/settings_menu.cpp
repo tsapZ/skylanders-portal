@@ -1639,6 +1639,25 @@ void AddQuitSettings(SettingsPage& page) {
     volume.options.push_back({std::to_string(p), p == 0 ? "Off" : label, p == 0 ? "Aus" : label});
   }
   page.settings.push_back(std::move(volume));
+  // Sound output (audio_channels, SDK): headphones on an output Windows has set up as 5.1 or 7.1
+  // play only front left and right, and voices a game puts on the center channel alone are lost
+  // (Spyro's Adventure's movies, Core of Light #61). Stereo mixes the center into both sides.
+  Setting output;
+  output.cvar = "audio_channels";
+  output.en = "Sound output";
+  output.de = "Tonausgabe";
+  output.help_en = "Automatic plays surround sound when Windows has the output set up for it.\n"
+                   "\n"
+                   "Stereo always mixes it down to two channels. Pick it if voices are missing (in "
+                   "movies, for example) with headphones on a surround output. Takes effect after a "
+                   "restart.";
+  output.help_de = "Automatisch spielt Raumklang, wenn Windows den Ausgang daf\xC3\xBCr eingerichtet hat.\n"
+                   "\n"
+                   "Stereo mischt immer auf zwei Kan\xC3\xA4le herunter. Das hilft, wenn mit Kopfh\xC3\xB6rern "
+                   "an einem Raumklang-Ausgang Stimmen fehlen (zum Beispiel in Filmen). Wirkt nach "
+                   "einem Neustart.";
+  output.options = {{"auto", "Automatic", "Automatisch"}, {"stereo", "Stereo", "Stereo"}};
+  page.settings.push_back(std::move(output));
   Setting fps;
   fps.cvar = "show_fps";
   fps.en = "Frame rate display";
