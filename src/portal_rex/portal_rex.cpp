@@ -1,6 +1,8 @@
 #include "portal_rex/portal_rex.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -52,7 +54,8 @@ REXCVAR_DEFINE_STRING(portal_audio, "auto", "Portal",
                       "also with a real portal in usb mode) or 'off'")
     .allowed({"auto", "pc", "off"});
 REXCVAR_DEFINE_DOUBLE(portal_speaker_volume, 1.0, "Portal",
-                      "Volume of portal speaker audio played on the PC (software mode), 0.0 to 1.0");
+                      "Volume of the portal speaker audio, 0.0 to 1.0: on the PC's speakers (taken when "
+                      "the game starts) and on a real HID portal's own speaker (at once)");
 REXCVAR_DEFINE_BOOL(portal_speaker_report, false, "Portal",
                     "Log the game's portal speaker stream every 5 seconds: frames, sizes, samples a "
                     "second (8000 is real time) and how evenly the frames come (for speaker problems)");
@@ -356,7 +359,18 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
       // On the PC's speakers instead of the portal's (Core of Light #67), with or without a portal.
       g_pc_speaker.WriteAudio(pcm);
     } else if (current_ && audio != "off") {
-      current_->WriteAudio(pcm);
+      // portal_speaker_volume for the portal's own speaker too: the decoded stream is at full level,
+      // which a small speaker may distort (Core of Light #67).
+      const double volume = std::clamp(REXCVAR_GET(portal_speaker_volume), 0.0, 1.0);
+      if (volume >= 1.0) {
+        current_->WriteAudio(pcm);
+      } else {
+        scaled_.resize(pcm.size());
+        for (size_t i = 0; i < pcm.size(); ++i) {
+          scaled_[i] = static_cast<int16_t>(std::lround(double(pcm[i]) * volume));
+        }
+        current_->WriteAudio(scaled_);
+      }
     }
   }
 
@@ -442,6 +456,7 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
   }
 
   skylanders::portal::UsbPortal* current_ = nullptr;  // never freed when replaced, see file comment
+  std::vector<int16_t> scaled_;  // WriteAudio's samples at portal_speaker_volume
   AnnouncePhase phase_ = AnnouncePhase::kForceEmpty;
   int added_reports_ = 0;
   std::chrono::steady_clock::time_point last_attempt_{};
