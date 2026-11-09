@@ -199,6 +199,35 @@ int main() {
     CHECK(VerifyXex(fb, hash_a + ",8201000:" + std::string(64, 'a')).status == XexCheck::BadExpected);
   }
 
+  // Files every copy of the disc has: a "*" part is any one folder (CoL #64, an extract tool that
+  // left out text\<language>).
+  {
+    using skylanders::xex::MissingRomFile;
+    const fs::path rom = fs::temp_directory_path() / "xex_verify_test_rom";
+    std::error_code ec;
+    fs::remove_all(rom, ec);
+    fs::create_directories(rom / "text", ec);
+    fs::create_directories(rom / "ui", ec);
+    std::ofstream(rom / "text" / "global_alllang.lxb") << "x";
+    const char* kNeeds = "text/*/global.lxb, ui/*/hudmenu.str";
+    CHECK(MissingRomFile(rom, kNeeds) == "text/*/global.lxb");
+    fs::create_directories(rom / "text" / "eng", ec);
+    CHECK(MissingRomFile(rom, kNeeds) == "text/*/global.lxb");  // the folder alone isn't enough
+    std::ofstream(rom / "text" / "eng" / "global.lxb") << "x";
+    CHECK(MissingRomFile(rom, kNeeds) == "ui/*/hudmenu.str");
+    fs::create_directories(rom / "ui" / "ger", ec);
+    std::ofstream(rom / "ui" / "ger" / "hudmenu.str") << "x";
+    CHECK(MissingRomFile(rom, kNeeds).empty());
+    CHECK(MissingRomFile(rom, "").empty());
+    CHECK(MissingRomFile(rom, "default.xex") == "default.xex");
+    std::ofstream(rom / "default.xex") << "x";
+    CHECK(MissingRomFile(rom, " default.xex ,text/eng/global.lxb").empty());
+    const std::string msg = skylanders::xex::DescribeMissingRomFile(rom, "text/*/global.lxb", "Skylanders: Test");
+    CHECK(msg.find("no text\\*\\global.lxb") != std::string::npos);
+    CHECK(msg.find("Skylanders: Test disc in ") != std::string::npos);
+    fs::remove_all(rom, ec);
+  }
+
   if (g_failures == 0) std::puts("all xex_verify tests passed");
   return g_failures == 0 ? 0 : 1;
 }
