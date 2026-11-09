@@ -53,6 +53,9 @@ REXCVAR_DEFINE_STRING(portal_audio, "auto", "Portal",
     .allowed({"auto", "pc", "off"});
 REXCVAR_DEFINE_DOUBLE(portal_speaker_volume, 1.0, "Portal",
                       "Volume of portal speaker audio played on the PC (software mode), 0.0 to 1.0");
+REXCVAR_DEFINE_BOOL(portal_speaker_report, false, "Portal",
+                    "Log the game's portal speaker stream every 5 seconds: frames, sizes, samples a "
+                    "second (8000 is real time) and how evenly the frames come (for speaker problems)");
 REXCVAR_DEFINE_BOOL(portal_test_figure, false, "Portal",
                     "Development: put an all-zero figure on the portal (the game reports it as a "
                     "problem toy)");
@@ -132,6 +135,10 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
   uint32_t Write(uint32_t device_id, std::span<const uint8_t> buffer) override {
     (void)device_id;
     std::lock_guard<std::mutex> lock(mu_);
+    if (buffer.size() > 2 && buffer[0] == 0x0B && buffer[1] == 0x17 &&
+        REXCVAR_GET(portal_speaker_report)) {
+      speaker_report_.Add(buffer.size());
+    }
     // LED updates ('C') arrive ~10 times a second, and speaker audio (0B 17) constantly; leave
     // them out.
     if (buffer.size() >= 3 && buffer[1] == 0x14 && buffer[2] != 'C') {
@@ -162,6 +169,44 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
   }
 
  private:
+  // portal_speaker_report: the speaker frames (0B 17, G.726 at 4 bits a sample) of the last few
+  // seconds, logged every 5 s. Frames that come less than 1 ms after the one before are counted as
+  // a burst; real time is 8000 samples a second (one 30-byte frame every 7.5 ms).
+  struct SpeakerReport {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point since{};
+    Clock::time_point last{};
+    uint64_t frames = 0;
+    uint64_t bytes = 0;
+    uint64_t burst = 0;
+    double max_gap_ms = 0.0;
+    size_t min_size = SIZE_MAX;
+    size_t max_size = 0;
+    void Add(size_t size) {
+      const Clock::time_point now = Clock::now();
+      if (frames == 0) {
+        since = now;
+      } else {
+        const double gap = std::chrono::duration<double, std::milli>(now - last).count();
+        max_gap_ms = std::max(max_gap_ms, gap);
+        if (gap < 1.0) ++burst;
+      }
+      last = now;
+      ++frames;
+      bytes += size - 2;
+      min_size = std::min(min_size, size);
+      max_size = std::max(max_size, size);
+      const double seconds = std::chrono::duration<double>(now - since).count();
+      if (seconds >= 5.0) {
+        REXLOG_INFO(
+            "Portal speaker: {} frames in {:.1f} s ({} to {} bytes), {:.0f} samples/s (8000 is real "
+            "time), {} within 1 ms of the one before, longest gap {:.1f} ms",
+            frames, seconds, min_size, max_size, double(bytes) * 2.0 / seconds, burst, max_gap_ms);
+        *this = SpeakerReport{};
+      }
+    }
+  };
+  SpeakerReport speaker_report_;
   // The Xbox 360 portal's commands and replies in plain lines (traffic_log.h; the HID portals have
   // their own in UsbPortal).
   skylanders::portal::PortalTrafficLog x360_traffic_{
