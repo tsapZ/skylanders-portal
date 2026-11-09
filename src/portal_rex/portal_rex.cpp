@@ -48,8 +48,9 @@ REXCVAR_DEFINE_STRING(portal_mode, "hybrid", "Portal",
     .allowed({"software", "usb", "hybrid", "none"});
 REXCVAR_DEFINE_STRING(portal_audio, "auto", "Portal",
                       "Portal speaker audio: 'auto' (the real portal's speaker in usb mode, PC "
-                      "speakers in software mode) or 'off'")
-    .allowed({"auto", "off"});
+                      "speakers with the menu and in hybrid mode), 'pc' (always the PC's speakers, "
+                      "also with a real portal in usb mode) or 'off'")
+    .allowed({"auto", "pc", "off"});
 REXCVAR_DEFINE_DOUBLE(portal_speaker_volume, 1.0, "Portal",
                       "Volume of portal speaker audio played on the PC (software mode), 0.0 to 1.0");
 REXCVAR_DEFINE_BOOL(portal_test_figure, false, "Portal",
@@ -82,6 +83,32 @@ std::atomic<bool> g_bridge_has_real{false};
 std::atomic<bool> g_speaker_pcm_tap{false};
 // The PC speaker sink of the software portal, for its level (PortalSpeakerLevel).
 std::atomic<skylanders::SdlPortalAudioSink*> g_speaker_sink{nullptr};
+
+// The PC's speaker stream for portal audio: opened on first use and kept for the whole process,
+// like the portals (the software portal's, and a real portal's with portal_audio = "pc"). Null if
+// there is no output device.
+skylanders::SdlPortalAudioSink* PcSpeakerSink() {
+  static std::unique_ptr<skylanders::SdlPortalAudioSink> sink = [] {
+    std::unique_ptr<skylanders::SdlPortalAudioSink> opened = skylanders::SdlPortalAudioSink::Open();
+    if (opened) opened->SetVolume(float(REXCVAR_GET(portal_speaker_volume)));
+    return opened;
+  }();
+  if (sink) g_speaker_sink.store(sink.get());
+  return sink.get();
+}
+
+// With portal_audio = "pc" and a real portal the game talks to directly (usb mode): what the game
+// sends to the portal's speaker plays on the PC instead (Core of Light #67). The XAM bridge decodes
+// the game's G.726 frames into WriteAudio.
+class PcSpeakerDevice final : public skylanders::portal::PortalDevice {
+ public:
+  void Write(const skylanders::portal::Report& report) override { (void)report; }
+  void WriteAudio(std::span<const int16_t> pcm) override {
+    if (skylanders::SdlPortalAudioSink* sink = PcSpeakerSink()) sink->Submit(pcm);
+  }
+  skylanders::portal::Report Read() override { return skylanders::portal::Report{}; }
+};
+PcSpeakerDevice g_pc_speaker;
 
 // Forwards the game's XamInputNonControllerGetRaw/SetRaw(Ex) calls (through the SDK's handler
 // hook) to whichever portal is active right now. g_portal is re-read on every call, so a live
@@ -119,10 +146,12 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
     }
     if (skylanders::portal::Xbox360Portal* x360 = LiveXbox360()) {
       // Portal speaker off: the Xbox 360 portal's speaker frames don't go out (TrapTeamRecomp #22;
-      // the HID portals' audio already stops in UsbHotPlugPortal::WriteAudio).
-      if (buffer.size() > 2 && buffer[0] == 0x0B && buffer[1] == 0x17 &&
-          REXCVAR_GET(portal_audio) == "off") {
-        return skylanders::portal::kXamSuccess;
+      // the HID portals' audio already stops in UsbHotPlugPortal::WriteAudio). On the PC's speakers:
+      // decoded there instead of going to the portal.
+      if (buffer.size() > 2 && buffer[0] == 0x0B && buffer[1] == 0x17) {
+        const std::string& audio = REXCVAR_GET(portal_audio);
+        if (audio == "off") return skylanders::portal::kXamSuccess;
+        if (audio == "pc") return bridge_.Write(&g_pc_speaker, buffer);
       }
       if (buffer.size() >= skylanders::portal::kFrameSize) {
         if (auto command = skylanders::portal::ReportFromFrame(buffer.data())) x360_traffic_.OnCommand(*command);
@@ -277,7 +306,13 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
   }
 
   void WriteAudio(std::span<const int16_t> pcm) override {
-    if (current_ && REXCVAR_GET(portal_audio) != "off") current_->WriteAudio(pcm);
+    const std::string& audio = REXCVAR_GET(portal_audio);
+    if (audio == "pc") {
+      // On the PC's speakers instead of the portal's (Core of Light #67), with or without a portal.
+      g_pc_speaker.WriteAudio(pcm);
+    } else if (current_ && audio != "off") {
+      current_->WriteAudio(pcm);
+    }
   }
 
   skylanders::portal::Report Read() override {
@@ -546,13 +581,7 @@ skylanders::portal::SoftwarePortal* SetUpSoftwarePortal() {
   });
   if (REXCVAR_GET(portal_audio) != "off") {
     // Opened once and kept for the whole process, like the portals themselves.
-    static std::unique_ptr<skylanders::SdlPortalAudioSink> sink =
-        skylanders::SdlPortalAudioSink::Open();
-    if (sink) {
-      sink->SetVolume(float(REXCVAR_GET(portal_speaker_volume)));
-      software->SetAudioSink(sink.get());
-      g_speaker_sink.store(sink.get());
-    }
+    if (skylanders::SdlPortalAudioSink* sink = PcSpeakerSink()) software->SetAudioSink(sink);
   }
   return software;
 }
