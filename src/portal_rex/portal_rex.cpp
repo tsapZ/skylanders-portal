@@ -840,6 +840,9 @@ void InstallPortal(const std::filesystem::path& default_figures_dir) {
   }
 
   SwitchPortalMode(REXCVAR_GET(portal_mode));
+  // portal_audio = "pc": the PC's speaker stream opens now, as the software portal's does, not on the
+  // game's thread at the first word a trapped villain says (opening an audio device takes a moment).
+  if (REXCVAR_GET(portal_audio) == "pc") PcSpeakerSink();
 
   // The startup-only --portal_figure/--portal_test_figure flags only make sense once, for the
   // portal this process actually boots into -- a later live switch back to software mode starts
