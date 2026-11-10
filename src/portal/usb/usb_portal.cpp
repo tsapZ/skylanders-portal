@@ -484,22 +484,98 @@ void UsbPortal::WriteAudio(std::span<const int16_t> pcm) {
 }
 
 // Speaker audio goes out on the interrupt OUT endpoint (hid_write), unlike commands, which the
-// firmware only accepts as SET_REPORT (hid_send_output_report, see SendRaw). PopWait also returns
-// nullopt on a timeout, so the loop only ends once the destructor sets audio_stopping_.
+// firmware only accepts as SET_REPORT (hid_send_output_report, see SendRaw).
+void UsbPortal::WriteAudioPacket(const AudioPacket& packet) {
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  uint8_t out[1 + kAudioPacketSize];
+  out[0] = 0;  // report ID
+  std::memcpy(out + 1, packet.data(), kAudioPacketSize);
+  const bool ok = winusb_ ? winusb_->WriteInterrupt(packet.data(), kAudioPacketSize)
+                          : hid_write(device_, out, sizeof(out)) >= 0;
+  if (!ok) REXLOG_WARN("Portal: speaker audio write failed");
+}
+
+#if defined(_WIN32) && !defined(CREATE_WAITABLE_TIMER_HIGH_RESOLUTION)
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+namespace {
+
+// Sleeps until `when` to within about half a millisecond: a 4 ms packet clock can't use
+// sleep_until, whose wake-ups are only as fine as Windows' 15.6 ms timer unless something raised it.
+void SleepUntilPrecise(std::chrono::steady_clock::time_point when) {
+  const auto now = std::chrono::steady_clock::now();
+  if (when <= now) return;
+#ifdef _WIN32
+  static thread_local HANDLE timer = CreateWaitableTimerExW(
+      nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+  if (timer) {
+    LARGE_INTEGER due;
+    // Negative: relative, in 100 ns units.
+    due.QuadPart = -std::chrono::duration_cast<std::chrono::nanoseconds>(when - now).count() / 100;
+    if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+      WaitForSingleObject(timer, INFINITE);
+      return;
+    }
+  }
+#endif
+  std::this_thread::sleep_until(when);
+}
+
+}  // namespace
+
+// PopWait also returns nullopt on a timeout, so the loop only ends once the destructor sets
+// audio_stopping_. With pacing (SetAudioPacing), a sound starts once `lead` packets are queued (or
+// 30 ms passed), those go out at once to fill the portal's buffer, then one packet each 4 ms; a gap
+// in the game's stream longer than the lead restarts the clock (Core of Light #67: a HID Traptanium
+// portal that stutters; the game's own stream is real time, 7.5 ms frames up to ~12 ms apart).
 void UsbPortal::AudioWriterLoop() {
+  using Clock = std::chrono::steady_clock;
+  constexpr auto kPacketTime = std::chrono::microseconds(1000000 * kAudioSamplesPerPacket / kAudioSampleRate);
+  bool playing = false;
+  Clock::time_point next{};
   for (;;) {
-    auto packet = audio_queue_.PopWait(std::chrono::milliseconds(500));
-    if (!packet) {
-      if (audio_stopping_.load()) return;
+    const int lead = audio_pacing_lead_.load();
+    if (lead > 0 && !playing) {
+      // Wait for the sound's first packets to collect.
+      auto first = audio_queue_.PopWait(std::chrono::milliseconds(500));
+      if (!first) {
+        if (audio_stopping_.load()) return;
+        continue;
+      }
+      const auto collect_until = Clock::now() + std::chrono::milliseconds(30);
+      while (audio_queue_.Size() + 1 < size_t(lead) && Clock::now() < collect_until &&
+             !audio_stopping_.load()) {
+        SleepUntilPrecise(Clock::now() + std::chrono::milliseconds(2));
+      }
+      WriteAudioPacket(*first);
+      for (int i = 1; i < lead; ++i) {
+        auto more = audio_queue_.PopWait(std::chrono::milliseconds(0));
+        if (!more) break;
+        WriteAudioPacket(*more);
+      }
+      playing = true;
+      next = Clock::now() + kPacketTime;
       continue;
     }
-    std::lock_guard<std::mutex> lock(io_mutex_);
-    uint8_t out[1 + kAudioPacketSize];
-    out[0] = 0;  // report ID
-    std::memcpy(out + 1, packet->data(), kAudioPacketSize);
-    const bool ok = winusb_ ? winusb_->WriteInterrupt(packet->data(), kAudioPacketSize)
-                            : hid_write(device_, out, sizeof(out)) >= 0;
-    if (!ok) REXLOG_WARN("Portal: speaker audio write failed");
+    // Without pacing every packet goes as soon as it is there; with it, the next one waits for its
+    // turn, and a sound that ends (nothing for longer than the lead) starts over with a new lead.
+    const auto wait = lead > 0 ? std::chrono::milliseconds(4 * lead + 8) : std::chrono::milliseconds(500);
+    auto packet = audio_queue_.PopWait(wait);
+    if (!packet) {
+      if (audio_stopping_.load()) return;
+      playing = false;
+      continue;
+    }
+    if (lead > 0) {
+      const auto now = Clock::now();
+      if (now > next + kPacketTime * lead) {
+        next = now;  // fell behind (a long gap): the portal's buffer is empty anyway
+      }
+      SleepUntilPrecise(next);
+      next += kPacketTime;
+    }
+    WriteAudioPacket(*packet);
   }
 }
 

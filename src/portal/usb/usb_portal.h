@@ -62,6 +62,10 @@ class UsbPortal final : public PortalDevice {
   // Repacks speaker audio into the portal's 64-byte packets and queues them for the audio writer
   // thread; never blocks the caller.
   void WriteAudio(std::span<const int16_t> pcm) override;
+  // Speaker pacing (portal_speaker_pacing): 0 sends each packet as soon as it is queued (as always);
+  // N > 0 starts a sound with N packets (N x 4 ms) sent at once, then one packet every 4 ms, so the
+  // game's uneven frames (up to ~12 ms apart instead of 7.5) don't leave the portal's buffer empty.
+  void SetAudioPacing(int lead_packets) { audio_pacing_lead_.store(lead_packets < 0 ? 0 : lead_packets); }
 
   // Best-effort status, derived by passively observing replies that already flow through Read()
   // as part of relaying the game's own polling -- no extra USB traffic, no separate poller thread
@@ -112,6 +116,8 @@ class UsbPortal final : public PortalDevice {
   std::thread audio_thread_;          // started on the first WriteAudio
   std::once_flag audio_thread_started_;
   std::atomic<bool> audio_stopping_{false};
+  std::atomic<int> audio_pacing_lead_{0};  // SetAudioPacing
+  void WriteAudioPacket(const AudioPacket& packet);  // takes io_mutex_
   Report ReceiveRaw();                 // unlocked -- callers hold io_mutex_
 
   std::mutex io_mutex_;  // serializes every raw HID transfer: Write(), Read(), DumpFigure()

@@ -36,6 +36,11 @@ std::optional<AudioPacket> AudioPacketQueue::PopWait(std::chrono::milliseconds t
   return p;
 }
 
+size_t AudioPacketQueue::Size() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return packets_.size();
+}
+
 size_t AudioPacketQueue::Dropped() const {
   std::lock_guard<std::mutex> lock(mu_);
   return dropped_;

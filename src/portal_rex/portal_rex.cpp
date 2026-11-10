@@ -56,6 +56,11 @@ REXCVAR_DEFINE_STRING(portal_audio, "auto", "Portal",
 REXCVAR_DEFINE_DOUBLE(portal_speaker_volume, 1.0, "Portal",
                       "Volume of the portal speaker audio, 0.0 to 1.0: on the PC's speakers (taken when "
                       "the game starts) and on a real HID portal's own speaker (at once)");
+REXCVAR_DEFINE_INT32(portal_speaker_pacing, 0, "Portal",
+                     "Real HID portal's speaker: 0 sends the sound as it comes; N (2 to 8) starts each sound "
+                     "with N x 4 ms sent at once, then paces it at 4 ms a packet (try it if the portal's "
+                     "speaker stutters)")
+    .range(0, 16);
 REXCVAR_DEFINE_BOOL(portal_speaker_report, false, "Portal",
                     "Log the game's portal speaker stream every 5 seconds: frames, sizes, samples a "
                     "second (8000 is real time) and how evenly the frames come (for speaker problems)");
@@ -323,7 +328,10 @@ class TransitioningPortal final : public skylanders::portal::PortalDevice {
 // anywhere itself -- callers decide whether to publish it (SwitchPortalMode) or discard it.
 skylanders::portal::UsbPortal* SetUpUsbPortal() {
   auto* usb = new skylanders::portal::UsbPortal();  // never freed if published, see below
-  if (usb->IsOpen()) return usb;
+  if (usb->IsOpen()) {
+    usb->SetAudioPacing(REXCVAR_GET(portal_speaker_pacing));
+    return usb;
+  }
   delete usb;  // never published anywhere, so nothing else could have seen this one -- safe to free
   return nullptr;
 }
