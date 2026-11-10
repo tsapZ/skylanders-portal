@@ -17,6 +17,11 @@ namespace {
 // often; then the figure (or the block) is given up.
 constexpr auto kReplyTimeout = std::chrono::milliseconds(250);
 constexpr int kAttempts = 3;
+// A block read, refused or unanswered, is tried this often (Options::read_retry_pause apart) before
+// the figure is given up: a figure just put on, or one not lying flat, can't be read for a moment.
+// With 3 quick tries a figure put back after a swap was given up at once and then ignored until it
+// was lifted off and put on again (TrapTeamRecomp #22, an Xbox 360 portal).
+constexpr int kReadAttempts = 12;
 // The light: at most this often.
 constexpr auto kLightInterval = std::chrono::milliseconds(100);
 // Reports handled per step: the real portal queues a status report every few milliseconds.
@@ -97,11 +102,8 @@ void RealPortalBridge::Step(PortalDevice* real) {
     const Command timed_out = *pending_;
     pending_.reset();
     if (timed_out.cmd == 'Q') {
-      RealSlot& s = slots_[timed_out.slot];
-      if (s.phase == RealSlot::Phase::kReading && ++s.attempts >= kAttempts) {
-        s.phase = RealSlot::Phase::kFailed;
-        Log("Hybrid portal: could not read the figure in real slot " +
-            std::to_string(timed_out.slot) + "; lift it off and put it back");
+      if (slots_[timed_out.slot].phase == RealSlot::Phase::kReading) {
+        ReadMissed(timed_out.slot, "no answer");
       }
     } else if (timed_out.cmd == 'W') {
       std::lock_guard lock(mu_);
@@ -150,10 +152,11 @@ void RealPortalBridge::Handle(const Report& report) {
       RealSlot& s = slots_[slot];
       if (s.phase != RealSlot::Phase::kReading) break;
       if (!(report[1] & 0x10)) {
-        if (++s.attempts >= kAttempts) s.phase = RealSlot::Phase::kFailed;
+        ReadMissed(slot, "the portal couldn't read it");
         break;
       }
       std::copy_n(report.begin() + 3, kBlockSize, s.data.begin() + block * kBlockSize);
+      s.attempts = 0;
       if (++s.next_block >= int(kBlockCount)) Arrived(slot);
       break;
     }
@@ -217,10 +220,11 @@ void RealPortalBridge::SendNext() {
     real_->Write(*write);
     return;
   }
+  const Clock::time_point now = Clock::now();
   for (int slot = 0; slot < kMaxFigures; ++slot) {
     const RealSlot& s = slots_[slot];
-    if (s.phase != RealSlot::Phase::kReading) continue;
-    pending_ = Command{'Q', slot, s.next_block, Clock::now()};
+    if (s.phase != RealSlot::Phase::kReading || now < s.retry_at) continue;
+    pending_ = Command{'Q', slot, s.next_block, now};
     real_->Write(Make({'Q', uint8_t(slot), uint8_t(s.next_block)}));
     return;
   }
@@ -309,6 +313,15 @@ void RealPortalBridge::Arrived(int real_slot) {
   Log("Hybrid portal: " + name + " from real slot " + std::to_string(real_slot) +
       " is in emulated slot " + std::to_string(target));
   if (options_.on_arrived) options_.on_arrived(target);
+}
+
+void RealPortalBridge::ReadMissed(int real_slot, const char* why) {
+  RealSlot& s = slots_[real_slot];
+  s.retry_at = Clock::now() + options_.read_retry_pause;
+  if (++s.attempts < kReadAttempts) return;
+  s.phase = RealSlot::Phase::kFailed;
+  Log("Hybrid portal: could not read the figure in real slot " + std::to_string(real_slot) +
+      " (block " + std::to_string(s.next_block) + ", " + why + "); lift it off and put it back");
 }
 
 void RealPortalBridge::Gone(int real_slot, const char* why) {
