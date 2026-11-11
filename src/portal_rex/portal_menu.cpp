@@ -21,6 +21,7 @@
 #include <future>
 #include <atomic>
 #include <unordered_map>
+#include <unordered_set>
 #include <map>
 #include <set>
 #include <vector>
@@ -192,6 +193,7 @@ enum class Text {
   kRealItem,
   kRealStays,
   kRealSkylander,
+  kPillRealPortal,
   kAdventurePack,
   kAdventurePackInfo,
   kCheckTitleToys,
@@ -323,6 +325,7 @@ constexpr const char* kEnglish[] = {
     "A magic item is on the real portal: lift it off there first.",
     "This figure stands on the real portal: lift it off there to take it off.",
     "%s is on the real portal: lift it off there to play another Skylander.",
+    "Real portal",
     "Adventure pack",
     "Opens a level of its own when it comes onto the portal.",
     "Too many toys on the portal",
@@ -460,6 +463,7 @@ constexpr const char* kGerman[] = {
     "Diese Figur steht auf dem echten Portal: Nimm sie dort runter, um sie wegzunehmen.",
     "%s steht auf dem echten Portal: Nimm die Figur dort runter, um einen anderen Skylander zu "
     "spielen.",
+    "Echtes Portal",
     "Abenteuer-Paket",
     "\xC3\x96"
     "ffnet ein eigenes Level, wenn es aufs Portal kommt.",
@@ -2776,6 +2780,15 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       // request); it comes off only if the player picks another Skylander after all.
       if (!companion_request_) lifted_ = LiftPlayer(user_);
       lift_time_ = Clock::now();
+      // What this player has on the portal, for the cards' pills: the Skylander just lifted (back on
+      // with B), one left on (asked for a trap or a vehicle), and a real toy's copy, which stays.
+      for (const LiftedFigure& figure : lifted_) {
+        if (figure.sky) mine_on_.insert(library_.CharacterOf(*figure.sky));
+      }
+      for (int slot : PlayerSkylanderSlots(user_)) {
+        const SkylanderInfo* sky = FigureIn(slot);
+        if (sky) (IsRealPortalCopy(slot) ? mine_real_ : mine_on_).insert(library_.CharacterOf(*sky));
+      }
       for (const auto& [owner, sky] : OtherPlayersFigures(user_)) {
         const std::string name = library_.CharacterOf(*sky);
         if (!name.empty()) taken_.emplace(name, owner);
@@ -4143,11 +4156,16 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       return;
     }
     if (character.swapper) Pill(dl, {p0.x + S(6), p0.y + S(6)}, "SWAP", kGold, kInk);
+    // On the portal: the sidekick there, or this player's own Skylander; blue for a real toy's copy
+    // (TrapTeamRecomp #22: the menu didn't show what was on the portal, nor which was real).
+    const bool real = !character.sidekick && mine_real_.count(character.name) != 0;
     const bool on_portal =
-        character.sidekick && current_sidekick_ && current_sidekick_->id == shown->id;
+        real || (character.sidekick ? current_sidekick_ && current_sidekick_->id == shown->id
+                                    : mine_on_.count(character.name) != 0);
     if (on_portal) {
-      const float w = PillWidth(T(Text::kOnPortal), 15);
-      Pill(dl, {(p0.x + p1.x - w) / 2, p1.y - S(30)}, T(Text::kOnPortal), Rgba(60, 170, 80),
+      const char* pill = real ? T(Text::kPillRealPortal) : T(Text::kOnPortal);
+      const float w = PillWidth(pill, 15);
+      Pill(dl, {(p0.x + p1.x - w) / 2, p1.y - S(30)}, pill, real ? Rgba(50, 110, 210) : Rgba(60, 170, 80),
            kWhite, 15);
     }
     DrawElementBadge(dl, {p0.x + S(19), p1.y - S(19)}, S(15), character.element);
@@ -5100,6 +5118,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   State previous_state_ = State::kBrowsing;
   Library library_;
   std::vector<LiftedFigure> lifted_;
+  // By character, what this player has on the portal while the menu is open (the cards' pills).
+  std::unordered_set<std::string> mine_on_, mine_real_;
   bool wants_back_ = false;  // WantBack: the message instead of the figures
   std::string wanted_name_;
   std::unordered_map<std::string, uint32_t> taken_;  // character -> player who has it
