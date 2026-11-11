@@ -4,6 +4,7 @@
 
 #include "xex/xex_header.h"
 
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <vector>
@@ -188,6 +189,56 @@ std::string DescribeXexProblem(const std::filesystem::path& xex, const XexCheckR
       break;
   }
   return "Internal error: the pinned SHA-256 is malformed.";
+}
+
+namespace {
+
+// Whether `dir` has the path `parts[i..]`, a "*" part matching any one folder.
+bool HasRomPath(const std::filesystem::path& dir, const std::vector<std::string>& parts, size_t i) {
+  std::error_code ec;
+  if (i == parts.size()) return std::filesystem::exists(dir, ec);
+  if (parts[i] != "*") {
+    const std::u8string u8(reinterpret_cast<const char8_t*>(parts[i].data()), parts[i].size());
+    return HasRomPath(dir / std::filesystem::path(u8), parts, i + 1);
+  }
+  for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+    if (it->is_directory(ec) && HasRomPath(it->path(), parts, i + 1)) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+std::string MissingRomFile(const std::filesystem::path& rom, std::string_view required) {
+  while (!required.empty()) {
+    const size_t comma = required.find(',');
+    std::string_view entry = required.substr(0, comma);
+    required = comma == std::string_view::npos ? std::string_view{} : required.substr(comma + 1);
+    while (!entry.empty() && std::isspace(static_cast<unsigned char>(entry.front()))) entry.remove_prefix(1);
+    while (!entry.empty() && std::isspace(static_cast<unsigned char>(entry.back()))) entry.remove_suffix(1);
+    if (entry.empty()) continue;
+    std::vector<std::string> parts;
+    for (size_t start = 0; start <= entry.size();) {
+      const size_t slash = std::min(entry.find('/', start), entry.size());
+      if (slash > start) parts.emplace_back(entry.substr(start, slash - start));
+      start = slash + 1;
+    }
+    if (!HasRomPath(rom, parts, 0)) return std::string(entry);
+  }
+  return {};
+}
+
+std::string DescribeMissingRomFile(const std::filesystem::path& rom, std::string_view missing,
+                                   std::string_view game) {
+  std::string shown(missing);
+  for (char& c : shown) {
+    if (c == '/') c = '\\';
+  }
+  const bool any_folder = shown.find('*') != std::string::npos;
+  return "The " + std::string(game) + " disc in " + Utf8(rom) + " is incomplete: " +
+         (any_folder ? "no " + shown + " (* is a language folder such as eng)." : shown + " is missing.") +
+         "\nSome extract tools leave out the folders inside the disc's folders."
+         "\nSet the disc up again from the ISO: run the game's setup again and pick it, or use Core of Light.";
 }
 
 }  // namespace skylanders::xex

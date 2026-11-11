@@ -57,4 +57,16 @@ const char* GameCommit();
 std::string DescribeXexProblem(const std::filesystem::path& xex, const XexCheckResult& result,
                                std::string_view expected_sha256, std::string_view game);
 
+// Files every copy of the disc has, checked at start: `required` is a comma separated list of paths
+// relative to the rom folder ('/' between the parts), where a "*" part stands for any one folder
+// ("text/*/global.lxb": some language folder in text has global.lxb). Returns the first entry the
+// rom folder has no match for, empty when all are there. Some extract tools leave out folders
+// below the first level (Spyro's Adventure's text\<language> and ui\<language>, CoL #64); the game
+// then froze on its title screen with no word why.
+std::string MissingRomFile(const std::filesystem::path& rom, std::string_view required);
+
+// The message for MissingRomFile's result: which file, and how to get a complete copy.
+std::string DescribeMissingRomFile(const std::filesystem::path& rom, std::string_view missing,
+                                   std::string_view game);
+
 }  // namespace skylanders::xex
