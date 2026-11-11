@@ -5192,14 +5192,9 @@ class Toast final : public rex::ui::ImGuiDialog {
       return;
     }
     SetScale(io.DisplaySize.y / 1080.0f);
-    ImGui::SetNextWindowPos({0, 0});
-    ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::Begin("##portal_toast", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
-                     ImGuiWindowFlags_NoFocusOnAppearing);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
+    // On the foreground draw list, above every window: in a window of its own it sat behind the F6
+    // menu, which it often answers ("lift it off", the owner's test, 2026-11-11).
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
     const int first = dl->VtxBuffer.Size;
     const ImVec2 ts = TextSize(BoldFont(), S(26), text_);
     const ImVec2 a{(io.DisplaySize.x - ts.x) / 2 - S(30), S(60)};
@@ -5207,8 +5202,8 @@ class Toast final : public rex::ui::ImGuiDialog {
     dl->AddRectFilled(a, b, Rgba(16, 22, 60, 230), S(22));
     dl->AddRect(a, b, kGold, S(22), 0, S(3));
     Label(dl, BoldFont(), S(26), {a.x + S(30), a.y + S(12)}, kWhite, text_);
-    FadeVertices(dl, first, std::min(t / 0.15f, (2.4f - t) / 0.4f));
-    ImGui::End();
+    // Fades in over 0.15 s and out over the last 0.4 s of its own time (it was always 2.4 s).
+    FadeVertices(dl, first, std::min(t / 0.15f, (seconds_ - t) / 0.4f));
   }
 
  private:
