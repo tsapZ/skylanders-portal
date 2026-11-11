@@ -190,6 +190,8 @@ enum class Text {
   kOnRealPortal,
   kRealSidekick,
   kRealItem,
+  kRealStays,
+  kRealSkylander,
   kAdventurePack,
   kAdventurePackInfo,
   kCheckTitleToys,
@@ -319,6 +321,8 @@ constexpr const char* kEnglish[] = {
     "This figure is on the real portal.",
     "A sidekick is on the real portal: lift it off there first.",
     "A magic item is on the real portal: lift it off there first.",
+    "This figure stands on the real portal: lift it off there to take it off.",
+    "%s is on the real portal: lift it off there to play another Skylander.",
     "Adventure pack",
     "Opens a level of its own when it comes onto the portal.",
     "Too many toys on the portal",
@@ -453,6 +457,9 @@ constexpr const char* kGerman[] = {
     "Diese Figur steht auf dem echten Portal.",
     "Ein Mini-Skylander steht auf dem echten Portal: Nimm ihn dort zuerst runter.",
     "Ein magisches Objekt steht auf dem echten Portal: Nimm es dort zuerst runter.",
+    "Diese Figur steht auf dem echten Portal: Nimm sie dort runter, um sie wegzunehmen.",
+    "%s steht auf dem echten Portal: Nimm die Figur dort runter, um einen anderen Skylander zu "
+    "spielen.",
     "Abenteuer-Paket",
     "\xC3\x96"
     "ffnet ein eigenes Level, wenn es aufs Portal kommt.",
@@ -2290,13 +2297,32 @@ std::vector<int> PlayerSkylanderSlots(uint32_t user) {
   return slots;
 }
 
+// hybrid: the name of this player's Skylander that stands on the real portal (the emulated portal
+// has its copy), if there is one (an empty name for a figure the catalog doesn't know).
+std::optional<std::string> RealSkylanderOf(uint32_t user) {
+  for (int slot : PlayerSkylanderSlots(user)) {
+    if (!IsRealPortalCopy(slot)) continue;
+    const SkylanderInfo* sky = FigureIn(slot);
+    return sky ? std::string(sky->name) : std::string();
+  }
+  return std::nullopt;
+}
+
 std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
   std::vector<LiftedFigure> lifted;
   portal::SoftwarePortal* software = GetSoftwarePortal();
   if (!software) return lifted;
   auto& slots = g_player_slots[user];
   slots = PlayerSkylanderSlots(user);
+  // A figure standing on the real portal stays on: it only leaves by lifting the toy off
+  // (TrapTeamRecomp #22: lifted here and swapped for another, its copy was gone while the toy
+  // stayed, and the toy wasn't taken again until it was lifted off and put back on).
+  std::vector<int> stays;
   for (int slot : slots) {
+    if (IsRealPortalCopy(slot)) {
+      stays.push_back(slot);
+      continue;
+    }
     LiftedFigure figure;
     figure.slot = slot;
     figure.path = software->Source(slot);
@@ -2305,7 +2331,7 @@ std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
     RemoveFigureFromSlot(slot);
     lifted.push_back(std::move(figure));
   }
-  slots.clear();
+  slots = stays;
   return lifted;
 }
 
@@ -3749,6 +3775,20 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         ShowToast(T(Text::kOnRealPortal));
         return;
       }
+    }
+    // This player's Skylander stands on the real portal: it stays (LiftPlayer left it on), so
+    // another one goes on only once the toy is lifted off (TrapTeamRecomp #22).
+    if (const std::optional<std::string> real = RealSkylanderOf(user_)) {
+      if (real->empty()) {
+        ShowToast(T(Text::kRealStays), 3.5f);
+      } else {
+        char line[256];
+        std::snprintf(line, sizeof(line), T(Text::kRealSkylander), real->c_str());
+        ShowToast(line, 3.5f);
+      }
+      REXLOG_INFO("Portal menu: player {}'s Skylander stands on the real portal; nothing placed",
+                  user_ + 1);
+      return;
     }
     AddRecent(user_, paths);
     pending_paths_ = paths;
@@ -5420,6 +5460,12 @@ class PortalCheckDialog final : public rex::ui::ImGuiDialog {
 
   void Choose(size_t row) {
     if (row < entries_.size()) {
+      // A figure standing on the real portal only leaves by lifting the toy off: taking its copy
+      // off here left the toy unseen until it was lifted and put back (TrapTeamRecomp #22).
+      if (!entries_[row].slots.empty() && IsRealPortalCopy(entries_[row].slots[0])) {
+        ShowToast(T(Text::kRealStays), 3.5f);
+        return;
+      }
       entries_[row].remove = !entries_[row].remove;
       return;
     }
