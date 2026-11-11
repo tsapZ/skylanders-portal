@@ -25,6 +25,15 @@ uint32_t XamBridge::Read(PortalDevice* device, std::span<uint8_t> buffer, uint32
     return kXamSuccess;
   }
   const Report report = device->Read();
+  // Nothing to give (the emulated portal waiting for a block of a toy it reads from the real portal,
+  // a HID portal with nothing queued): "no new data", as the real portal answers while it is busy.
+  // It went to the game as a report of zeros before.
+  if (report[0] == 0) {
+    delivered_last_ = false;
+    bytes_read = 0;
+    state = 0;
+    return kXamSuccess;
+  }
   // A real portal only streams status reports once activated ('A 01'). Trap Team restarts its
   // portal handshake when it sees an inactive one, so those are withheld as "no new data".
   constexpr size_t kStatusActiveByte = 6;

@@ -413,6 +413,120 @@ int main() {
     CHECK(FirstFigure(emulated) == kMaxFigures - 1);
   }
 
+  // The faster hybrid (TheBiemGamer's idea, Core of Light #62; TrapTeamRecomp #22): the copy goes
+  // onto the emulated portal after the toy's first 8 blocks and the rest is read while the game reads
+  // the copy. A block the game asks for is read next; its reply, and everything else from the
+  // portal, waits for it.
+  const auto place_early = [](RealPortalBridge& bridge, PortalDevice* real, SoftwarePortal& emulated) {
+    for (int i = 0; i < 400; ++i) {
+      bridge.Step(real);
+      if (FirstFigure(emulated) >= 0) return FirstFigure(emulated);
+    }
+    return -1;
+  };
+  const auto reads = [](const Habits& real) {
+    std::vector<int> blocks;
+    for (const Report& r : real.sent) {
+      if (r[0] == 'Q') blocks.push_back(r[2]);
+    }
+    return blocks;
+  };
+  const std::filesystem::path chop_backup = dir / "Chop Chop 44332211.dump";
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+    FigureData marked = chop;  // every data block its own number, to see which one came where
+    for (size_t b = 2; b < kBlockCount; ++b) {
+      if (b % 4 != 3) std::fill_n(marked.begin() + b * kBlockSize, kBlockSize, uint8_t(b));
+    }
+    inner.PlaceFigure(0, marked);
+    const int copy = place_early(bridge, &real, emulated);
+    REQUIRE_OR_RETURN(copy == kMaxFigures - 1);
+    CHECK(emulated.IsLoading(copy));
+    CHECK(reads(real).size() < 12);  // the first 8 and the one after them, not all 64
+    emulated.Write(Cmd({'Q', uint8_t(0x20 | copy), 40}));
+    CHECK(emulated.Read()[0] == 0);  // busy: nothing at all, not even a status
+    CHECK(emulated.WantedBlock(copy) == 40);
+    for (int i = 0; i < 4; ++i) bridge.Step(&real);
+    const std::vector<int> asked = reads(real);
+    CHECK(asked.size() >= 10 && asked[9] == 40);  // right after the read that was out already
+    const Report reply = emulated.Read();
+    CHECK(reply[0] == 0x51 && (reply[1] & 0x10) && reply[2] == 40 && reply[3] == 40);
+    Run(bridge, &real);
+    CHECK(!emulated.IsLoading(copy));
+    CHECK(emulated.Figure(copy) == marked);
+    CHECK(LoadFigureFile(chop_backup) == marked);  // the backup once the copy is whole
+    CHECK(bridge.IsCopySlot(copy));
+  }
+
+  // The game's write to a block not read yet stays (the toy's older block doesn't replace it) and
+  // goes onto the toy; nothing is saved to the backup file before the copy is whole.
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+    std::vector<bool> saved_with_source;
+    emulated.SetWriteCallback([&](int slot, const FigureData& data,
+                                  const std::optional<std::filesystem::path>& source) {
+      saved_with_source.push_back(source.has_value());
+      bridge.OnEmulatedWrite(slot, data);
+    });
+    inner.PlaceFigure(0, chop);
+    const int copy = place_early(bridge, &real, emulated);
+    REQUIRE_OR_RETURN(copy >= 0 && emulated.IsLoading(copy));
+    GameWrite(emulated, copy, 50, 0x77);
+    Run(bridge, &real);
+    CHECK(saved_with_source.size() == 1 && !saved_with_source[0]);
+    CHECK(emulated.Figure(copy) && BlockIs(*emulated.Figure(copy), 50, 0x77));
+    CHECK(inner.Figure(0) && BlockIs(*inner.Figure(0), 50, 0x77));
+    CHECK(!emulated.IsLoading(copy));
+    const auto backup = LoadFigureFile(chop_backup);
+    CHECK(backup && BlockIs(*backup, 50, 0x77));
+    // Whole now: the game's writes save to the backup file again.
+    GameWrite(emulated, copy, 54, 0x66);
+    CHECK(saved_with_source.size() == 2 && saved_with_source[1]);
+  }
+
+  // Lifted off while its copy loads: the copy goes, and the game's waiting read is answered as one
+  // that found no figure.
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+    inner.PlaceFigure(0, chop);
+    const int copy = place_early(bridge, &real, emulated);
+    REQUIRE_OR_RETURN(copy >= 0);
+    emulated.Write(Cmd({'Q', uint8_t(0x20 | copy), 60}));
+    CHECK(emulated.Read()[0] == 0);
+    inner.RemoveFigure(0);
+    Run(bridge, &real, 20);
+    CHECK(!emulated.HasFigure(copy));
+    const Report reply = emulated.Read();
+    CHECK(reply[0] == 0x51 && !(reply[1] & 0x10) && reply[2] == 60);
+    CHECK(bridge.RealUids().empty());
+  }
+
+  // A toy that can't be read any more while its copy loads: given up, and the copy goes with it.
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    std::vector<std::string> lines;
+    RealPortalBridge::Options options{dir, [&](const std::string& l) { lines.push_back(l); }, nullptr};
+    options.read_retry_pause = std::chrono::milliseconds(1);
+    RealPortalBridge bridge(&emulated, options);
+    inner.PlaceFigure(0, chop);
+    const int copy = place_early(bridge, &real, emulated);
+    REQUIRE_OR_RETURN(copy >= 0);
+    real.refuse_reads = 1000;
+    RunFor(bridge, &real, std::chrono::milliseconds(300));
+    CHECK(!emulated.HasFigure(copy));
+    CHECK(bridge.RealUids().empty());
+    CHECK(std::any_of(lines.begin(), lines.end(), [](const std::string& l) {
+      return l.find("could not read the figure in real slot 0") != std::string::npos;
+    }));
+  }
+
   std::filesystem::remove_all(dir);
   return Finish("real portal bridge");
 }

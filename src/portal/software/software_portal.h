@@ -2,12 +2,15 @@
 
 #include <array>
 #include <atomic>
+#include <bitset>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <span>
 
 #include "portal/portal_device.h"
 
@@ -39,6 +42,30 @@ class SoftwarePortal : public PortalDevice {
   bool HasFigure(int slot) const;
   std::optional<FigureData> Figure(int slot) const;
   std::optional<std::filesystem::path> Source(int slot) const;  // nullopt if empty, out of range, or no source
+
+  // A copy of a toy still being read from a real portal (the hybrid bridge, portal_mode hybrid):
+  // only the blocks in `known` are there yet, the rest come through FillBlock. The game's read of
+  // a missing block is answered when the block comes, and until then the portal answers nothing at
+  // all, as a real portal busy reading a figure does (no status reports either; after
+  // kReadHoldLimit the read is answered as one that failed, and the game asks again). The game's
+  // writes reach the write callback without the source, so nothing is saved before the copy is
+  // whole (FinishLoading). Only into an empty slot: false otherwise, out of range, or `source` in
+  // another slot. Thread-safe.
+  bool PlaceLoadingFigure(int slot, const FigureData& data, const std::bitset<kBlockCount>& known,
+                          std::optional<std::filesystem::path> source);
+  // One more block (16 bytes) of a loading copy; answers the game's reads waiting for it. Not taken
+  // (false) when the slot holds no loading copy or has the block already: the game wrote it
+  // meanwhile, and the game's data wins. Thread-safe.
+  bool FillBlock(int slot, int block, std::span<const uint8_t> bytes);
+  // The block of a loading copy the game has waited for longest, if it waits for one.
+  std::optional<int> WantedBlock(int slot) const;
+  bool IsLoading(int slot) const;
+  // The copy has every block and its source file holds `saved`: the game's writes save to the
+  // source again from now on. False (still loading) when a block is missing or the data changed
+  // since `saved` (a write came in meanwhile: save that and call again).
+  bool FinishLoading(int slot, const FigureData& saved);
+  // How long a read of a loading copy's missing block waits at most.
+  static constexpr std::chrono::milliseconds kReadHoldLimit{1000};
 
   // Called after a successful figure write ('W' to a present slot and a valid block), with the
   // slot index, the figure's full data at that point, and the source PlaceFigure was given for
@@ -76,16 +103,35 @@ class SoftwarePortal : public PortalDevice {
     bool swap_pending = false;
     FigureData next_data{};
     std::optional<std::filesystem::path> next_source;
+    // A copy still being read from a real portal (PlaceLoadingFigure): the blocks it has.
+    bool loading = false;
+    std::bitset<kBlockCount> known;
+  };
+  // A reply for the game. A read of a loading copy's missing block waits in the queue, and every
+  // reply behind it with it (a real portal answers in order), until the block comes.
+  struct Reply {
+    Report report{};
+    int wait_slot = -1;  // >= 0: waits for this slot's block wait_block
+    int wait_block = -1;
+    std::chrono::steady_clock::time_point since{};
   };
 
   // Puts a pending swap's figure into the slot (as added while active).
   void ApplySwapLocked(Slot& s);
+  // Answers the reads waiting for `slot` (only those for `block` if it is >= 0): with the block
+  // when the slot's figure has it, else as a read that found no figure.
+  void AnswerWaitsLocked(int slot, int block);
+  // The waiting reads of `slot` answered as finding no figure, and its loading state ended: its
+  // figure is going or being replaced.
+  void EndLoadingLocked(int slot);
+  // `data` into an empty or inactive slot, or as a pending swap (PlaceFigure, PlaceLoadingFigure).
+  bool PlaceLocked(int slot, const FigureData& data, std::optional<std::filesystem::path> source);
 
   Report StatusReportLocked();
 
   std::atomic<PortalAudioSink*> audio_sink_{nullptr};
   mutable std::mutex mu_;
-  std::deque<Report> replies_;
+  std::deque<Reply> replies_;
   std::array<Slot, kMaxFigures> slots_{};
   bool active_ = false;
   uint8_t counter_ = 0;

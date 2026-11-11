@@ -23,6 +23,10 @@ constexpr int kAttempts = 3;
 // With 3 quick tries a figure put back after a swap was given up at once and then ignored until it
 // was lifted off and put on again (TrapTeamRecomp #22, an Xbox 360 portal).
 constexpr int kReadAttempts = 12;
+// A toy's copy goes onto the emulated portal once this many of its blocks are read (0 to 7: its
+// identity and the first sector), so a toy that only touched the portal for a moment, or bounced back
+// on, isn't shown to the game (TheBiemGamer's number, from his portal, Core of Light #62).
+constexpr int kEarlyBlocks = 8;
 // The light: at most this often.
 constexpr auto kLightInterval = std::chrono::milliseconds(100);
 // Reports handled per step: the real portal queues a status report every few milliseconds.
@@ -110,7 +114,8 @@ void RealPortalBridge::Step(PortalDevice* real) {
     const Command timed_out = *pending_;
     pending_.reset();
     if (timed_out.cmd == 'Q') {
-      if (slots_[timed_out.slot].phase == RealSlot::Phase::kReading) {
+      const RealSlot::Phase phase = slots_[timed_out.slot].phase;
+      if (phase == RealSlot::Phase::kReading || phase == RealSlot::Phase::kLoading) {
         ReadMissed(timed_out.slot, "no answer");
       }
     } else if (timed_out.cmd == 'W') {
@@ -126,6 +131,9 @@ void RealPortalBridge::Step(PortalDevice* real) {
     }
   }
   TrackCopies();
+  for (int slot = 0; slot < kMaxFigures; ++slot) {
+    if (slots_[slot].phase == RealSlot::Phase::kFinishing) Finish(slot);
+  }
   if (!pending_) SendNext();
 }
 
@@ -170,14 +178,26 @@ void RealPortalBridge::Handle(const Report& report) {
       if (slot != pending_->slot || block != pending_->block) break;
       pending_.reset();
       RealSlot& s = slots_[slot];
-      if (s.phase != RealSlot::Phase::kReading) break;
+      if (s.phase != RealSlot::Phase::kReading && s.phase != RealSlot::Phase::kLoading) break;
+      if (block >= int(kBlockCount) || s.read.test(size_t(block))) break;
       if (!(report[1] & 0x10)) {
         ReadMissed(slot, "the portal couldn't read it");
         break;
       }
       std::copy_n(report.begin() + 3, kBlockSize, s.data.begin() + block * kBlockSize);
+      s.read.set(size_t(block));
       s.attempts = 0;
-      if (++s.next_block >= int(kBlockCount)) Arrived(slot);
+      if (s.phase == RealSlot::Phase::kReading) {
+        bool early = true;
+        for (int b = 0; b < kEarlyBlocks; ++b) early = early && s.read.test(size_t(b));
+        if (early) Place(slot);
+      } else {
+        Fill(slot, block);
+      }
+      if (s.phase == RealSlot::Phase::kLoading && s.read.all()) {
+        s.phase = RealSlot::Phase::kFinishing;
+        Finish(slot);
+      }
       break;
     }
     case 0x57: {  // a block write: 57, slot | 10 if it was written, block
@@ -215,6 +235,7 @@ void RealPortalBridge::HandleStatus(const Report& report) {
     if (present && s.phase == RealSlot::Phase::kEmpty) {
       s = RealSlot{};
       s.phase = RealSlot::Phase::kReading;
+      s.seen = Clock::now();
     } else if (!present && s.phase != RealSlot::Phase::kEmpty) {
       Gone(slot, "lifted off the real portal");
     }
@@ -223,7 +244,25 @@ void RealPortalBridge::HandleStatus(const Report& report) {
 
 void RealPortalBridge::SendNext() {
   if (wake_ != Wake::kActive) return;  // nothing goes out before the portal is on
-  // Writes first, so the real figure keeps up with the game; then figures still being read. The
+  const Clock::time_point now = Clock::now();
+  const auto read = [&](int slot, int block) {
+    pending_ = Command{'Q', slot, block, now};
+    slots_[slot].reading = block;
+    real_->Write(Make({'Q', uint8_t(slot), uint8_t(block)}));
+  };
+  // A block the game waits for comes first: its reply holds up everything the game asks.
+  for (int slot = 0; slot < kMaxFigures; ++slot) {
+    const RealSlot& s = slots_[slot];
+    if (s.phase != RealSlot::Phase::kLoading || now < s.retry_at) continue;
+    const int copy = CopyOf(slot);
+    if (copy < 0) continue;
+    if (const std::optional<int> wanted = emulated_->WantedBlock(copy);
+        wanted && *wanted >= 0 && *wanted < int(kBlockCount) && !s.read.test(size_t(*wanted))) {
+      read(slot, *wanted);
+      return;
+    }
+  }
+  // Writes next, so the real figure keeps up with the game; then figures still being read. The
   // write goes out after the lock is released: the game's thread takes it for OnEmulatedWrite.
   std::optional<Report> write;
   {
@@ -240,12 +279,14 @@ void RealPortalBridge::SendNext() {
     real_->Write(*write);
     return;
   }
-  const Clock::time_point now = Clock::now();
   for (int slot = 0; slot < kMaxFigures; ++slot) {
     const RealSlot& s = slots_[slot];
-    if (s.phase != RealSlot::Phase::kReading || now < s.retry_at) continue;
-    pending_ = Command{'Q', slot, s.next_block, now};
-    real_->Write(Make({'Q', uint8_t(slot), uint8_t(s.next_block)}));
+    if ((s.phase != RealSlot::Phase::kReading && s.phase != RealSlot::Phase::kLoading) || now < s.retry_at) {
+      continue;
+    }
+    const int block = NextBlock(slot);
+    if (block < 0) continue;
+    read(slot, block);
     return;
   }
   // The game's speaker switch, answered with whether the portal has a speaker.
@@ -280,15 +321,28 @@ void RealPortalBridge::SendNext() {
   }
 }
 
-void RealPortalBridge::Arrived(int real_slot) {
+int RealPortalBridge::NextBlock(int real_slot) const {
+  const RealSlot& s = slots_[real_slot];
+  for (int block = 0; block < int(kBlockCount); ++block) {
+    if (!s.read.test(size_t(block))) return block;
+  }
+  return -1;
+}
+
+int RealPortalBridge::CopyOf(int real_slot) const {
+  std::lock_guard lock(mu_);
+  return copy_slot_[real_slot];
+}
+
+void RealPortalBridge::Place(int real_slot) {
   RealSlot& s = slots_[real_slot];
   s.uid = UidOf(s.data);
   const SkylanderInfo* sky = FindSkylander(ReadFigureId(s.data), ReadFigureVariant(s.data));
-  const std::string name = sky ? std::string(sky->name) : std::string("Unknown figure");
+  s.name = sky ? std::string(sky->name) : std::string("Unknown figure");
   if (!options_.backup_dir.empty()) {
     std::error_code ec;
     std::filesystem::create_directories(options_.backup_dir, ec);
-    s.source = options_.backup_dir / (name + " " + Hex(s.uid) + ".dump");
+    s.source = options_.backup_dir / (s.name + " " + Hex(s.uid) + ".dump");
     // Its backup file already on the emulated portal through the menu (it lists that folder): the
     // toy would take over that slot and the game's writes from another state would go onto it
     // (#62). Left out, before the file in use is renamed or saved over.
@@ -298,26 +352,11 @@ void RealPortalBridge::Arrived(int real_slot) {
       if (in_use && (*in_use == s.source || std::filesystem::equivalent(*in_use, s.source, same_ec))) {
         s.phase = RealSlot::Phase::kFailed;
         s.source.clear();
-        Log("Hybrid portal: " + name + "'s backup file is on the portal through the menu; the toy is "
+        Log("Hybrid portal: " + s.name + "'s backup file is on the portal through the menu; the toy is "
             "left out until that is taken off and the toy put on again");
-        if (options_.on_backup_in_use) options_.on_backup_in_use(name);
+        if (options_.on_backup_in_use) options_.on_backup_in_use(s.name);
         return;
       }
-    }
-    // A backup with other data (played from the portal menu meanwhile, or an older state) is kept
-    // under another name rather than overwritten.
-    if (std::filesystem::exists(s.source)) {
-      const std::optional<FigureData> old = LoadFigureFile(s.source);
-      if (!old || *old != s.data) {
-        const std::filesystem::path kept =
-            UniqueFigurePath(options_.backup_dir, name + " " + Hex(s.uid) + " before");
-        std::filesystem::rename(s.source, kept, ec);
-        Log("Hybrid portal: the backup of " + name + " had other data; kept as " +
-            Utf8Path(kept.filename()));
-      }
-    }
-    if (!SaveFigureFileAtomic(s.source, s.data)) {
-      Log("Hybrid portal: could not save the backup of " + name);
     }
   }
   // Copies fill the emulated portal from the top, the portal menu from the bottom.
@@ -328,34 +367,111 @@ void RealPortalBridge::Arrived(int real_slot) {
       break;
     }
   }
-  if (target < 0) {
+  // Loading: the blocks still to come are read while the game reads the copy. The backup file is
+  // written once the copy is whole (Finish); the source marks the file as in use meanwhile.
+  if (target < 0 ||
+      !emulated_->PlaceLoadingFigure(target, s.data, s.read,
+                                     s.source.empty() ? std::nullopt
+                                                      : std::optional<std::filesystem::path>(s.source))) {
     s.phase = RealSlot::Phase::kFailed;
-    Log("Hybrid portal: the emulated portal is full; " + name + " is left out");
+    s.source.clear();
+    Log("Hybrid portal: the emulated portal is full; " + s.name + " is left out");
     return;
   }
-  emulated_->PlaceFigure(target, s.data,
-                         s.source.empty() ? std::nullopt
-                                          : std::optional<std::filesystem::path>(s.source));
-  s.phase = RealSlot::Phase::kMirrored;
+  s.phase = RealSlot::Phase::kLoading;
   {
     std::lock_guard lock(mu_);
     copy_slot_[real_slot] = target;
-    written_[real_slot] = s.data;
+    written_[real_slot] = s.data;  // the blocks not read yet are zero on both sides
     uid_[real_slot] = s.uid;
-    mirrored_[real_slot] = true;
+    mirrored_[real_slot] = true;   // the game's writes go to the toy from now on
   }
-  Log("Hybrid portal: " + name + " from real slot " + std::to_string(real_slot) +
+  Log("Hybrid portal: " + s.name + " from real slot " + std::to_string(real_slot) +
       " is in emulated slot " + std::to_string(target));
   if (options_.on_arrived) options_.on_arrived(target);
+}
+
+void RealPortalBridge::Fill(int real_slot, int block) {
+  RealSlot& s = slots_[real_slot];
+  const int copy = CopyOf(real_slot);
+  const std::span<const uint8_t> bytes(s.data.data() + size_t(block) * kBlockSize, kBlockSize);
+  if (copy < 0 || !emulated_->FillBlock(copy, block, bytes)) return;  // the game's own version stays
+  std::lock_guard lock(mu_);
+  std::copy(bytes.begin(), bytes.end(), written_[real_slot].begin() + size_t(block) * kBlockSize);
+}
+
+void RealPortalBridge::Finish(int real_slot) {
+  RealSlot& s = slots_[real_slot];
+  // A backup with other data than the toy's (played from the portal menu meanwhile, or an older
+  // state) is kept under another name rather than overwritten. Once, before the copy is saved there.
+  if (!s.source.empty() && !s.backup_checked) {
+    s.backup_checked = true;
+    std::error_code ec;
+    if (std::filesystem::exists(s.source, ec)) {
+      const std::optional<FigureData> old = LoadFigureFile(s.source);
+      if (!old || *old != s.data) {
+        const std::filesystem::path kept =
+            UniqueFigurePath(options_.backup_dir, s.name + " " + Hex(s.uid) + " before");
+        std::filesystem::rename(s.source, kept, ec);
+        Log("Hybrid portal: the backup of " + s.name + " had other data; kept as " +
+            Utf8Path(kept.filename()));
+      }
+    }
+  }
+  const auto done = [&] {
+    s.phase = RealSlot::Phase::kMirrored;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - s.seen).count();
+    Log("Hybrid portal: " + s.name + " read whole in " + std::to_string(ms) + " ms");
+  };
+  const int copy = CopyOf(real_slot);
+  if (copy < 0 || !emulated_->IsLoading(copy)) {
+    // The copy isn't on the emulated portal (taken off meanwhile): the backup gets the toy as read.
+    if (!s.source.empty() && !SaveFigureFileAtomic(s.source, s.data)) {
+      Log("Hybrid portal: could not save the backup of " + s.name);
+    }
+    return done();
+  }
+  // The copy as it is now (with the game's writes) into the backup file, then the copy is whole;
+  // a write that came in between makes FinishLoading refuse, and the newer state is saved.
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    const std::optional<FigureData> now = emulated_->Figure(copy);
+    if (!now) return done();
+    if (!s.source.empty() && !SaveFigureFileAtomic(s.source, *now)) {
+      Log("Hybrid portal: could not save the backup of " + s.name);
+    }
+    if (emulated_->FinishLoading(copy, *now)) return done();
+  }
+  // The game kept writing: again on the next step (kFinishing).
+}
+
+void RealPortalBridge::DropCopy(int real_slot) {
+  RealSlot& s = slots_[real_slot];
+  int copy = -1;
+  {
+    std::lock_guard lock(mu_);
+    copy = copy_slot_[real_slot];
+    copy_slot_[real_slot] = -1;
+    mirrored_[real_slot] = false;
+    uid_[real_slot] = 0;
+    writes_.erase(std::remove_if(writes_.begin(), writes_.end(),
+                                 [&](const PendingWrite& w) { return w.real_slot == real_slot; }),
+                  writes_.end());
+  }
+  if (copy >= 0 && emulated_->IsLoading(copy) &&
+      (s.source.empty() || emulated_->Source(copy) == s.source)) {
+    emulated_->RemoveFigure(copy);
+  }
 }
 
 void RealPortalBridge::ReadMissed(int real_slot, const char* why) {
   RealSlot& s = slots_[real_slot];
   s.retry_at = Clock::now() + options_.read_retry_pause;
   if (++s.attempts < kReadAttempts) return;
+  // Given up: a loading copy can't become whole, so it goes (the game sees the toy lifted).
+  if (s.phase == RealSlot::Phase::kLoading) DropCopy(real_slot);
   s.phase = RealSlot::Phase::kFailed;
   Log("Hybrid portal: could not read the figure in real slot " + std::to_string(real_slot) +
-      " (block " + std::to_string(s.next_block) + ", " + why + "); lift it off and put it back");
+      " (block " + std::to_string(s.reading) + ", " + why + "); lift it off and put it back");
 }
 
 void RealPortalBridge::Gone(int real_slot, const char* why) {
@@ -376,10 +492,13 @@ void RealPortalBridge::Gone(int real_slot, const char* why) {
   }
   if (pending_ && pending_->cmd != 'M' && pending_->slot == real_slot) pending_.reset();
   // Only the copy itself: the portal menu may have put another figure into that slot meanwhile.
-  if (copy >= 0 && !s.source.empty() && emulated_->Source(copy) == s.source) {
+  // A loading copy without a backup file has no source to check: it is the bridge's own until whole.
+  if (copy >= 0 && ((!s.source.empty() && emulated_->Source(copy) == s.source) ||
+                    (s.source.empty() && s.phase == RealSlot::Phase::kLoading && emulated_->IsLoading(copy)))) {
     emulated_->RemoveFigure(copy);
   }
-  if (s.phase == RealSlot::Phase::kMirrored) {
+  if (s.phase == RealSlot::Phase::kMirrored || s.phase == RealSlot::Phase::kLoading ||
+      s.phase == RealSlot::Phase::kFinishing) {
     Log(std::string("Hybrid portal: real slot ") + std::to_string(real_slot) + " " + why +
         (dropped ? "; " + std::to_string(dropped) + " blocks not written, they are in the backup"
                  : std::string()));
@@ -400,7 +519,11 @@ int RealPortalBridge::FindCopy(const std::filesystem::path& source) const {
 void RealPortalBridge::TrackCopies() {
   for (int slot = 0; slot < kMaxFigures; ++slot) {
     const RealSlot& s = slots_[slot];
-    if (s.phase != RealSlot::Phase::kMirrored) continue;
+    if (s.phase != RealSlot::Phase::kMirrored && s.phase != RealSlot::Phase::kLoading &&
+        s.phase != RealSlot::Phase::kFinishing) {
+      continue;
+    }
+    if (s.source.empty()) continue;  // without backup files the copy stays where it was put
     const int copy = FindCopy(s.source);
     std::lock_guard lock(mu_);
     copy_slot_[slot] = copy;

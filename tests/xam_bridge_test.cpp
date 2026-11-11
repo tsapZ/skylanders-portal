@@ -37,6 +37,12 @@ int main() {
     idle.next[0] = 'R';  // replies are always delivered
     CHECK(quiet.Read(&idle, b, n, s) == kXamSuccess);
     CHECK(s == 1 && n == 32 && b[2] == 'R');
+    // An empty report (a portal busy reading a figure, nothing queued) is "no new data" too, not a
+    // report of zeros.
+    idle.next = Report{};
+    CHECK(quiet.Read(&idle, b, n, s) == kXamSuccess);  // right after a report: "no new data" anyway
+    CHECK(quiet.Read(&idle, b, n, s) == kXamSuccess);
+    CHECK(s == 0 && n == 0);
   }
 
   XamBridge bridge;

@@ -3,8 +3,12 @@
 // portal_mode "hybrid": the game talks to a SoftwarePortal, so the portal menu, its item and
 // sidekick rules and the portal check keep working, and this bridge drives a real portal next to
 // it (docs/hybrid-portal.md in SwapForceRecomp):
-//   - every figure standing on the real portal is read whole (all 64 blocks) and put into a free
-//     emulated slot as a copy, with its 1 KB saved as a backup file that is also the copy's source;
+//   - every figure standing on the real portal goes into a free emulated slot as a copy once its
+//     first kEarlyBlocks blocks are read, and the game reads that copy while the rest comes in: a
+//     block it asks for is read next, its reply waiting meanwhile (SoftwarePortal's loading
+//     copies), so a toy comes in about as fast as on the real portal alone (TheBiemGamer's idea,
+//     Core of Light #62; TrapTeamRecomp #22: reading all 64 blocks first took 1.5 to 1.8 s on an
+//     Xbox 360 portal). Once whole, its 1 KB is saved as a backup file, also the copy's source;
 //   - blocks the game writes to the copy go back onto the real figure, one at a time, in order
 //     (never block 0 or 1 or a sector trailer, which hold the tag's identity and keys);
 //   - lifting the figure off the real portal takes the copy off; a copy the portal menu lifted is
@@ -14,6 +18,7 @@
 
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -90,13 +95,20 @@ class RealPortalBridge {
   enum class Wake { kReady, kActivate, kActive };
 
   struct RealSlot {
-    enum class Phase { kEmpty, kReading, kMirrored, kFailed } phase = Phase::kEmpty;
+    // kReading: its first kEarlyBlocks blocks, nothing on the emulated portal yet. kLoading: its
+    // copy is on the emulated portal (a loading one) and the rest is read, a block the game waits
+    // for first. kFinishing: every block read, its backup file being written. kMirrored: whole.
+    enum class Phase { kEmpty, kReading, kLoading, kFinishing, kMirrored, kFailed } phase = Phase::kEmpty;
     FigureData data{};
-    int next_block = 0;
+    std::bitset<kBlockCount> read;   // the blocks read from the toy
     int attempts = 0;                // for the block being read
+    int reading = -1;                // the block asked for last (for the log)
     Clock::time_point retry_at{};    // not asked again before this
+    Clock::time_point seen{};        // put on the real portal (for the log)
     uint32_t uid = 0;
+    std::string name;
     std::filesystem::path source;  // the backup file, the copy's identity
+    bool backup_checked = false;   // an older backup with other data was kept aside (Finish)
   };
   struct PendingWrite {
     int real_slot = 0;
@@ -116,7 +128,20 @@ class RealPortalBridge {
   void Handle(const Report& report);
   void HandleStatus(const Report& report);
   void SendNext();
-  void Arrived(int real_slot);
+  // The first block of a toy not read yet, -1 if none (a block the game waits for goes first, in
+  // SendNext).
+  int NextBlock(int real_slot) const;
+  // The toy's first kEarlyBlocks blocks are read: its copy goes onto the emulated portal (loading).
+  void Place(int real_slot);
+  // A block read from a toy whose copy is loading: into the copy, unless the game wrote it there.
+  void Fill(int real_slot, int block);
+  // Every block of the toy is read: its backup file gets the copy, which then is whole. Tried again
+  // on the next step while the game keeps writing to it.
+  void Finish(int real_slot);
+  // The emulated slot of a real slot's copy, or -1.
+  int CopyOf(int real_slot) const;
+  // The copy of a toy given up while it was loading comes off the emulated portal.
+  void DropCopy(int real_slot);
   // A block of the figure being read wasn't read (refused or no answer): asked again after the
   // pause, or the figure is given up after too many tries, with a log line.
   void ReadMissed(int real_slot, const char* why);

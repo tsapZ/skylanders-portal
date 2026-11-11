@@ -34,7 +34,7 @@ void SoftwarePortal::Write(const Report& in) {
     std::lock_guard<std::mutex> lock(mu_);
     switch (in[0]) {
       case 'R':  // ready
-        replies_.push_back(MakeReport({0x52, 0x02, 0x1B}));
+        replies_.push_back({MakeReport({0x52, 0x02, 0x1B})});
         break;
       case 'A': {  // activate (argument != 0) or deactivate (argument == 0)
         const bool activate = in[1] != 0;
@@ -55,18 +55,18 @@ void SoftwarePortal::Write(const Report& in) {
           }
         }
         active_ = activate;
-        replies_.push_back(MakeReport({0x41, in[1], 0xFF, 0x77}));
+        replies_.push_back({MakeReport({0x41, in[1], 0xFF, 0x77})});
         break;
       }
       case 'M': {  // audio firmware version: says whether the portal has a speaker
         PortalAudioSink* sink = audio_sink_.load();
-        replies_.push_back(sink ? MakeReport({0x4D, in[1], kAudioCapableVersion[0],
-                                              kAudioCapableVersion[1]})
-                                : MakeReport({0x4D, in[1], 0x00, 0x19}));
+        replies_.push_back({sink ? MakeReport({0x4D, in[1], kAudioCapableVersion[0],
+                                               kAudioCapableVersion[1]})
+                                 : MakeReport({0x4D, in[1], 0x00, 0x19})});
         break;
       }
       case 'J':  // Trap Team portal sync: acknowledged with a bare 4A report
-        replies_.push_back(MakeReport({0x4A}));
+        replies_.push_back({MakeReport({0x4A})});
         break;
       case 'Q': {  // read one block of a figure
         const uint8_t slot = in[1] & 0x0F;
@@ -74,13 +74,18 @@ void SoftwarePortal::Write(const Report& in) {
         Report out = MakeReport({0x51, slot, block});
         const Slot& s = slots_[slot];
         if (s.present && block < kBlockCount) {
+          if (s.loading && !s.known.test(block)) {
+            // Not read from the real toy yet: the reply waits for it (FillBlock).
+            replies_.push_back({out, slot, block, std::chrono::steady_clock::now()});
+            break;
+          }
           out[1] |= 0x10;
           std::copy_n(s.data.begin() + block * kBlockSize, kBlockSize, out.begin() + 3);
           if (research_log_) {
             research_log_("read", slot, block, &s.data[block * kBlockSize], kBlockSize);
           }
         }
-        replies_.push_back(out);
+        replies_.push_back({out});
         break;
       }
       case 'W': {  // write one block of a figure
@@ -94,9 +99,16 @@ void SoftwarePortal::Write(const Report& in) {
           if (research_log_) {
             research_log_("write", slot, block, &s.data[block * kBlockSize], kBlockSize);
           }
-          written = WriteEvent{static_cast<int>(slot), s.data, s.source};
+          if (s.loading) {
+            // The game's own version of the block: the toy's, still to come, doesn't replace it.
+            s.known.set(block);
+            AnswerWaitsLocked(slot, block);
+          }
+          // A loading copy's writes aren't saved: its file gets the whole copy (FinishLoading).
+          written = WriteEvent{static_cast<int>(slot), s.data,
+                               s.loading ? std::optional<std::filesystem::path>{} : s.source};
         }
-        replies_.push_back(out);
+        replies_.push_back({out});
         break;
       }
       default:
@@ -114,11 +126,40 @@ void SoftwarePortal::Write(const Report& in) {
 Report SoftwarePortal::Read() {
   std::lock_guard<std::mutex> lock(mu_);
   if (!replies_.empty()) {
-    Report r = replies_.front();
+    Reply& front = replies_.front();
+    if (front.wait_slot >= 0) {
+      // Busy reading, as a real portal is: nothing to give yet (an empty report).
+      if (std::chrono::steady_clock::now() - front.since < kReadHoldLimit) return Report{};
+      // The block didn't come in time: a read that failed, which the game asks again.
+      front.wait_slot = -1;
+    }
+    const Report r = front.report;
     replies_.pop_front();
     return r;
   }
   return StatusReportLocked();
+}
+
+void SoftwarePortal::AnswerWaitsLocked(int slot, int block) {
+  const Slot& s = slots_[slot];
+  for (Reply& r : replies_) {
+    if (r.wait_slot != slot || (block >= 0 && r.wait_block != block)) continue;
+    if (s.present && (!s.loading || s.known.test(size_t(r.wait_block)))) {
+      r.report[1] |= 0x10;
+      std::copy_n(s.data.begin() + size_t(r.wait_block) * kBlockSize, kBlockSize, r.report.begin() + 3);
+    }
+    r.wait_slot = -1;
+  }
+}
+
+void SoftwarePortal::EndLoadingLocked(int slot) {
+  Slot& s = slots_[slot];
+  if (!s.loading) return;
+  for (Reply& r : replies_) {
+    if (r.wait_slot == slot) r.wait_slot = -1;  // without the figure flag: no figure there
+  }
+  s.loading = false;
+  s.known.reset();
 }
 
 Report SoftwarePortal::StatusReportLocked() {
@@ -147,6 +188,7 @@ Report SoftwarePortal::StatusReportLocked() {
 }
 
 void SoftwarePortal::ApplySwapLocked(Slot& s) {
+  EndLoadingLocked(static_cast<int>(&s - slots_.data()));
   s.swap_pending = false;
   s.present = true;
   s.data = s.next_data;
@@ -177,6 +219,59 @@ bool SoftwarePortal::PlaceFigure(int slot, const FigureData& data,
                                  std::optional<std::filesystem::path> source) {
   if (slot < 0 || slot >= kMaxFigures) return false;
   std::lock_guard<std::mutex> lock(mu_);
+  return PlaceLocked(slot, data, std::move(source));
+}
+
+bool SoftwarePortal::PlaceLoadingFigure(int slot, const FigureData& data,
+                                        const std::bitset<kBlockCount>& known,
+                                        std::optional<std::filesystem::path> source) {
+  if (slot < 0 || slot >= kMaxFigures) return false;
+  std::lock_guard<std::mutex> lock(mu_);
+  Slot& s = slots_[slot];
+  if (s.present || s.swap_pending || !PlaceLocked(slot, data, std::move(source))) return false;
+  s.loading = !known.all();
+  s.known = s.loading ? known : std::bitset<kBlockCount>{};
+  return true;
+}
+
+bool SoftwarePortal::FillBlock(int slot, int block, std::span<const uint8_t> bytes) {
+  if (slot < 0 || slot >= kMaxFigures || block < 0 || block >= int(kBlockCount) || bytes.size() < kBlockSize) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(mu_);
+  Slot& s = slots_[slot];
+  if (!s.present || !s.loading || s.known.test(size_t(block))) return false;
+  std::copy_n(bytes.begin(), kBlockSize, s.data.begin() + size_t(block) * kBlockSize);
+  s.known.set(size_t(block));
+  AnswerWaitsLocked(slot, block);
+  return true;
+}
+
+std::optional<int> SoftwarePortal::WantedBlock(int slot) const {
+  std::lock_guard<std::mutex> lock(mu_);
+  for (const Reply& r : replies_) {
+    if (r.wait_slot == slot) return r.wait_block;
+  }
+  return std::nullopt;
+}
+
+bool SoftwarePortal::IsLoading(int slot) const {
+  if (slot < 0 || slot >= kMaxFigures) return false;
+  std::lock_guard<std::mutex> lock(mu_);
+  return slots_[slot].present && slots_[slot].loading;
+}
+
+bool SoftwarePortal::FinishLoading(int slot, const FigureData& saved) {
+  if (slot < 0 || slot >= kMaxFigures) return false;
+  std::lock_guard<std::mutex> lock(mu_);
+  Slot& s = slots_[slot];
+  if (!s.present || !s.loading || !s.known.all() || s.data != saved) return false;
+  s.loading = false;
+  s.known.reset();
+  return true;
+}
+
+bool SoftwarePortal::PlaceLocked(int slot, const FigureData& data, std::optional<std::filesystem::path> source) {
   // One file, one slot: two slots on the same file save over each other, and one of them loses its
   // progress (Core of Light #60, TheBiemGamer). The menus show such a figure as taken; this catches
   // every other way in. The same slot again (a swap to the same file) is fine.
@@ -198,6 +293,7 @@ bool SoftwarePortal::PlaceFigure(int slot, const FigureData& data,
     s.state = SlotState::kRemoving;
     return true;
   }
+  EndLoadingLocked(slot);  // a loading copy replaced while the game isn't watching
   s.swap_pending = false;
   s.next_source.reset();
   s.present = true;
@@ -217,6 +313,7 @@ bool SoftwarePortal::RemoveFigure(int slot) {
   std::lock_guard<std::mutex> lock(mu_);
   Slot& s = slots_[slot];
   if (!s.present) return false;
+  EndLoadingLocked(slot);
   s.present = false;
   s.data = FigureData{};
   s.source.reset();

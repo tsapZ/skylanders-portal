@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <atomic>
+#include <bitset>
 #include <chrono>
 #include <filesystem>
 #include <initializer_list>
@@ -481,6 +483,90 @@ int main() {
     portal.SetAudioSink(nullptr);
     portal.WriteAudio(pcm);
     CHECK(sink.got.size() == 60);
+  }
+
+  // A loading copy (the hybrid bridge's, still being read from a real portal): a read of a block it
+  // has is answered at once; one of a missing block waits, and so does every reply behind it (a
+  // real portal answers in order), with nothing at all from the portal meanwhile; FillBlock answers
+  // it.
+  {
+    SoftwarePortal portal;
+    portal.Write(Cmd({'A', 0x01}));
+    CHECK(portal.Read()[0] == 0x41);
+    FigureData data{};
+    for (size_t i = 0; i < data.size(); ++i) data[i] = uint8_t(i / kBlockSize);
+    FigureData partial{};
+    std::copy_n(data.begin(), 8 * kBlockSize, partial.begin());
+    std::bitset<kBlockCount> known;
+    for (size_t b = 0; b < 8; ++b) known.set(b);
+    CHECK(portal.PlaceLoadingFigure(2, partial, known, std::nullopt));
+    CHECK(portal.IsLoading(2));
+    CHECK(!portal.PlaceLoadingFigure(2, partial, known, std::nullopt));  // only into an empty slot
+    portal.Write(Cmd({'Q', 0x22, 5}));
+    Report r = portal.Read();
+    CHECK(r[0] == 0x51 && r[1] == 0x12 && r[2] == 5 && r[3] == 5);
+    portal.Write(Cmd({'Q', 0x22, 30}));
+    portal.Write(Cmd({'R'}));  // its reply comes after the read's
+    CHECK(portal.Read()[0] == 0);
+    CHECK(portal.Read()[0] == 0);
+    CHECK(portal.WantedBlock(2) == 30);
+    CHECK(!portal.WantedBlock(3));
+    CHECK(!portal.FillBlock(2, 5, std::span<const uint8_t>(data.data() + 5 * kBlockSize, kBlockSize)));  // has it
+    CHECK(portal.FillBlock(2, 30, std::span<const uint8_t>(data.data() + 30 * kBlockSize, kBlockSize)));
+    r = portal.Read();
+    CHECK(r[0] == 0x51 && r[1] == 0x12 && r[2] == 30 && r[3] == 30);
+    CHECK(portal.Read()[0] == 0x52);
+    CHECK(!portal.WantedBlock(2));
+    // The game's write to a missing block stays: the toy's older block doesn't replace it. Nothing is
+    // saved (no source in the callback) before the copy is whole.
+    std::vector<bool> with_source;
+    portal.SetWriteCallback([&](int, const FigureData&, const std::optional<std::filesystem::path>& source) {
+      with_source.push_back(source.has_value());
+    });
+    Report w = Cmd({'W', 0x02, 40});
+    std::fill(w.begin() + 3, w.begin() + 3 + kBlockSize, uint8_t(0xEE));
+    portal.Write(w);
+    CHECK(portal.Read()[0] == 0x57);
+    CHECK(!portal.FillBlock(2, 40, std::span<const uint8_t>(data.data() + 40 * kBlockSize, kBlockSize)));
+    CHECK(portal.Figure(2) && (*portal.Figure(2))[40 * kBlockSize] == 0xEE);
+    CHECK(with_source.size() == 1 && !with_source[0]);
+    // Whole once every block is there and the saved data is still the current data.
+    for (int b = 8; b < int(kBlockCount); ++b) {
+      portal.FillBlock(2, b, std::span<const uint8_t>(data.data() + size_t(b) * kBlockSize, kBlockSize));
+    }
+    FigureData saved = *portal.Figure(2);
+    FigureData stale = saved;
+    stale[100] ^= 0xFF;
+    CHECK(!portal.FinishLoading(2, stale));  // a write came in after that was saved
+    CHECK(portal.IsLoading(2));
+    CHECK(portal.FinishLoading(2, saved));
+    CHECK(!portal.IsLoading(2));
+  }
+
+  // A loading copy taken off, or replaced: its waiting reads are answered as finding no figure. One
+  // that waits too long (the real portal stopped answering) is answered as a failed read.
+  {
+    SoftwarePortal portal;
+    portal.Write(Cmd({'A', 0x01}));
+    portal.Read();
+    std::bitset<kBlockCount> known;
+    known.set(0);
+    known.set(1);
+    CHECK(portal.PlaceLoadingFigure(4, FigureData{}, known, std::nullopt));
+    portal.Write(Cmd({'Q', 0x24, 9}));
+    CHECK(portal.Read()[0] == 0);
+    CHECK(portal.RemoveFigure(4));
+    Report r = portal.Read();
+    CHECK(r[0] == 0x51 && r[1] == 0x04 && r[2] == 9);  // no figure flag
+    CHECK(!portal.IsLoading(4));
+
+    CHECK(portal.PlaceLoadingFigure(6, FigureData{}, known, std::nullopt));
+    portal.Write(Cmd({'Q', 0x26, 12}));
+    CHECK(portal.Read()[0] == 0);
+    std::this_thread::sleep_for(SoftwarePortal::kReadHoldLimit + std::chrono::milliseconds(50));
+    r = portal.Read();
+    CHECK(r[0] == 0x51 && r[1] == 0x06 && r[2] == 12);
+    CHECK(portal.IsLoading(6));  // still loading: the game asks again
   }
 
   return Finish("software_portal");
