@@ -44,6 +44,9 @@ class RealPortalBridge {
     // With no sign of an active real portal for this long (a status saying active, a reply), it is
     // set up again (R, then A): a portal can miss the A right after it is plugged in.
     std::chrono::milliseconds restart_after{1000};
+    // A block the real portal couldn't read (or didn't answer for) is asked for again after this
+    // pause, up to 12 times a block, before the figure is given up (TrapTeamRecomp #22).
+    std::chrono::milliseconds read_retry_pause{150};
   };
 
   RealPortalBridge(SoftwarePortal* emulated, Options options);
@@ -80,7 +83,8 @@ class RealPortalBridge {
     enum class Phase { kEmpty, kReading, kMirrored, kFailed } phase = Phase::kEmpty;
     FigureData data{};
     int next_block = 0;
-    int attempts = 0;
+    int attempts = 0;                // for the block being read
+    Clock::time_point retry_at{};    // not asked again before this
     uint32_t uid = 0;
     std::filesystem::path source;  // the backup file, the copy's identity
   };
@@ -103,6 +107,9 @@ class RealPortalBridge {
   void HandleStatus(const Report& report);
   void SendNext();
   void Arrived(int real_slot);
+  // A block of the figure being read wasn't read (refused or no answer): asked again after the
+  // pause, or the figure is given up after too many tries, with a log line.
+  void ReadMissed(int real_slot, const char* why);
   void Gone(int real_slot, const char* why);
   void TrackCopies();
   int FindCopy(const std::filesystem::path& source) const;

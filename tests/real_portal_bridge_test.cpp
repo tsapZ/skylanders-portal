@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <thread>
 #include <initializer_list>
@@ -62,9 +63,25 @@ class Habits final : public PortalDevice {
       miss_first_activate = false;
       return;
     }
+    if (report[0] == 'Q' && refuse_reads > 0) {
+      // "Couldn't read that block": the reply without the figure flag (0x10), as a real portal
+      // gives it for a figure just put on.
+      --refuse_reads;
+      Report refused{};
+      refused[0] = 0x51;
+      refused[1] = report[1] & 0x0F;
+      refused[2] = report[2];
+      fake_.push_back(refused);
+      return;
+    }
     inner_->Write(report);
   }
   Report Read() override {
+    if (!fake_.empty()) {
+      const Report r = fake_.front();
+      fake_.pop_front();
+      return r;
+    }
     if (stale_status) {
       stale_status = false;
       Report status{};
@@ -78,9 +95,11 @@ class Habits final : public PortalDevice {
   std::vector<Report> sent;
   bool miss_first_activate = false;
   bool stale_status = false;
+  int refuse_reads = 0;  // this many block reads are answered "couldn't read"
 
  private:
   SoftwarePortal* inner_;
+  std::deque<Report> fake_;
 };
 
 // Steps for a while, for the bridge's time-based rules. Not sleeping between them: a 1 ms sleep is
@@ -293,6 +312,44 @@ int main() {
     CHECK(LoadFigureFile(backup) == played);
     CHECK(!std::filesystem::exists(dir / "Chop Chop 44332211 before.dump"));
     CHECK(bridge.RealUids().empty());
+  }
+
+  // TrapTeamRecomp #22: a figure the real portal can't read for a moment (just put on, not lying
+  // flat) is asked for again after a pause instead of being given up after three quick tries.
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    RealPortalBridge::Options options{dir, nullptr, nullptr};
+    options.read_retry_pause = std::chrono::milliseconds(5);
+    RealPortalBridge bridge(&emulated, options);
+    inner.PlaceFigure(0, chop);
+    real.refuse_reads = 6;  // more than the old three tries, fewer than twelve
+    RunFor(bridge, &real, std::chrono::milliseconds(500));
+    CHECK(real.refuse_reads == 0);
+    CHECK(FirstFigure(emulated) == kMaxFigures - 1);
+  }
+
+  // One it can't read at all is given up with a log line, and taken once it is put on again.
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    std::vector<std::string> lines;
+    RealPortalBridge::Options options{dir, [&](const std::string& l) { lines.push_back(l); }, nullptr};
+    options.read_retry_pause = std::chrono::milliseconds(1);
+    RealPortalBridge bridge(&emulated, options);
+    inner.PlaceFigure(0, chop);
+    real.refuse_reads = 1000;
+    RunFor(bridge, &real, std::chrono::milliseconds(300));
+    CHECK(FirstFigure(emulated) < 0);
+    CHECK(std::any_of(lines.begin(), lines.end(), [](const std::string& l) {
+      return l.find("could not read the figure in real slot 0") != std::string::npos;
+    }));
+    real.refuse_reads = 0;
+    inner.RemoveFigure(0);
+    RunFor(bridge, &real, std::chrono::milliseconds(200));
+    inner.PlaceFigure(0, chop);
+    RunFor(bridge, &real, std::chrono::milliseconds(500));
+    CHECK(FirstFigure(emulated) == kMaxFigures - 1);
   }
 
   std::filesystem::remove_all(dir);
