@@ -117,4 +117,11 @@ void WaitForRestartedInstance();
 // file's own value. Call first thing in OnPreSetup.
 void ResolutionFromScreenIfAutomatic();
 
+// "Monitor" for every game's Graphics page, after Fullscreen (Core of Light #75): which screen the
+// window opens on, from the next start. The SDK's `monitor`: 0 lets Windows pick, N is the Nth
+// screen in SDL's order (the main one first). The connected screens are listed by their monitor's
+// name and size; a number saved for a screen that isn't connected now stays listed as such (the SDK
+// then opens on the main one).
+Setting MonitorSetting();
+
 }  // namespace skylanders

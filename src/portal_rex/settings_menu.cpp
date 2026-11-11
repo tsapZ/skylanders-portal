@@ -1719,20 +1719,147 @@ void WaitForRestartedInstance() {
 #endif
 }
 
+namespace {
+
+// A screen as SDL numbers them on Windows (SDL_windowsmodes.c WIN_AddDisplays: the main one first,
+// then the others in EnumDisplayMonitors' order, each only if its mode reads), so a number here is
+// the SDK's `monitor` (window_sdl.cpp centres the window on SDL_GetDisplays()[monitor - 1] before
+// it goes fullscreen).
+struct MonitorScreen {
+  std::wstring device;        // the screen's GDI name, "\\.\DISPLAY2"
+  std::string name;           // the monitor's own name ("DELL U2719D"); empty if Windows has none
+  int width = 0, height = 0;  // its mode in pixels, whatever its scaling
+};
+
+std::vector<MonitorScreen> ScreensInSdlOrder() {
+  std::vector<MonitorScreen> screens;
+#if defined(_WIN32)
+  struct Pass {
+    std::vector<MonitorScreen>* screens;
+    bool primary;
+  };
+  for (const bool primary : {true, false}) {
+    Pass pass{&screens, primary};
+    EnumDisplayMonitors(
+        nullptr, nullptr,
+        [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
+          Pass& pass = *reinterpret_cast<Pass*>(data);
+          MONITORINFOEXW info = {};
+          info.cbSize = sizeof(info);
+          if (!GetMonitorInfoW(monitor, &info) || ((info.dwFlags & MONITORINFOF_PRIMARY) != 0) != pass.primary) {
+            return TRUE;
+          }
+          DEVMODEW mode = {};
+          mode.dmSize = sizeof(mode);
+          if (!EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode)) return TRUE;
+          pass.screens->push_back({info.szDevice, {}, int(mode.dmPelsWidth), int(mode.dmPelsHeight)});
+          return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&pass));
+  }
+  // The monitors' own names, from the active display paths: the source is the screen (its GDI
+  // name), the target the monitor on it. A cloned screen keeps its first monitor's name.
+  UINT32 path_count = 0, mode_count = 0;
+  if (screens.empty() ||
+      GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) != ERROR_SUCCESS) {
+    return screens;
+  }
+  std::vector<DISPLAYCONFIG_PATH_INFO> paths(path_count);
+  std::vector<DISPLAYCONFIG_MODE_INFO> modes(mode_count);
+  if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths.data(), &mode_count, modes.data(), nullptr) !=
+      ERROR_SUCCESS) {
+    return screens;
+  }
+  paths.resize(path_count);
+  for (const DISPLAYCONFIG_PATH_INFO& path : paths) {
+    DISPLAYCONFIG_SOURCE_DEVICE_NAME source = {};
+    source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+    source.header.size = sizeof(source);
+    source.header.adapterId = path.sourceInfo.adapterId;
+    source.header.id = path.sourceInfo.id;
+    DISPLAYCONFIG_TARGET_DEVICE_NAME target = {};
+    target.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+    target.header.size = sizeof(target);
+    target.header.adapterId = path.targetInfo.adapterId;
+    target.header.id = path.targetInfo.id;
+    if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS ||
+        DisplayConfigGetDeviceInfo(&target.header) != ERROR_SUCCESS) {
+      continue;
+    }
+    char name[256] = {};
+    if (WideCharToMultiByte(CP_UTF8, 0, target.monitorFriendlyDeviceName, -1, name, sizeof(name), nullptr,
+                            nullptr) <= 1) {
+      continue;
+    }
+    for (MonitorScreen& screen : screens) {
+      if (screen.name.empty() && screen.device == source.viewGdiDeviceName) screen.name = name;
+    }
+  }
+#endif
+  return screens;
+}
+
+}  // namespace
+
 void ResolutionFromScreenIfAutomatic() {
   if (!rex::cvar::GetFlagByName("settings_schema").empty()) return;  // the launcher shows the file's value
   if (!rex::cvar::GetFlagByName("resolution").empty() || !CvarOn("fullscreen")) return;
 #if defined(_WIN32)
-  // The primary screen's mode in pixels, whatever its scaling (under Gamescope: its output).
-  DEVMODEW mode = {};
-  mode.dmSize = sizeof(mode);
-  if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) || !mode.dmPelsWidth || !mode.dmPelsHeight) {
-    return;
+  // The mode in pixels of the screen the game opens on (`monitor`, MonitorSetting; else the
+  // primary one), whatever its scaling (under Gamescope: its output). A second screen with another
+  // size or shape would otherwise get the main one's picture.
+  int width = 0, height = 0;
+  if (const int chosen = std::atoi(rex::cvar::GetFlagByName("monitor").c_str()); chosen > 0) {
+    const std::vector<MonitorScreen> screens = ScreensInSdlOrder();
+    if (chosen <= int(screens.size())) {
+      width = screens[size_t(chosen) - 1].width;
+      height = screens[size_t(chosen) - 1].height;
+    }
   }
-  const std::string size = std::to_string(mode.dmPelsWidth) + "x" + std::to_string(mode.dmPelsHeight);
+  if (width <= 0 || height <= 0) {
+    DEVMODEW mode = {};
+    mode.dmSize = sizeof(mode);
+    if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) || !mode.dmPelsWidth || !mode.dmPelsHeight) {
+      return;
+    }
+    width = int(mode.dmPelsWidth);
+    height = int(mode.dmPelsHeight);
+  }
+  const std::string size = std::to_string(width) + "x" + std::to_string(height);
   rex::cvar::SetFlagByName("resolution", size.c_str());
   REXLOG_INFO("Settings menu: resolution automatic in fullscreen, the screen's {}", size);
 #endif
+}
+
+Setting MonitorSetting() {
+  Setting monitor;
+  monitor.cvar = "monitor";
+  monitor.en = "Monitor";
+  monitor.de = "Bildschirm";
+  monitor.help_en = "Which screen the game opens on, from the next start.\n"
+                    "Automatic: the one Windows picks, usually the main screen (1).";
+  monitor.help_de = "Auf welchem Bildschirm sich das Spiel \xC3\xB6" "ffnet, ab dem n\xC3\xA4" "chsten Start.\n"
+                    "Automatisch: der, den Windows nimmt, meist der Hauptbildschirm (1).";
+  monitor.restart = true;
+  monitor.options.push_back({"0", "Automatic", "Automatisch"});
+  const std::vector<MonitorScreen> screens = ScreensInSdlOrder();
+  if (screens.empty()) {  // not Windows, or nothing read: the numbers alone
+    for (int i = 1; i <= 4; ++i) monitor.options.push_back({std::to_string(i), std::to_string(i), std::to_string(i)});
+    return monitor;
+  }
+  for (size_t i = 0; i < screens.size(); ++i) {
+    const MonitorScreen& s = screens[i];
+    const std::string size = std::to_string(s.width) + "x" + std::to_string(s.height);
+    const std::string label =
+        std::to_string(i + 1) + ": " + (s.name.empty() ? size : s.name + " (" + size + ")");
+    monitor.options.push_back({std::to_string(i + 1), label, label});
+  }
+  const int saved = std::atoi(rex::cvar::GetFlagByName("monitor").c_str());
+  if (saved > int(screens.size())) {
+    const std::string number = std::to_string(saved);
+    monitor.options.push_back({number, number + ": not connected", number + ": nicht angeschlossen"});
+  }
+  return monitor;
 }
 
 }  // namespace skylanders
