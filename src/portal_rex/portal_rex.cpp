@@ -1,6 +1,8 @@
 #include "portal_rex/portal_rex.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -48,10 +50,20 @@ REXCVAR_DEFINE_STRING(portal_mode, "hybrid", "Portal",
     .allowed({"software", "usb", "hybrid", "none"});
 REXCVAR_DEFINE_STRING(portal_audio, "auto", "Portal",
                       "Portal speaker audio: 'auto' (the real portal's speaker in usb mode, PC "
-                      "speakers in software mode) or 'off'")
-    .allowed({"auto", "off"});
+                      "speakers with the menu and in hybrid mode), 'pc' (always the PC's speakers, "
+                      "also with a real portal in usb mode) or 'off'")
+    .allowed({"auto", "pc", "off"});
 REXCVAR_DEFINE_DOUBLE(portal_speaker_volume, 1.0, "Portal",
-                      "Volume of portal speaker audio played on the PC (software mode), 0.0 to 1.0");
+                      "Volume of the portal speaker audio, 0.0 to 1.0: on the PC's speakers (taken when "
+                      "the game starts) and on a real HID portal's own speaker (at once)");
+REXCVAR_DEFINE_INT32(portal_speaker_pacing, 0, "Portal",
+                     "Real HID portal's speaker: 0 sends the sound as it comes; N (2 to 8) starts each sound "
+                     "with N x 4 ms sent at once, then paces it at 4 ms a packet (try it if the portal's "
+                     "speaker stutters)")
+    .range(0, 16);
+REXCVAR_DEFINE_BOOL(portal_speaker_report, false, "Portal",
+                    "Log the game's portal speaker stream every 5 seconds: frames, sizes, samples a "
+                    "second (8000 is real time) and how evenly the frames come (for speaker problems)");
 REXCVAR_DEFINE_BOOL(portal_test_figure, false, "Portal",
                     "Development: put an all-zero figure on the portal (the game reports it as a "
                     "problem toy)");
@@ -83,6 +95,32 @@ std::atomic<bool> g_speaker_pcm_tap{false};
 // The PC speaker sink of the software portal, for its level (PortalSpeakerLevel).
 std::atomic<skylanders::SdlPortalAudioSink*> g_speaker_sink{nullptr};
 
+// The PC's speaker stream for portal audio: opened on first use and kept for the whole process,
+// like the portals (the software portal's, and a real portal's with portal_audio = "pc"). Null if
+// there is no output device.
+skylanders::SdlPortalAudioSink* PcSpeakerSink() {
+  static std::unique_ptr<skylanders::SdlPortalAudioSink> sink = [] {
+    std::unique_ptr<skylanders::SdlPortalAudioSink> opened = skylanders::SdlPortalAudioSink::Open();
+    if (opened) opened->SetVolume(float(REXCVAR_GET(portal_speaker_volume)));
+    return opened;
+  }();
+  if (sink) g_speaker_sink.store(sink.get());
+  return sink.get();
+}
+
+// With portal_audio = "pc" and a real portal the game talks to directly (usb mode): what the game
+// sends to the portal's speaker plays on the PC instead (Core of Light #67). The XAM bridge decodes
+// the game's G.726 frames into WriteAudio.
+class PcSpeakerDevice final : public skylanders::portal::PortalDevice {
+ public:
+  void Write(const skylanders::portal::Report& report) override { (void)report; }
+  void WriteAudio(std::span<const int16_t> pcm) override {
+    if (skylanders::SdlPortalAudioSink* sink = PcSpeakerSink()) sink->Submit(pcm);
+  }
+  skylanders::portal::Report Read() override { return skylanders::portal::Report{}; }
+};
+PcSpeakerDevice g_pc_speaker;
+
 // Forwards the game's XamInputNonControllerGetRaw/SetRaw(Ex) calls (through the SDK's handler
 // hook) to whichever portal is active right now. g_portal is re-read on every call, so a live
 // portal_mode switch takes effect on the next poll.
@@ -105,6 +143,10 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
   uint32_t Write(uint32_t device_id, std::span<const uint8_t> buffer) override {
     (void)device_id;
     std::lock_guard<std::mutex> lock(mu_);
+    if (buffer.size() > 2 && buffer[0] == 0x0B && buffer[1] == 0x17 &&
+        REXCVAR_GET(portal_speaker_report)) {
+      speaker_report_.Add(buffer.size());
+    }
     // LED updates ('C') arrive ~10 times a second, and speaker audio (0B 17) constantly; leave
     // them out.
     if (buffer.size() >= 3 && buffer[1] == 0x14 && buffer[2] != 'C') {
@@ -119,10 +161,12 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
     }
     if (skylanders::portal::Xbox360Portal* x360 = LiveXbox360()) {
       // Portal speaker off: the Xbox 360 portal's speaker frames don't go out (TrapTeamRecomp #22;
-      // the HID portals' audio already stops in UsbHotPlugPortal::WriteAudio).
-      if (buffer.size() > 2 && buffer[0] == 0x0B && buffer[1] == 0x17 &&
-          REXCVAR_GET(portal_audio) == "off") {
-        return skylanders::portal::kXamSuccess;
+      // the HID portals' audio already stops in UsbHotPlugPortal::WriteAudio). On the PC's speakers:
+      // decoded there instead of going to the portal.
+      if (buffer.size() > 2 && buffer[0] == 0x0B && buffer[1] == 0x17) {
+        const std::string& audio = REXCVAR_GET(portal_audio);
+        if (audio == "off") return skylanders::portal::kXamSuccess;
+        if (audio == "pc") return bridge_.Write(&g_pc_speaker, buffer);
       }
       if (buffer.size() >= skylanders::portal::kFrameSize) {
         if (auto command = skylanders::portal::ReportFromFrame(buffer.data())) x360_traffic_.OnCommand(*command);
@@ -133,6 +177,44 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
   }
 
  private:
+  // portal_speaker_report: the speaker frames (0B 17, G.726 at 4 bits a sample) of the last few
+  // seconds, logged every 5 s. Frames that come less than 1 ms after the one before are counted as
+  // a burst; real time is 8000 samples a second (one 30-byte frame every 7.5 ms).
+  struct SpeakerReport {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point since{};
+    Clock::time_point last{};
+    uint64_t frames = 0;
+    uint64_t bytes = 0;
+    uint64_t burst = 0;
+    double max_gap_ms = 0.0;
+    size_t min_size = SIZE_MAX;
+    size_t max_size = 0;
+    void Add(size_t size) {
+      const Clock::time_point now = Clock::now();
+      if (frames == 0) {
+        since = now;
+      } else {
+        const double gap = std::chrono::duration<double, std::milli>(now - last).count();
+        max_gap_ms = std::max(max_gap_ms, gap);
+        if (gap < 1.0) ++burst;
+      }
+      last = now;
+      ++frames;
+      bytes += size - 2;
+      min_size = std::min(min_size, size);
+      max_size = std::max(max_size, size);
+      const double seconds = std::chrono::duration<double>(now - since).count();
+      if (seconds >= 5.0) {
+        REXLOG_INFO(
+            "Portal speaker: {} frames in {:.1f} s ({} to {} bytes), {:.0f} samples/s (8000 is real "
+            "time), {} within 1 ms of the one before, longest gap {:.1f} ms",
+            frames, seconds, min_size, max_size, double(bytes) * 2.0 / seconds, burst, max_gap_ms);
+        *this = SpeakerReport{};
+      }
+    }
+  };
+  SpeakerReport speaker_report_;
   // The Xbox 360 portal's commands and replies in plain lines (traffic_log.h; the HID portals have
   // their own in UsbPortal).
   skylanders::portal::PortalTrafficLog x360_traffic_{
@@ -246,7 +328,10 @@ class TransitioningPortal final : public skylanders::portal::PortalDevice {
 // anywhere itself -- callers decide whether to publish it (SwitchPortalMode) or discard it.
 skylanders::portal::UsbPortal* SetUpUsbPortal() {
   auto* usb = new skylanders::portal::UsbPortal();  // never freed if published, see below
-  if (usb->IsOpen()) return usb;
+  if (usb->IsOpen()) {
+    usb->SetAudioPacing(REXCVAR_GET(portal_speaker_pacing));
+    return usb;
+  }
   delete usb;  // never published anywhere, so nothing else could have seen this one -- safe to free
   return nullptr;
 }
@@ -277,7 +362,24 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
   }
 
   void WriteAudio(std::span<const int16_t> pcm) override {
-    if (current_ && REXCVAR_GET(portal_audio) != "off") current_->WriteAudio(pcm);
+    const std::string& audio = REXCVAR_GET(portal_audio);
+    if (audio == "pc") {
+      // On the PC's speakers instead of the portal's (Core of Light #67), with or without a portal.
+      g_pc_speaker.WriteAudio(pcm);
+    } else if (current_ && audio != "off") {
+      // portal_speaker_volume for the portal's own speaker too: the decoded stream is at full level,
+      // which a small speaker may distort (Core of Light #67).
+      const double volume = std::clamp(REXCVAR_GET(portal_speaker_volume), 0.0, 1.0);
+      if (volume >= 1.0) {
+        current_->WriteAudio(pcm);
+      } else {
+        scaled_.resize(pcm.size());
+        for (size_t i = 0; i < pcm.size(); ++i) {
+          scaled_[i] = static_cast<int16_t>(std::lround(double(pcm[i]) * volume));
+        }
+        current_->WriteAudio(scaled_);
+      }
+    }
   }
 
   skylanders::portal::Report Read() override {
@@ -362,6 +464,7 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
   }
 
   skylanders::portal::UsbPortal* current_ = nullptr;  // never freed when replaced, see file comment
+  std::vector<int16_t> scaled_;  // WriteAudio's samples at portal_speaker_volume
   AnnouncePhase phase_ = AnnouncePhase::kForceEmpty;
   int added_reports_ = 0;
   std::chrono::steady_clock::time_point last_attempt_{};
@@ -546,13 +649,7 @@ skylanders::portal::SoftwarePortal* SetUpSoftwarePortal() {
   });
   if (REXCVAR_GET(portal_audio) != "off") {
     // Opened once and kept for the whole process, like the portals themselves.
-    static std::unique_ptr<skylanders::SdlPortalAudioSink> sink =
-        skylanders::SdlPortalAudioSink::Open();
-    if (sink) {
-      sink->SetVolume(float(REXCVAR_GET(portal_speaker_volume)));
-      software->SetAudioSink(sink.get());
-      g_speaker_sink.store(sink.get());
-    }
+    if (skylanders::SdlPortalAudioSink* sink = PcSpeakerSink()) software->SetAudioSink(sink);
   }
   return software;
 }
@@ -743,6 +840,9 @@ void InstallPortal(const std::filesystem::path& default_figures_dir) {
   }
 
   SwitchPortalMode(REXCVAR_GET(portal_mode));
+  // portal_audio = "pc": the PC's speaker stream opens now, as the software portal's does, not on the
+  // game's thread at the first word a trapped villain says (opening an audio device takes a moment).
+  if (REXCVAR_GET(portal_audio) == "pc") PcSpeakerSink();
 
   // The startup-only --portal_figure/--portal_test_figure flags only make sense once, for the
   // portal this process actually boots into -- a later live switch back to software mode starts

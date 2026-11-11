@@ -49,6 +49,7 @@ class AudioPacketQueue {
   void Push(const AudioPacket& packet);
   // Waits up to `timeout` for a packet. nullopt on timeout or after Close().
   std::optional<AudioPacket> PopWait(std::chrono::milliseconds timeout);
+  size_t Size() const;
   size_t Dropped() const;
   void Close();
 
