@@ -1,6 +1,7 @@
 #include "portal/usb/usb_portal.h"
 
 #include "portal/figure_crypto.h"
+#include "portal/old_portal_light.h"
 #include "portal/usb/winusb_portal_io.h"
 
 #include <algorithm>
@@ -199,6 +200,7 @@ Report UsbPortal::ReceiveRaw() {
       REXLOG_INFO("Portal (usb): 1430:0150 (WinUSB) reply <- {}", HexBytes(report.data(), 16));
     }
     if (report[0] == 0x52 && report[1] == 0x01) {  // an old portal's ready reply, as below
+      old_portal_.store(true);
       report[1] = 0x02;
       report[2] = 0x1B;
     }
@@ -234,6 +236,7 @@ Report UsbPortal::ReceiveRaw() {
     if (!logged.exchange(true)) {
       REXLOG_INFO("Portal (usb): old portal (ready reply 52 01 {:02X}), reporting 52 02 1B", report[2]);
     }
+    old_portal_.store(true);
     report[1] = 0x02;
     report[2] = 0x1B;
   }
@@ -251,6 +254,13 @@ void UsbPortal::Write(const Report& report) {
     const int block = report[2];
     REXLOG_TRACE("Portal figure research: usb slot {} block {} write -> {}", slot, block,
                  HexBytes(&report[3], kBlockSize));
+  }
+  // An old portal ignores the Traptanium side lights (J, L) the newer games send it, as they take
+  // it for one (the ready reply above): their side 0 as its one colour, the rest left out. Both
+  // portal modes write through here, Automatic by RealPortalBridge.
+  if (old_portal_.load() && (report[0] == 'J' || report[0] == 'L')) {
+    if (const std::optional<Report> old = LightForOldPortal(report)) SendRaw(*old);
+    return;
   }
   SendRaw(report);
 }

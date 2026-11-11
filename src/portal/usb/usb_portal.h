@@ -152,6 +152,9 @@ class UsbPortal final : public PortalDevice {
   // instead of touching real hardware for it (see DumpFigure's own comment for why).
   std::atomic<int> dumping_slot_{-1};
   std::atomic<bool> last_active_{true};    // last real 'active' status byte seen
+  // A portal from before Trap Team (ready reply 52 01 xx, reported to the game as 52 02 1B): the
+  // newer games' side lights go to it as its one colour (old_portal_light.h).
+  std::atomic<bool> old_portal_{false};
   std::atomic<uint8_t> status_counter_{0};  // running counter for synthetic status frames
 
   // Read()'s queue, guarded by io_mutex_: command replies in order, status frames collapsed to the
