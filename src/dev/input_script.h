@@ -55,6 +55,8 @@
 //                            comes at the right moment after a waitfor
 //   trap <slot> <villain>    puts a new trap holding that villain (its name, e.g. Chompy Mage)
 //                            onto the slot, as the portal developer tools (F8) make one
+//   set <name> <value>       changes a setting while the game runs, as the F4 menu does (its change
+//                            callbacks run), e.g. portal_mode for a live portal switch
 //   waitfor <name> <seconds> waits until a condition the game registered (RegisterScriptCondition)
 //                            holds, at most that long; the rest of the timeline moves up by the
 //                            time not needed, so what follows starts at the event, not the clock

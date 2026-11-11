@@ -77,6 +77,7 @@ struct Event {
     kSave,
     kStacks,
     kWaitFor,
+    kSet,
     kCustom,
     kQuit
   } kind;
@@ -371,6 +372,13 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
       e.kind = Event::Kind::kWaitFor;
     } else if (cmd == "quit") {
       e.kind = Event::Kind::kQuit;
+    } else if (cmd == "set") {
+      // set <name> <value>: the value is the rest of the line; never empty (an empty setting on the
+      // command line drops the whole line, RULES.md; here it would only be confusing).
+      ok = bool(words >> e.text);
+      std::getline(words >> std::ws, e.args);
+      ok = ok && !e.args.empty() && rex::cvar::GetFlagInfo(e.text) != nullptr;
+      e.kind = Event::Kind::kSet;
     } else if (FindCommand(cmd)) {
       e.text = cmd;
       std::getline(words >> std::ws, e.args);
@@ -644,6 +652,14 @@ class ScriptInputDriver final : public rex::input::InputDriver {
               const bool removed = skylanders::RemoveFigureFromSlot(slot);
               REXLOG_INFO("Input script: {} slot {}", removed ? "removed from" : "nothing in",
                           slot);
+            });
+          }
+        } else if (e.kind == Event::Kind::kSet) {
+          // On the UI thread, as the F4 menu sets it: change callbacks (a portal_mode switch) run there.
+          if (run_in_ui) {
+            run_in_ui([name = e.text, value = e.args] {
+              const bool set = rex::cvar::SetFlagByName(name, value);
+              REXLOG_INFO("Input script: set {} {}{}", name, value, set ? "" : " (refused)");
             });
           }
         } else if (e.kind == Event::Kind::kPutBack) {
