@@ -8,6 +8,7 @@
 #include <span>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -121,6 +122,27 @@ class PcSpeakerDevice final : public skylanders::portal::PortalDevice {
 };
 PcSpeakerDevice g_pc_speaker;
 
+// A real HID portal's own speaker at portal_speaker_volume: the decoded stream is at full level, which
+// a small speaker may distort (Core of Light #67). Called on the game's thread (one at a time).
+void WritePortalAudioAtVolume(skylanders::portal::PortalDevice& portal, std::span<const int16_t> pcm) {
+  const double volume = std::clamp(REXCVAR_GET(portal_speaker_volume), 0.0, 1.0);
+  if (volume >= 1.0) {
+    portal.WriteAudio(pcm);
+    return;
+  }
+  thread_local std::vector<int16_t> scaled;
+  scaled.resize(pcm.size());
+  for (size_t i = 0; i < pcm.size(); ++i) {
+    scaled[i] = static_cast<int16_t>(std::lround(double(pcm[i]) * volume));
+  }
+  portal.WriteAudio(scaled);
+}
+
+// The hybrid bridge's speaker route (TrapTeamRecomp #22), defined next to the bridge further down:
+// the game's speaker sound to the real portal when it has a speaker. True when it took the sound.
+bool RouteHybridSpeakerPcm(std::span<const int16_t> pcm);
+bool RouteHybridSpeakerFrame(std::span<const uint8_t> frame);
+
 // Forwards the game's XamInputNonControllerGetRaw/SetRaw(Ex) calls (through the SDK's handler
 // hook) to whichever portal is active right now. g_portal is re-read on every call, so a live
 // portal_mode switch takes effect on the next poll.
@@ -152,6 +174,11 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
     if (buffer.size() >= 3 && buffer[1] == 0x14 && buffer[2] != 'C') {
       REXLOG_DEBUG("Portal write: {:02x} {:02x} {:02x}", buffer[2],
                    buffer.size() > 3 ? buffer[3] : 0, buffer.size() > 4 ? buffer[4] : 0);
+    }
+    // Hybrid mode with a real Xbox 360 portal that has a speaker (portal_audio "auto"): the game's
+    // speaker frames go to it as they are (TrapTeamRecomp #22), as in usb mode, not to the PC.
+    if (buffer.size() > 2 && buffer[0] == 0x0B && buffer[1] == 0x17 && RouteHybridSpeakerFrame(buffer)) {
+      return skylanders::portal::kXamSuccess;
     }
     // With clean PCM from a game hook, the software portal plays that instead of the encoded
     // speaker stream (0B 17).
@@ -367,18 +394,8 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
       // On the PC's speakers instead of the portal's (Core of Light #67), with or without a portal.
       g_pc_speaker.WriteAudio(pcm);
     } else if (current_ && audio != "off") {
-      // portal_speaker_volume for the portal's own speaker too: the decoded stream is at full level,
-      // which a small speaker may distort (Core of Light #67).
-      const double volume = std::clamp(REXCVAR_GET(portal_speaker_volume), 0.0, 1.0);
-      if (volume >= 1.0) {
-        current_->WriteAudio(pcm);
-      } else {
-        scaled_.resize(pcm.size());
-        for (size_t i = 0; i < pcm.size(); ++i) {
-          scaled_[i] = static_cast<int16_t>(std::lround(double(pcm[i]) * volume));
-        }
-        current_->WriteAudio(scaled_);
-      }
+      // portal_speaker_volume for the portal's own speaker too (Core of Light #67).
+      WritePortalAudioAtVolume(*current_, pcm);
     }
   }
 
@@ -464,7 +481,6 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
   }
 
   skylanders::portal::UsbPortal* current_ = nullptr;  // never freed when replaced, see file comment
-  std::vector<int16_t> scaled_;  // WriteAudio's samples at portal_speaker_volume
   AnnouncePhase phase_ = AnnouncePhase::kForceEmpty;
   int added_reports_ = 0;
   std::chrono::steady_clock::time_point last_attempt_{};
@@ -498,8 +514,14 @@ class HybridPortal final : public skylanders::portal::PortalDevice {
   void Write(const skylanders::portal::Report& report) override {
     software_->Write(report);
     if (report[0] == 'C' || report[0] == 'J' || report[0] == 'L') bridge_->OnLight(report);
+    // The speaker switch also goes to the real portal: its answer says whether it has a speaker.
+    if (report[0] == 'M') bridge_->OnSpeakerSwitch(report);
   }
-  void WriteAudio(std::span<const int16_t> pcm) override { software_->WriteAudio(pcm); }
+  // The game's speaker sound: to the real portal's speaker when it has one (RouteHybridSpeakerPcm),
+  // else to the PC as the software portal plays it.
+  void WriteAudio(std::span<const int16_t> pcm) override {
+    if (!RouteHybridSpeakerPcm(pcm)) software_->WriteAudio(pcm);
+  }
   skylanders::portal::Report Read() override {
     skylanders::portal::Report report = software_->Read();
     ApplyAnnounceStep(report, phase_, added_reports_);
@@ -539,9 +561,59 @@ class Xbox360BridgeDevice final : public skylanders::portal::PortalDevice {
 
   bool SeemsDisconnected() const { return x360_->SeemsDisconnected(); }
 
+  // From the game's thread: one of its speaker frames (0B 17, G.726) for this portal. The bridge's
+  // thread sends it (FlushSpeakerFrames), as it sends everything else here: Xbox360Portal's writes
+  // are for one thread. At most kMaxSpeakerFrames wait (about half a second); the oldest go first.
+  void QueueSpeakerFrame(std::span<const uint8_t> frame) {
+    std::lock_guard<std::mutex> lock(speaker_mu_);
+    if (speaker_frames_.size() >= kMaxSpeakerFrames) speaker_frames_.pop_front();
+    speaker_frames_.emplace_back(frame.begin(), frame.end());
+  }
+  void FlushSpeakerFrames() {
+    std::deque<std::vector<uint8_t>> frames;
+    {
+      std::lock_guard<std::mutex> lock(speaker_mu_);
+      frames.swap(speaker_frames_);
+    }
+    for (const std::vector<uint8_t>& frame : frames) x360_->Write(frame);
+  }
+
  private:
+  static constexpr size_t kMaxSpeakerFrames = 64;  // 7.5 ms of sound each
   skylanders::portal::Xbox360Portal* x360_;
+  std::mutex speaker_mu_;
+  std::deque<std::vector<uint8_t>> speaker_frames_;
 };
+
+// The hybrid bridge's Xbox 360 portal while it has one (BridgeThread): the speaker frames go there.
+std::atomic<Xbox360BridgeDevice*> g_hybrid_x360{nullptr};
+
+// Hybrid mode, portal_audio "auto" and a real portal that answered the speaker switch as one with a
+// speaker (TrapTeamRecomp #22): the game's speaker sound goes to that portal, as in usb mode, instead
+// of the PC. "pc" keeps it on the PC, "off" drops it as before.
+bool HybridSpeakerToPortal() {
+  skylanders::portal::RealPortalBridge* bridge = g_bridge.load();
+  return bridge && g_bridge_has_real.load() && bridge->RealHasSpeaker() && REXCVAR_GET(portal_audio) == "auto";
+}
+
+// Decoded (or a game hook's) speaker PCM: to the bridge's HID portal at portal_speaker_volume. For
+// an Xbox 360 portal it is taken but not played: that one gets the game's own frames instead.
+bool RouteHybridSpeakerPcm(std::span<const int16_t> pcm) {
+  if (!HybridSpeakerToPortal()) return false;
+  if (skylanders::portal::UsbPortal* usb = g_usb_portal.load()) {
+    WritePortalAudioAtVolume(*usb, pcm);
+    return true;
+  }
+  return g_hybrid_x360.load() != nullptr;
+}
+
+// The game's speaker frame, as it is, to the bridge's Xbox 360 portal.
+bool RouteHybridSpeakerFrame(std::span<const uint8_t> frame) {
+  Xbox360BridgeDevice* x360 = g_hybrid_x360.load();
+  if (!x360 || !HybridSpeakerToPortal()) return false;
+  x360->QueueSpeakerFrame(frame);
+  return true;
+}
 
 void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generation) {
   skylanders::portal::UsbPortal* usb = nullptr;
@@ -556,6 +628,7 @@ void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generat
     if (x360 && x360->SeemsDisconnected()) {
       REXLOG_WARN("Hybrid portal: the Xbox 360 portal seems unplugged; looking for it again");
       x360 = nullptr;
+      g_hybrid_x360.store(nullptr);
     }
     if (!usb && !x360 && std::chrono::steady_clock::now() - last_attempt >= std::chrono::seconds(1)) {
       last_attempt = std::chrono::steady_clock::now();
@@ -566,6 +639,7 @@ void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generat
         auto* portal = new skylanders::portal::Xbox360Portal();
         if (portal->IsOpen()) {
           x360 = new Xbox360BridgeDevice(portal);
+          g_hybrid_x360.store(x360);
           REXLOG_INFO("Hybrid portal: Xbox 360 portal found (WinUSB)");
         } else {
           delete portal;  // never published, so nothing else could have seen it
@@ -576,6 +650,8 @@ void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generat
     if (usb) {
       bridge->Step(usb);
     } else {
+      // The game's speaker frames first: sound waits for no reply.
+      if (x360) x360->FlushSpeakerFrames();
       bridge->Step(x360);
     }
     // Waiting for a reply: poll again at once (a 4 ms sleep is ~15 ms on Windows' default timer, per
@@ -587,6 +663,7 @@ void BridgeThread(skylanders::portal::RealPortalBridge* bridge, uint32_t generat
     }
   }
   g_bridge_has_real.store(false);
+  g_hybrid_x360.store(nullptr);
   bridge->Step(nullptr);  // takes the copies off
 }
 
@@ -1042,6 +1119,8 @@ namespace skylanders {
 
 void SubmitSpeakerPcm(std::span<const int16_t> pcm) {
   g_speaker_pcm_tap.store(true);
+  // Hybrid mode with a real portal that has a speaker: there (TrapTeamRecomp #22), not the PC.
+  if (RouteHybridSpeakerPcm(pcm)) return;
   if (portal::SoftwarePortal* software = g_software_portal.load()) software->WriteAudio(pcm);
 }
 

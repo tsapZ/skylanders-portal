@@ -13,6 +13,7 @@
 // No ReXGlue dependency: tested with a second SoftwarePortal standing in for the real one.
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -64,6 +65,15 @@ class RealPortalBridge {
   // command and side goes to the real portal once it is active, and again after it is set up anew.
   void OnLight(const Report& report);
 
+  // The game's speaker switch ('M'): the newest goes to the real portal once it is active, and again
+  // after it is set up anew. Its answer says whether the real portal has a speaker (RealHasSpeaker),
+  // so the game's speaker audio can go there instead of the PC (TrapTeamRecomp #22).
+  void OnSpeakerSwitch(const Report& report);
+  // The real portal answered the speaker switch as one with a speaker (4D, then the audio version
+  // kAudioCapableVersion, as a Trap Team portal answers). False until then, without an answer, and
+  // again for each new real portal. Any thread.
+  bool RealHasSpeaker() const { return real_speaker_.load(); }
+
   // Waiting for the real portal's reply to a command: the caller polls again soon instead of sleeping.
   bool Busy() const { return pending_.has_value() || wake_ != Wake::kActive; }
 
@@ -111,6 +121,8 @@ class RealPortalBridge {
   // pause, or the figure is given up after too many tries, with a log line.
   void ReadMissed(int real_slot, const char* why);
   void Gone(int real_slot, const char* why);
+  // The real portal's answer to the speaker switch (or none): RealHasSpeaker, a log line on a change.
+  void NoteSpeaker(bool speaker, const char* why);
   void TrackCopies();
   int FindCopy(const std::filesystem::path& source) const;
 
@@ -125,6 +137,7 @@ class RealPortalBridge {
   Wake wake_ = Wake::kActive;
   Clock::time_point last_alive_{};  // the last sign of an active real portal
   bool restart_logged_ = false;
+  int speaker_known_ = -1;  // what NoteSpeaker last logged: -1 nothing yet, 0 no speaker, 1 speaker
 
   // Shared with OnEmulatedWrite / OnLight / the queries (any thread).
   mutable std::mutex mu_;
@@ -136,6 +149,11 @@ class RealPortalBridge {
   // The newest light per command and side (C: one, J / L: per side byte), and whether it still has
   // to go out.
   std::map<uint16_t, std::pair<Report, bool>> lights_;
+  // The game's newest speaker switch, and whether it still has to go out.
+  std::optional<Report> speaker_switch_;
+  bool speaker_switch_due_ = false;
+  // Answered by the real portal (bridge thread writes, any thread reads).
+  std::atomic<bool> real_speaker_{false};
 };
 
 }  // namespace skylanders::portal

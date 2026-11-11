@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include <system_error>
 
+#include "portal/audio.h"
 #include "portal/figure_catalog.h"
 #include "portal/figure_file.h"
 #include "portal_rex/utf8_path.h"
@@ -75,6 +76,13 @@ void RealPortalBridge::Step(PortalDevice* real) {
     }
     real_ = real;
     pending_.reset();
+    // Another portal (or none): whether it has a speaker is asked again.
+    real_speaker_.store(false);
+    speaker_known_ = -1;
+    {
+      std::lock_guard lock(mu_);
+      if (speaker_switch_) speaker_switch_due_ = true;
+    }
     if (real_) {
       // Ready, then activate: the portal then reports its figures, each as "added".
       restart_logged_ = false;
@@ -112,6 +120,9 @@ void RealPortalBridge::Step(PortalDevice* real) {
             " could not be written to the real figure; it is in the backup file");
         writes_.pop_front();
       }
+    } else if (timed_out.cmd == 'M') {
+      // A portal from before Trap Team doesn't know the command: no speaker.
+      NoteSpeaker(false, "didn't answer the speaker switch");
     }
   }
   TrackCopies();
@@ -127,14 +138,23 @@ void RealPortalBridge::Handle(const Report& report) {
         real_->Write(Make({'A', 0x01}));
       }
       break;
-    case 0x41:  // activate answered: the portal is on; its lights again
+    case 0x41:  // activate answered: the portal is on; its lights and the speaker switch again
       last_alive_ = Clock::now();
       if (wake_ == Wake::kActivate && report[1] != 0) {
         wake_ = Wake::kActive;
         std::lock_guard lock(mu_);
         for (auto& [key, light] : lights_) light.second = true;
+        if (speaker_switch_) speaker_switch_due_ = true;
       }
       break;
+    case 0x4D: {  // speaker switch answered: 4D, its argument, the audio version
+      last_alive_ = Clock::now();
+      if (!pending_ || pending_->cmd != 'M') break;
+      pending_.reset();
+      const bool speaker = report[2] == kAudioCapableVersion[0] && report[3] == kAudioCapableVersion[1];
+      NoteSpeaker(speaker, speaker ? "has a speaker" : "has no speaker");
+      break;
+    }
     case 0x53:
       // Until A is answered a status may be a stale one from a portal still on from an earlier run;
       // reading on it, the portal refused and the figure waited until it was lifted (#62).
@@ -226,6 +246,20 @@ void RealPortalBridge::SendNext() {
     if (s.phase != RealSlot::Phase::kReading || now < s.retry_at) continue;
     pending_ = Command{'Q', slot, s.next_block, now};
     real_->Write(Make({'Q', uint8_t(slot), uint8_t(s.next_block)}));
+    return;
+  }
+  // The game's speaker switch, answered with whether the portal has a speaker.
+  std::optional<Report> speaker;
+  {
+    std::lock_guard lock(mu_);
+    if (speaker_switch_due_ && speaker_switch_) {
+      speaker = speaker_switch_;
+      speaker_switch_due_ = false;
+    }
+  }
+  if (speaker) {
+    pending_ = Command{'M', -1, 0, now};
+    real_->Write(*speaker);
     return;
   }
   std::optional<Report> light;
@@ -340,7 +374,7 @@ void RealPortalBridge::Gone(int real_slot, const char* why) {
     mirrored_[real_slot] = false;
     uid_[real_slot] = 0;
   }
-  if (pending_ && pending_->slot == real_slot) pending_.reset();
+  if (pending_ && pending_->cmd != 'M' && pending_->slot == real_slot) pending_.reset();
   // Only the copy itself: the portal menu may have put another figure into that slot meanwhile.
   if (copy >= 0 && !s.source.empty() && emulated_->Source(copy) == s.source) {
     emulated_->RemoveFigure(copy);
@@ -400,6 +434,22 @@ void RealPortalBridge::OnEmulatedWrite(int emulated_slot, const FigureData& data
     written_[slot] = data;
     return;
   }
+}
+
+void RealPortalBridge::OnSpeakerSwitch(const Report& report) {
+  if (report[0] != 'M') return;
+  std::lock_guard lock(mu_);
+  speaker_switch_ = report;
+  speaker_switch_due_ = true;
+}
+
+// Bridge thread: the real portal's speaker as its answer (or its silence) says, logged when it changes.
+void RealPortalBridge::NoteSpeaker(bool speaker, const char* why) {
+  real_speaker_.store(speaker);
+  if (speaker_known_ == int(speaker)) return;
+  speaker_known_ = int(speaker);
+  Log(std::string("Hybrid portal: the real portal ") + why +
+      (speaker ? "; the game's speaker sound goes there with portal_audio = auto" : ""));
 }
 
 void RealPortalBridge::OnLight(const Report& report) {

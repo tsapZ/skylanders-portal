@@ -9,9 +9,11 @@
 #include <thread>
 #include <initializer_list>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
+#include "portal/audio.h"
 #include "portal/figure_file.h"
 #include "portal/hybrid/real_portal_bridge.h"
 #include "portal/software/software_portal.h"
@@ -349,6 +351,65 @@ int main() {
     RunFor(bridge, &real, std::chrono::milliseconds(200));
     inner.PlaceFigure(0, chop);
     RunFor(bridge, &real, std::chrono::milliseconds(500));
+    CHECK(FirstFigure(emulated) == kMaxFigures - 1);
+  }
+
+  // The game's speaker switch reaches the real portal; a portal with a speaker (a SoftwarePortal with
+  // an audio sink answers 4D xx 01 19, as a Trap Team portal does) is told apart from one without.
+  {
+    struct NullSink final : PortalAudioSink {
+      void Submit(std::span<const int16_t>) override {}
+    } sink;
+    SoftwarePortal inner, emulated;
+    inner.SetAudioSink(&sink);
+    Habits real(&inner);
+    std::vector<std::string> lines;
+    RealPortalBridge bridge(&emulated, {dir, [&](const std::string& l) { lines.push_back(l); }, nullptr});
+    CHECK(!bridge.RealHasSpeaker());
+    bridge.OnSpeakerSwitch(Cmd({'M', 0x01}));
+    Run(bridge, &real);
+    CHECK(bridge.RealHasSpeaker());
+    CHECK(std::count_if(real.sent.begin(), real.sent.end(), [](const Report& r) { return r[0] == 'M'; }) == 1);
+    CHECK(std::any_of(lines.begin(), lines.end(), [](const std::string& l) {
+      return l.find("has a speaker") != std::string::npos;
+    }));
+    // Unplugged: unknown again; plugged back in: the switch goes out again once it is set up.
+    bridge.Step(nullptr);
+    CHECK(!bridge.RealHasSpeaker());
+    Run(bridge, &real);
+    CHECK(bridge.RealHasSpeaker());
+    CHECK(std::count_if(real.sent.begin(), real.sent.end(), [](const Report& r) { return r[0] == 'M'; }) == 2);
+  }
+  {
+    SoftwarePortal real, emulated;  // no audio sink: 4D xx 00 19
+    RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+    bridge.OnSpeakerSwitch(Cmd({'M', 0x01}));
+    real.PlaceFigure(0, chop);
+    Run(bridge, &real);
+    CHECK(!bridge.RealHasSpeaker());
+    CHECK(FirstFigure(emulated) == kMaxFigures - 1);  // figures still come through
+  }
+  // A portal that doesn't answer M at all (one from before Trap Team): no speaker after the wait, and
+  // a figure on it is still read.
+  {
+    class NoSpeakerCommand final : public PortalDevice {
+     public:
+      explicit NoSpeakerCommand(SoftwarePortal* inner) : inner_(inner) {}
+      void Write(const Report& report) override {
+        if (report[0] != 'M') inner_->Write(report);
+      }
+      Report Read() override { return inner_->Read(); }
+
+     private:
+      SoftwarePortal* inner_;
+    };
+    SoftwarePortal inner, emulated;
+    NoSpeakerCommand real(&inner);
+    RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+    bridge.OnSpeakerSwitch(Cmd({'M', 0x01}));
+    inner.PlaceFigure(0, chop);
+    RunFor(bridge, &real, std::chrono::milliseconds(600));
+    CHECK(!bridge.RealHasSpeaker());
     CHECK(FirstFigure(emulated) == kMaxFigures - 1);
   }
 
