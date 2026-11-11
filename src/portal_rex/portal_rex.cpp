@@ -1,8 +1,10 @@
 #include "portal_rex/portal_rex.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -91,6 +93,38 @@ std::atomic<skylanders::portal::Xbox360Portal*> g_xbox360{nullptr};
 // The hybrid bridge has a real portal of either kind (RealPortalConnected).
 std::atomic<bool> g_bridge_has_real{false};
 
+// The game's last ready ('R') and activate ('A') commands, whichever portal they went to. A portal
+// made by a live portal_mode switch starts switched off, and the game, which set its portal up long
+// before, doesn't set it up again: switched to Automatic in the game, a toy on the real portal was
+// read but the game didn't see it until a restart (the owner's test, 2026-11-11). The new portal
+// gets these two first (ReplayGameSetup, UsbHotPlugPortal).
+std::mutex g_game_setup_mutex;
+std::optional<skylanders::portal::Report> g_game_ready;     // guarded by g_game_setup_mutex
+std::optional<skylanders::portal::Report> g_game_activate;  // guarded by g_game_setup_mutex
+
+// Keeps an R or A of the game's (a command frame: 0B 14, then the report).
+void NoteGameSetup(std::span<const uint8_t> buffer) {
+  if (buffer.size() < 3 || buffer[0] != skylanders::portal::kFrameHeader0 ||
+      buffer[1] != skylanders::portal::kFrameHeader1 || (buffer[2] != 'R' && buffer[2] != 'A')) {
+    return;
+  }
+  std::array<uint8_t, skylanders::portal::kFrameSize> frame{};
+  std::memcpy(frame.data(), buffer.data(), std::min(buffer.size(), frame.size()));
+  const std::optional<skylanders::portal::Report> report = skylanders::portal::ReportFromFrame(frame.data());
+  if (!report) return;
+  std::lock_guard<std::mutex> lock(g_game_setup_mutex);
+  ((*report)[0] == 'R' ? g_game_ready : g_game_activate) = *report;
+}
+
+struct GameSetup {
+  std::optional<skylanders::portal::Report> ready;
+  std::optional<skylanders::portal::Report> activate;
+};
+GameSetup LastGameSetup() {
+  std::lock_guard<std::mutex> lock(g_game_setup_mutex);
+  return {g_game_ready, g_game_activate};
+}
+
 // Set once a game hook has sent clean speaker PCM (SubmitSpeakerPcm).
 std::atomic<bool> g_speaker_pcm_tap{false};
 // The PC speaker sink of the software portal, for its level (PortalSpeakerLevel).
@@ -165,6 +199,7 @@ class XamPortalHandler final : public rex::kernel::xam::NonControllerHandler {
   uint32_t Write(uint32_t device_id, std::span<const uint8_t> buffer) override {
     (void)device_id;
     std::lock_guard<std::mutex> lock(mu_);
+    NoteGameSetup(buffer);  // for a portal a live switch makes later
     if (buffer.size() > 2 && buffer[0] == 0x0B && buffer[1] == 0x17 &&
         REXCVAR_GET(portal_speaker_report)) {
       speaker_report_.Add(buffer.size());
@@ -373,7 +408,19 @@ skylanders::portal::UsbPortal* SetUpUsbPortal() {
 // frees those), so g_usb_portal only ever points at a real, currently-connected device or null.
 class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
  public:
-  UsbHotPlugPortal() { TryConnect(); }
+  // `setup`: the game's R and A from before a live switch (LastGameSetup), sent as for a portal
+  // plugged back in.
+  explicit UsbHotPlugPortal(const GameSetup& setup = {}) {
+    if (setup.ready) {
+      last_ready_ = *setup.ready;
+      have_ready_ = true;
+    }
+    if (setup.activate) {
+      last_activate_ = *setup.activate;
+      have_activate_ = true;
+    }
+    TryConnect();
+  }
 
   void Write(const skylanders::portal::Report& report) override {
     MaybeReconnect();
@@ -731,6 +778,22 @@ skylanders::portal::SoftwarePortal* SetUpSoftwarePortal() {
   return software;
 }
 
+// A live switch to the software or hybrid portal: the game's last R and A go to the new portal
+// before the game polls it, so it is switched on like the one before and reports its figures. Their
+// replies are taken off again here (every R and A gets exactly one): the game didn't ask. Nothing at
+// startup, before the game has sent anything.
+void ReplayGameSetup(skylanders::portal::SoftwarePortal* software) {
+  const GameSetup setup = LastGameSetup();
+  int replies = 0;
+  for (const std::optional<skylanders::portal::Report>& command : {setup.ready, setup.activate}) {
+    if (!command) continue;
+    software->Write(*command);
+    ++replies;
+  }
+  for (int i = 0; i < replies; ++i) software->Read();
+  if (replies) REXLOG_INFO("Portal: the game's set-up sent again to the new portal");
+}
+
 // Switches the active portal to `mode`, live -- called both once at startup and again every time
 // the portal_mode cvar changes afterward (e.g. from the F4 Settings overlay). The previous
 // PortalDevice, if any, is never freed: the game's hook thread reads g_portal via a fresh
@@ -770,12 +833,13 @@ void SwitchPortalMode(std::string_view mode_text) {
     // warning every retry (once a second) while nothing is plugged in, which is not a real
     // problem worth spamming the log over.
     g_software_portal.store(nullptr);
-    g_portal.store(new UsbHotPlugPortal());  // never freed, see this function's comment
+    g_portal.store(new UsbHotPlugPortal(LastGameSetup()));  // never freed, see this function's comment
     REXLOG_INFO("Portal: usb");
     return;
   }
 
   skylanders::portal::SoftwarePortal* software = SetUpSoftwarePortal();
+  ReplayGameSetup(software);  // before anything can see it
   g_usb_portal.store(nullptr);
   g_software_portal.store(software);
   if (*mode == skylanders::portal::PortalMode::kHybrid) {
