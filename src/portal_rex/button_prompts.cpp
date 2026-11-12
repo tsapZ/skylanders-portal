@@ -1,5 +1,6 @@
 #include "portal_rex/button_prompts.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -74,16 +75,37 @@ void UseButtonPrompts(const std::filesystem::path& user_data_root, std::string_v
     REXLOG_INFO("Button prompts: none known for {}, the game's own stay", game);
     return;
   }
+  // The setting exists with the Direct3D 12 renderer only (the GPU plugin defines it).
+  if (!rex::cvar::GetFlagInfo("texture_replace_dir")) {
+    REXLOG_INFO("Button prompts: this renderer can't replace textures (Direct3D 12 only), the game's own stay");
+    return;
+  }
   const std::filesystem::path dir = user_data_root / "prompts" / style_name;
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
-  size_t written = 0;
+  std::vector<std::string> names;
   for (const PromptTexture& t : textures) {
-    const std::vector<uint8_t> dds =
-        portal::EncodeDdsDxt5(portal::DrawPromptIcon(style, t.button, kIconSize, t.flipped), kIconSize);
     char name[32];
     std::snprintf(name, sizeof(name), "%016llX.dds", static_cast<unsigned long long>(t.hash));
-    const std::filesystem::path path = dir / name;
+    names.push_back(name);
+  }
+  // Files of an older table out, so a texture taken off the table goes back to the game's own.
+  std::vector<std::filesystem::path> stale;
+  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    const std::filesystem::path& old = entry.path();
+    if (old.extension() != ".dds" || old.stem().string().size() != 16) continue;
+    if (std::find(names.begin(), names.end(), old.filename().string()) == names.end()) stale.push_back(old);
+  }
+  for (const auto& old : stale) {
+    std::error_code remove_ec;
+    std::filesystem::remove(old, remove_ec);
+  }
+  size_t written = 0;
+  for (size_t i = 0; i < textures.size(); ++i) {
+    const PromptTexture& t = textures[i];
+    const std::vector<uint8_t> dds =
+        portal::EncodeDdsDxt5(portal::DrawPromptIcon(style, t.button, kIconSize, t.flipped), kIconSize);
+    const std::filesystem::path path = dir / names[i];
     if (SameFile(path, dds)) continue;
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out.write(reinterpret_cast<const char*>(dds.data()), std::streamsize(dds.size()));
