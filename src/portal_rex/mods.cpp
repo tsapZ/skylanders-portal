@@ -38,28 +38,41 @@ fs::path ModsFolder() {
 void ApplyMods(std::string_view game, std::string_view disc_pin) {
   const fs::path folder = ModsFolder();
   const std::string enabled = REXCVAR_GET(mods);
-  if (folder.empty()) return;
-  const std::vector<portal::FoundMod> found = portal::FindMods(folder);
-  if (found.empty() && enabled.empty()) return;
-  const portal::ModPlan plan = portal::PlanMods(found, enabled, game, disc_pin);
-  REXLOG_INFO("Mods: {} in {}, {} switched on", found.size(), Utf8Path(folder),
-              portal::ModListIds(enabled).size());
-  for (const std::string& line : plan.lines) REXLOG_INFO("Mods: {}", line);
-  if (plan.overlay_roots.empty()) return;
-  std::string roots;
-  for (const fs::path& root : plan.overlay_roots) {
-    if (!roots.empty()) roots += ';';
-    roots += Utf8Path(root);
+  std::vector<fs::path> overlay_roots;
+  if (!folder.empty()) {
+    const std::vector<portal::FoundMod> found = portal::FindMods(folder);
+    if (!found.empty() || !enabled.empty()) {
+      const portal::ModPlan plan = portal::PlanMods(found, enabled, game, disc_pin);
+      REXLOG_INFO("Mods: {} in {}, {} switched on", found.size(), Utf8Path(folder),
+                  portal::ModListIds(enabled).size());
+      for (const std::string& line : plan.lines) REXLOG_INFO("Mods: {}", line);
+      overlay_roots = plan.overlay_roots;
+    }
   }
   // By name: an SDK without the overlay (older than feat/vfs-overlay) says so instead of failing
   // to link.
   if (!rex::cvar::GetFlagInfo("vfs_overlay_roots")) {
-    REXLOG_WARN("Mods: this build can't lay files over the disc (no vfs_overlay_roots); left out");
+    if (!overlay_roots.empty()) {
+      REXLOG_WARN("Mods: this build can't lay files over the disc (no vfs_overlay_roots); left out");
+    }
     return;
   }
-  if (!rex::cvar::SetFlagByName("vfs_overlay_roots", roots)) {
-    REXLOG_WARN("Mods: vfs_overlay_roots was set elsewhere (the command line?); the mods are left out");
+  // | between the folders: Windows doesn't allow it in a name, ; it does (the code review
+  // 2026-11-12: a data folder with ; in its path split into wrong folders).
+  std::string roots;
+  for (const fs::path& root : overlay_roots) {
+    if (!roots.empty()) roots += '|';
+    roots += Utf8Path(root);
   }
+  // The overlay list belongs to the mods: set at every start, empty when none is on, so a value
+  // the settings file kept (the SDK's Save to config writes every changed setting) can't keep mods
+  // on that were switched off, and a value from the command line is replaced, with a line saying so
+  // (the code review 2026-11-12).
+  const std::string before = rex::cvar::GetFlagByName("vfs_overlay_roots");
+  if (!before.empty() && before != roots) {
+    REXLOG_INFO("Mods: vfs_overlay_roots from the settings file or command line replaced by the mods' list");
+  }
+  rex::cvar::SetFlagByName("vfs_overlay_roots", roots);
 }
 
 SettingsPage ModsPage(std::string_view game) {
