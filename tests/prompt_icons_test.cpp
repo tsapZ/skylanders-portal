@@ -1,0 +1,160 @@
+#include "portal/prompt_icons.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
+
+#include "test_util.h"
+
+using namespace skylanders::portal;
+
+namespace {
+
+uint32_t Get32(const std::vector<uint8_t>& v, size_t at) {
+  return uint32_t(v[at]) | uint32_t(v[at + 1]) << 8 | uint32_t(v[at + 2]) << 16 | uint32_t(v[at + 3]) << 24;
+}
+
+// One DXT5 level of `s` x `s` from `at` back to RGBA, as a GPU reads it.
+std::vector<uint8_t> DecodeDxt5(const std::vector<uint8_t>& dds, size_t at, int s) {
+  std::vector<uint8_t> out(size_t(s) * s * 4);
+  const int blocks = std::max(1, s / 4);
+  for (int by = 0; by < blocks; ++by) {
+    for (int bx = 0; bx < blocks; ++bx, at += 16) {
+      const uint8_t* b = &dds[at];
+      int alpha[8] = {b[0], b[1]};
+      if (alpha[0] > alpha[1]) {
+        for (int i = 1; i <= 6; ++i) alpha[i + 1] = ((7 - i) * alpha[0] + i * alpha[1]) / 7;
+      } else {
+        for (int i = 1; i <= 4; ++i) alpha[i + 1] = ((5 - i) * alpha[0] + i * alpha[1]) / 5;
+        alpha[6] = 0;
+        alpha[7] = 255;
+      }
+      uint64_t alpha_bits = 0;
+      for (int i = 0; i < 6; ++i) alpha_bits |= uint64_t(b[2 + i]) << (8 * i);
+      int pal[4][3];
+      for (int k = 0; k < 2; ++k) {
+        const int c = b[8 + 2 * k] | b[9 + 2 * k] << 8;
+        const int r = (c >> 11) & 31, g = (c >> 5) & 63, bl = c & 31;
+        pal[k][0] = (r << 3) | (r >> 2);
+        pal[k][1] = (g << 2) | (g >> 4);
+        pal[k][2] = (bl << 3) | (bl >> 2);
+      }
+      for (int k = 0; k < 3; ++k) {
+        pal[2][k] = (2 * pal[0][k] + pal[1][k]) / 3;
+        pal[3][k] = (pal[0][k] + 2 * pal[1][k]) / 3;
+      }
+      const uint32_t color_bits = Get32(dds, at + 12);
+      for (int i = 0; i < 16; ++i) {
+        const int x = bx * 4 + i % 4, y = by * 4 + i / 4;
+        if (x >= s || y >= s) continue;
+        uint8_t* p = &out[(size_t(y) * s + x) * 4];
+        for (int k = 0; k < 3; ++k) p[k] = uint8_t(pal[(color_bits >> (2 * i)) & 3][k]);
+        p[3] = uint8_t(alpha[(alpha_bits >> (3 * i)) & 7]);
+      }
+    }
+  }
+  return out;
+}
+
+const uint8_t* Pixel(const std::vector<uint8_t>& rgba, int size, int x, int y) {
+  return &rgba[(size_t(y) * size + x) * 4];
+}
+
+bool Near(const uint8_t* p, int r, int g, int b) {
+  return std::abs(p[0] - r) <= 2 && std::abs(p[1] - g) <= 2 && std::abs(p[2] - b) <= 2 && p[3] == 255;
+}
+
+}  // namespace
+
+int main() {
+  const PromptStyle styles[] = {PromptStyle::kPlayStation, PromptStyle::kNintendo};
+  const PromptButton buttons[] = {PromptButton::kA,  PromptButton::kB,     PromptButton::kX,
+                                  PromptButton::kY,  PromptButton::kStart, PromptButton::kBack};
+
+  // Every icon: its size, see-through corners, an opaque middle, its own picture, upside down exactly when asked.
+  for (const PromptStyle style : styles) {
+    std::vector<std::vector<uint8_t>> seen;
+    for (const PromptButton button : buttons) {
+      const int s = 64;
+      const auto icon = DrawPromptIcon(style, button, s, false);
+      REQUIRE_OR_RETURN(icon.size() == size_t(s) * s * 4);
+      CHECK(Pixel(icon, s, 0, 0)[3] == 0);
+      CHECK(Pixel(icon, s, s - 1, 0)[3] == 0);
+      CHECK(Pixel(icon, s, 0, s - 1)[3] == 0);
+      CHECK(Pixel(icon, s, s - 1, s - 1)[3] == 0);
+      CHECK(Pixel(icon, s, s / 2, s / 2)[3] == 255);
+      const auto flipped = DrawPromptIcon(style, button, s, true);
+      REQUIRE_OR_RETURN(flipped.size() == icon.size());
+      bool mirrored = true;
+      for (int y = 0; y < s; ++y) {
+        mirrored = mirrored &&
+                   std::memcmp(&flipped[size_t(y) * s * 4], &icon[size_t(s - 1 - y) * s * 4], size_t(s) * 4) == 0;
+      }
+      CHECK(mirrored);
+      if (button == PromptButton::kY) CHECK(flipped != icon);  // the triangle points the other way
+      for (const auto& other : seen) CHECK(other != icon);
+      seen.push_back(icon);
+    }
+  }
+  CHECK(DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kA, 2, false).empty());
+
+  // The PlayStation symbols in their colours: the cross over the middle, the circle's ring, the button's face inside it.
+  {
+    const int s = 256, c = s / 2;
+    const auto cross = DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kA, s, false);
+    CHECK(Near(Pixel(cross, s, c, c), 124, 178, 236));
+    const auto circle = DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kB, s, false);
+    CHECK(Near(Pixel(circle, s, c, c), 43, 43, 51));
+    CHECK(Near(Pixel(circle, s, c + int(0.19f * s) - 11, c), 240, 112, 116));
+    const auto square = DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kX, s, false);
+    CHECK(Near(Pixel(square, s, c, c + int(0.17f * s) - 11), 232, 146, 206));
+    const auto plus = DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kStart, s, false);
+    CHECK(Near(Pixel(plus, s, c, c), 245, 245, 248));
+  }
+
+  // The DDS: a DXT5 header, the whole mip chain, blocks that decode back to the picture, a last level that keeps its
+  // coverage.
+  {
+    const int s = 256;
+    const auto icon = DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kY, s, false);
+    const auto dds = EncodeDdsDxt5(icon, s);
+    REQUIRE_OR_RETURN(dds.size() > 128);
+    CHECK(std::memcmp(dds.data(), "DDS ", 4) == 0);
+    CHECK(Get32(dds, 4) == 124);
+    CHECK(Get32(dds, 12) == 256 && Get32(dds, 16) == 256);
+    CHECK(Get32(dds, 28) == 9);  // 256 down to 1
+    CHECK(Get32(dds, 76) == 32);
+    CHECK(std::memcmp(&dds[84], "DXT5", 4) == 0);
+    size_t blocks = 0;
+    for (int m = s; m >= 1; m /= 2) blocks += size_t(std::max(1, m / 4)) * std::max(1, m / 4);
+    REQUIRE_OR_RETURN(dds.size() == 128 + blocks * 16);
+
+    const auto back = DecodeDxt5(dds, 128, s);
+    double alpha_error = 0, color_error = 0;
+    size_t opaque = 0;
+    for (size_t i = 0; i < size_t(s) * s; ++i) {
+      alpha_error += std::abs(back[i * 4 + 3] - icon[i * 4 + 3]);
+      if (icon[i * 4 + 3] < 255) continue;
+      ++opaque;
+      for (int k = 0; k < 3; ++k) color_error += std::abs(back[i * 4 + k] - icon[i * 4 + k]);
+    }
+    alpha_error /= double(s) * s;
+    color_error /= 3.0 * std::max<size_t>(opaque, 1);
+    std::printf("DXT5 round trip: mean alpha error %.2f, mean colour error %.2f\n", alpha_error, color_error);
+    CHECK(opaque > size_t(s) * s / 2);
+    CHECK(alpha_error < 1.5);
+    CHECK(color_error < 4.0);
+
+    const auto last = DecodeDxt5(dds, dds.size() - 16, 1);
+    const int coverage = last[3];  // the round button covers about pi * 0.46^2 of the square
+    CHECK(coverage > 150 && coverage < 190);
+    CHECK(last[0] > 30 && last[0] < 90);  // mostly the dark face
+
+    CHECK(EncodeDdsDxt5(icon, 128).empty());
+    CHECK(EncodeDdsDxt5(std::vector<uint8_t>(48 * 48 * 4), 48).empty());
+  }
+
+  return Finish("prompt_icons");
+}
