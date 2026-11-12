@@ -131,6 +131,7 @@ if(TARGET rex::runtime)
         src/portal_rex/settings_file.cpp
         src/portal_rex/settings_menu.cpp
         src/portal_rex/settings_schema.cpp
+        src/portal_rex/button_prompts.cpp
         src/portal_rex/title_music.cpp
         src/portal_rex/png_file.cpp
         src/portal_rex/problem_note.cpp

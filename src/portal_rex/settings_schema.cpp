@@ -13,6 +13,7 @@
 #include <rex/system/gpu_plugin.h>
 
 #include "portal/data_folder.h"
+#include "portal_rex/button_prompts.h"
 
 REXCVAR_DEFINE_STRING(settings_schema, "", "Launcher",
                       "Write the settings menu's pages to this file (JSON) and quit; for the "
@@ -147,7 +148,7 @@ void ApplyGraphicsDefaults() {
   }
 }
 
-void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game) {
+static void UseHdPack(const std::filesystem::path& user_data_root, std::string_view game) {
   if (rex::cvar::HasNonDefaultValue("texture_replace_dir")) return;
   // Where SharedPicturesDir (portal_menu.h) puts the pictures, with Textures for Pictures.
   const std::filesystem::path dir =
@@ -162,6 +163,12 @@ void UseTexturePack(const std::filesystem::path& user_data_root, std::string_vie
   if (rex::cvar::SetFlagByName("texture_replace_dir", std::string(u8.begin(), u8.end()))) {
     REXLOG_INFO("HD textures from {}", std::string(u8.begin(), u8.end()));
   }
+}
+
+void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game) {
+  UseHdPack(user_data_root, game);
+  // The button prompts' folder after the pack's, so the prompts win (button_prompts.h).
+  UseButtonPrompts(user_data_root, game);
 }
 
 Setting HdTexturesSetting() {
