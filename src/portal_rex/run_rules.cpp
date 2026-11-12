@@ -1,8 +1,5 @@
 #include "portal_rex/run_rules.h"
 
-#include <algorithm>
-#include <array>
-#include <cctype>
 #include <mutex>
 #include <vector>
 
@@ -10,6 +7,7 @@
 
 #include "dev/where.h"
 #include "portal/figure_info.h"
+#include "portal/run_logic.h"
 #include "portal_rex/settings_file.h"
 
 REXCVAR_DEFINE_BOOL(run_soul_gems, false, "Portal",
@@ -27,93 +25,20 @@ REXCVAR_DECLARE(std::string, portal_menu_games);
 namespace skylanders::run {
 namespace {
 
-// Each game's starter pack: the Skylanders it came with (a Soul Gem run starts with them).
-struct Starters {
-  std::string_view game;
-  std::array<std::string_view, 3> names;
-};
-constexpr Starters kStarters[] = {
-    {"Spyro's Adventure", {"Spyro", "Gill Grunt", "Trigger Happy"}},
-    {"Giants", {"Tree Rex", "Jet-Vac", "Cynder"}},
-    {"Swap Force", {"Wash Buckler", "Blast Zone", "Stealth Elf"}},
-    {"Trap Team", {"Snap Shot", "Food Fight", ""}},
-    {"SuperChargers", {"Spitfire", "Hot Streak", ""}},
-    {"Imaginators", {"King Pen", "Golden Queen", ""}},
-};
-
-constexpr size_t kPlayers = 4;
+namespace logic = portal::run;
 
 std::mutex g_mutex;
 std::filesystem::path g_config_path;
-std::string g_team_level;               // the level the teams belong to
-std::vector<std::string> g_team[kPlayers];  // character keys, per player
-
-// A name's letters and digits in lower case: "Jet-Vac" -> "jetvac".
-std::string Key(std::string_view name) {
-  std::string key;
-  for (const char c : name) {
-    const auto u = static_cast<unsigned char>(c);
-    if (std::isalnum(u)) key.push_back(static_cast<char>(std::tolower(u)));
-  }
-  return key;
-}
+logic::Teams g_teams;  // this level's teams
 
 // The character a figure belongs to ("Chop Chop" for "Legendary Chop Chop"); empty for items and
 // figures the catalog doesn't know.
 std::string_view CharacterOf(const portal::SkylanderInfo& sky) { return portal::CharacterName(sky); }
 
-std::vector<std::string> Split(const std::string& list) {
-  std::vector<std::string> out;
-  size_t start = 0;
-  while (start <= list.size()) {
-    const size_t end = list.find(';', start);
-    std::string part = list.substr(start, end == std::string::npos ? std::string::npos : end - start);
-    if (!part.empty()) out.push_back(std::move(part));
-    if (end == std::string::npos) break;
-    start = end + 1;
-  }
-  return out;
-}
-
 // This game: the last of the portal menu's games (each game lists the ones before it and itself).
 std::string ThisGame() {
-  const std::vector<std::string> games = Split(REXCVAR_GET(portal_menu_games));
+  const std::vector<std::string> games = logic::SplitList(REXCVAR_GET(portal_menu_games));
   return games.empty() ? std::string() : games.back();
-}
-
-bool IsStarter(const std::string& key) {
-  const std::string game = ThisGame();
-  for (const Starters& s : kStarters) {
-    if (s.game != game) continue;
-    for (const std::string_view name : s.names) {
-      if (!name.empty() && Key(name) == key) return true;
-    }
-  }
-  return false;
-}
-
-bool IsFound(const std::string& key) {
-  for (const std::string& name : Split(REXCVAR_GET(run_found))) {
-    if (Key(name) == key) return true;
-  }
-  return false;
-}
-
-// The hubs, as dev/where.h names them: Level_Hub (Spyro's Adventure), Level_Hub_2_Stage_n
-// (Giants), town_stateN (Swap Force's Woodburrow), Level_Hub_2014_01 (Trap Team), Academy
-// (SuperChargers), Hub_2016 and Overland_Map (Imaginators).
-bool IsHub(const std::string& level) {
-  const std::string key = Key(level);
-  return key.empty() || key.find("hub") != std::string::npos || key.rfind("townstate", 0) == 0 ||
-         key == "academy" || key.find("overland") != std::string::npos;
-}
-
-// The teams belong to the level they were made in.
-void FollowLevel() {
-  const std::string level = dev::CurrentLevel();
-  if (level == g_team_level) return;
-  g_team_level = level;
-  for (auto& team : g_team) team.clear();
 }
 
 }  // namespace
@@ -125,8 +50,9 @@ void SetConfigPath(std::filesystem::path path) {
 
 bool Locked(const portal::SkylanderInfo& sky) {
   if (!REXCVAR_GET(run_soul_gems)) return false;
-  const std::string key = Key(CharacterOf(sky));
-  return !key.empty() && !IsStarter(key) && !IsFound(key);
+  const std::string_view character = CharacterOf(sky);
+  return !character.empty() && !logic::IsStarter(ThisGame(), character) &&
+         !logic::ListHas(REXCVAR_GET(run_found), character);
 }
 
 bool Refuses(uint32_t user, const portal::SkylanderInfo& sky, bool german, std::string& why) {
@@ -137,13 +63,10 @@ bool Refuses(uint32_t user, const portal::SkylanderInfo& sky, bool german, std::
     return true;
   }
   const int32_t size = REXCVAR_GET(run_team_size);
-  const std::string key = Key(name);
-  if (size <= 0 || key.empty() || user >= kPlayers) return false;
+  if (size <= 0) return false;
   std::lock_guard lock(g_mutex);
-  FollowLevel();
-  if (IsHub(g_team_level)) return false;
-  const std::vector<std::string>& team = g_team[user];
-  if (team.size() < size_t(size) || std::find(team.begin(), team.end(), key) != team.end()) return false;
+  g_teams.Follow(dev::CurrentLevel());
+  if (!g_teams.Refuses(user, logic::NameKey(name), size_t(size))) return false;
   why = german ? fmt::format("Dein Team f\xC3\xBCr dieses Level ist voll ({}): Spiel einen von ihnen.", size)
                : fmt::format("Your team for this level is full ({}): play one of them.", size);
   return true;
@@ -151,29 +74,26 @@ bool Refuses(uint32_t user, const portal::SkylanderInfo& sky, bool german, std::
 
 void Placed(uint32_t user, const portal::SkylanderInfo& sky) {
   const int32_t size = REXCVAR_GET(run_team_size);
-  const std::string key = Key(CharacterOf(sky));
-  if (size <= 0 || key.empty() || user >= kPlayers) return;
+  if (size <= 0) return;
   std::lock_guard lock(g_mutex);
-  FollowLevel();
-  if (IsHub(g_team_level)) return;
-  std::vector<std::string>& team = g_team[user];
-  if (std::find(team.begin(), team.end(), key) != team.end()) return;
-  team.push_back(key);
-  REXLOG_INFO("Run: player {}'s team in {}: {} of {}", user + 1, g_team_level, team.size(), size);
+  g_teams.Follow(dev::CurrentLevel());
+  if (g_teams.Add(user, logic::NameKey(CharacterOf(sky)))) {
+    REXLOG_INFO("Run: player {}'s team in {}: {} of {}", user + 1, g_teams.level(), g_teams.Count(user), size);
+  }
 }
 
 bool SoulGemFound(std::string_view skylander) {
-  if (!REXCVAR_GET(run_soul_gems) || skylander.empty()) return false;
-  const std::string key = Key(skylander);
-  if (key.empty() || IsStarter(key) || IsFound(key)) return false;
-  std::string list = REXCVAR_GET(run_found);
-  list += (list.empty() ? "" : ";") + std::string(skylander);
+  if (!REXCVAR_GET(run_soul_gems) || logic::NameKey(skylander).empty()) return false;
+  const std::string found = REXCVAR_GET(run_found);
+  if (logic::IsStarter(ThisGame(), skylander) || logic::ListHas(found, skylander)) return false;
   std::filesystem::path path;
   {
     std::lock_guard lock(g_mutex);
     path = g_config_path;
   }
-  if (!StoreSetting(path, "run_found", list)) REXLOG_WARN("Run: could not keep the Soul Gem of {}", skylander);
+  if (!StoreSetting(path, "run_found", logic::ListAdd(found, skylander))) {
+    REXLOG_WARN("Run: could not keep the Soul Gem of {}", skylander);
+  }
   REXLOG_INFO("Run: {}'s Soul Gem found, {} found in this run", skylander, FoundCount());
   return true;
 }
@@ -188,6 +108,6 @@ void NewRun() {
   REXLOG_INFO("Run: a new run, only the starters ({})", ThisGame());
 }
 
-size_t FoundCount() { return Split(REXCVAR_GET(run_found)).size(); }
+size_t FoundCount() { return logic::SplitList(REXCVAR_GET(run_found)).size(); }
 
 }  // namespace skylanders::run
