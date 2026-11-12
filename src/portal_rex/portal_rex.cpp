@@ -875,6 +875,8 @@ namespace skylanders {
 namespace {
 // What UseSharedDataFolder did, for the log (it runs before logging starts).
 std::string g_data_folder_note;
+// What UseSharedDataFolder settled on (SharedUserDataRoot).
+std::filesystem::path g_shared_user_data_root;
 // What RemoveFigureFromSlot took off each slot last (TakenOffFrom).
 std::mutex g_taken_off_mutex;
 std::map<int, TakenOffFigure> g_taken_off;
@@ -886,6 +888,7 @@ void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem:
   namespace fs = std::filesystem;
   if (!REXCVAR_GET(user_data_root).empty()) {
     g_data_folder_note = "Data folder: " + Utf8Path(user_data_root) + " (--user_data_root)";
+    g_shared_user_data_root = user_data_root;
     return;
   }
   // The launcher asking for the settings pages needs no user data: nothing is copied then.
@@ -900,6 +903,7 @@ void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem:
     if (!copy.ok) {
       g_data_folder_note = "Data folder: could not copy " + Utf8Path(old_dir) + " to " + Utf8Path(target) +
                            " (" + copy.error + "); the old folder stays in use";
+      g_shared_user_data_root = old_dir;
       return;
     }
     WriteMovedNote(old_dir, target);
@@ -911,8 +915,11 @@ void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem:
   }
   fs::create_directories(target, ec);
   user_data_root = target;
+  g_shared_user_data_root = target;
   if (REXCVAR_GET(cache_root).empty()) cache_root = target / "cache";
 }
+
+const std::filesystem::path& SharedUserDataRoot() { return g_shared_user_data_root; }
 
 std::filesystem::path SharedFiguresDir(const std::filesystem::path& user_data_root) {
   namespace fs = std::filesystem;

@@ -50,6 +50,9 @@ void InstallPortal(const std::filesystem::path& default_figures_dir);
 // OnConfigurePaths: SharedFiguresDir logs what this did.
 void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem::path& cache_root,
                          std::string_view game);
+// The user data folder UseSharedDataFolder settled on (--user_data_root's if given); empty before
+// it ran, or when the launcher only asked for the settings pages. The mods folder is in it.
+const std::filesystem::path& SharedUserDataRoot();
 
 // The figure folder every game shares, as the real figures lie next to the portal whichever game
 // runs: Figures in the data folder (Documents\Skylanders\Giants -> Documents\Skylanders\Figures),
