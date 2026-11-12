@@ -79,7 +79,9 @@ SettingsPage ModsPage(std::string_view game) {
   SettingsPage page{"Mods", "Mods", {}};
   const fs::path folder = ModsFolder();
   const std::string game_key(game);
-  for (const portal::FoundMod& mod : portal::FindMods(folder)) {
+  const std::vector<portal::FoundMod> found = portal::FindMods(folder);
+  const std::string enabled_now = rex::cvar::GetFlagByName("mods");
+  for (const portal::FoundMod& mod : found) {
     const portal::ModManifest& m = mod.manifest;
     Setting s;
     s.en = m.name;
@@ -93,7 +95,21 @@ SettingsPage ModsPage(std::string_view game) {
     if (!m.author.empty()) about_de += "Von " + m.author + "\n";
     if (!m.description.empty()) about_de += "\n" + m.description + "\n";
     std::string problem = mod.problem;
-    if (problem.empty() && m.game != game_key) problem = "made for another game (" + m.game + ")";
+    if (problem.empty() && !m.id.empty()) {
+      // The start's own check with this one switched on (another game, no files folder, a mod it needs
+      // that is off, one it can't run with): the row says what the log will (the code review
+      // 2026-11-12). The disc pin is only known at the start.
+      const portal::ModPlan plan =
+          portal::PlanMods(found, portal::ModListWith(enabled_now, m.id, true), game, "");
+      const std::string prefix = "mod " + m.id;
+      for (const std::string& line : plan.lines) {
+        const size_t at = line.find(": left out, ");
+        if (line.rfind(prefix, 0) == 0 && at != std::string::npos &&
+            (line.size() == prefix.size() || line[prefix.size()] == ' ' || line[prefix.size()] == ':')) {
+          problem = line.substr(at + 12);
+        }
+      }
+    }
     if (!problem.empty()) {
       // Shown, so its maker sees why; it can still be switched (the log says it's left out).
       s.help_en = about + "\nCan't be used: " + problem + ".";
