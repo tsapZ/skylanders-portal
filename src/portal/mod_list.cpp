@@ -150,7 +150,10 @@ std::vector<FoundMod> FindMods(const fs::path& mods_dir) {
   std::vector<FoundMod> found;
   std::error_code ec;
   if (!fs::is_directory(mods_dir, ec)) return found;
-  for (const fs::directory_entry& entry : fs::directory_iterator(mods_dir, ec)) {
+  // increment(ec), not the range-for's ++: that throws on an error while listing (a folder on a
+  // removable or cloud drive, or one deleted meanwhile), and this runs at the game's start.
+  for (fs::directory_iterator it(mods_dir, ec), end; !ec && it != end; it.increment(ec)) {
+    const fs::directory_entry& entry = *it;
     std::error_code entry_ec;
     if (!entry.is_directory(entry_ec)) continue;
     FoundMod mod;
@@ -258,6 +261,11 @@ ModPlan PlanMods(const std::vector<FoundMod>& found, std::string_view enabled, s
       reason[i] = "no files folder";
     }
   }
+  // Requirements and conflicts, until nothing changes: of two that can't run together the one
+  // switched on first stays, and a mod that needs a left-out one is left out too. Both rules run
+  // again after each other, as a conflict can leave out a mod that another one needs (the code
+  // review 2026-11-12: "hats;rival;addon" with rival against hats and addon needing rival kept
+  // addon on when the needs were checked only before the conflicts).
   for (bool changed = true; changed;) {
     changed = false;
     for (size_t i = 0; i < unique.size(); ++i) {
@@ -271,19 +279,19 @@ ModPlan PlanMods(const std::vector<FoundMod>& found, std::string_view enabled, s
         }
       }
     }
-  }
-  // Conflicts: the one switched on first stays.
-  for (size_t i = 0; i < unique.size(); ++i) {
-    if (!reason[i].empty()) continue;
-    const FoundMod& mod = *find(unique[i]);
-    for (size_t j = 0; j < i && reason[i].empty(); ++j) {
-      if (!reason[j].empty()) continue;
-      const FoundMod& earlier = *find(unique[j]);
-      const auto& a = mod.manifest.conflicts;
-      const auto& b = earlier.manifest.conflicts;
-      if (std::find(a.begin(), a.end(), earlier.manifest.id) != a.end() ||
-          std::find(b.begin(), b.end(), mod.manifest.id) != b.end()) {
-        reason[i] = "can't run with " + earlier.manifest.id;
+    for (size_t i = 0; i < unique.size(); ++i) {
+      if (!reason[i].empty()) continue;
+      const FoundMod& mod = *find(unique[i]);
+      for (size_t j = 0; j < i && reason[i].empty(); ++j) {
+        if (!reason[j].empty()) continue;
+        const FoundMod& earlier = *find(unique[j]);
+        const auto& a = mod.manifest.conflicts;
+        const auto& b = earlier.manifest.conflicts;
+        if (std::find(a.begin(), a.end(), earlier.manifest.id) != a.end() ||
+            std::find(b.begin(), b.end(), mod.manifest.id) != b.end()) {
+          reason[i] = "can't run with " + earlier.manifest.id;
+          changed = true;
+        }
       }
     }
   }

@@ -68,6 +68,8 @@ static void FolderTests() {
   WriteFile(root / "rival" / "files" / "c.txt", "x");
   WriteFile(root / "pinned" / "mod.toml", "game = \"swapforce\"\ndiscs = [\"P1\"]\n");
   WriteFile(root / "pinned" / "files" / "d.txt", "x");
+  WriteFile(root / "addon" / "mod.toml", "game = \"swapforce\"\nrequires = [\"rival\"]\n");
+  WriteFile(root / "addon" / "files" / "f.txt", "x");
   // Not usable.
   WriteFile(root / "giants-only" / "mod.toml", "game = \"giants\"\n");
   WriteFile(root / "giants-only" / "files" / "e.txt", "x");
@@ -79,7 +81,7 @@ static void FolderTests() {
   WriteFile(root / "a file.txt", "not a mod");
 
   const std::vector<FoundMod> found = FindMods(root);
-  CHECK(found.size() == 10);
+  CHECK(found.size() == 11);
   auto problem_of = [&](const std::string& id) -> std::string {
     for (const FoundMod& mod : found) {
       if (mod.folder.filename() == id) return mod.problem.empty() ? "ok" : mod.problem;
@@ -113,6 +115,11 @@ static void FolderTests() {
   plan = PlanMods(found, "voices", "swapforce", "");
   CHECK(plan.overlay_roots.empty());
   CHECK(plan.lines.size() == 1 && plan.lines[0].find("needs hats") != std::string::npos);
+  // A conflict that leaves out a mod takes the ones needing it along (the code review 2026-11-12).
+  plan = PlanMods(found, "hats;rival;addon", "swapforce", "");
+  CHECK(plan.overlay_roots.size() == 1 && plan.overlay_roots[0] == root / "hats" / "files");
+  CHECK(plan.lines.size() == 3 && plan.lines[1] == "mod rival: left out, can't run with hats");
+  CHECK(plan.lines.size() == 3 && plan.lines[2] == "mod addon: left out, needs rival switched on");
   // Disc pins: checked only when both are known.
   CHECK(PlanMods(found, "pinned", "swapforce", "P1").overlay_roots.size() == 1);
   CHECK(PlanMods(found, "pinned", "swapforce", "").overlay_roots.size() == 1);
