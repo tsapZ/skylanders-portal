@@ -3395,6 +3395,14 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       return;
     }
     if (TakenBy(*character)) return;
+    // Locked in a Soul Gem run: the message at once, not after the list of its versions.
+    if (const SkylanderInfo* shown = ShownVersion(*character).sky; shown && run::Locked(*shown)) {
+      std::string why;
+      run::Refuses(user_, *shown, g_german, why);
+      ShowToast(why, 3.5f);
+      REXLOG_INFO("Portal menu: player {}: {} is locked in this run", user_ + 1, character->name);
+      return;
+    }
     if (character->swapper) {
       // Starts with the version the card shows, whole.
       const Version& v = ShownVersion(*character);
