@@ -76,6 +76,16 @@ class Habits final : public PortalDevice {
       fake_.push_back(refused);
       return;
     }
+    if (report[0] == 'W' && (refuse_writes > 0 || report[2] == refuse_write_block)) {
+      // "Couldn't write that block": the reply without the written flag (0x10).
+      if (refuse_writes > 0) --refuse_writes;
+      Report refused{};
+      refused[0] = 0x57;
+      refused[1] = report[1] & 0x0F;
+      refused[2] = report[2];
+      fake_.push_back(refused);
+      return;
+    }
     inner_->Write(report);
   }
   Report Read() override {
@@ -98,6 +108,8 @@ class Habits final : public PortalDevice {
   bool miss_first_activate = false;
   bool stale_status = false;
   int refuse_reads = 0;  // this many block reads are answered "couldn't read"
+  int refuse_writes = 0;  // this many block writes are answered "couldn't write"
+  int refuse_write_block = -1;  // writes to this block are always answered "couldn't write"
 
  private:
   SoftwarePortal* inner_;
@@ -329,6 +341,49 @@ int main() {
     RunFor(bridge, &real, std::chrono::milliseconds(500));
     CHECK(real.refuse_reads == 0);
     CHECK(FirstFigure(emulated) == kMaxFigures - 1);
+  }
+
+  // A write the real portal refuses a few times in a row is sent again after a pause until it is
+  // taken (the owner's test 2026-11-12: three quick tries were used up within a moment); one it
+  // never takes is given up with a log line, and the writes behind it still go out.
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    std::vector<std::string> lines;
+    RealPortalBridge::Options options{dir, [&](const std::string& l) { lines.push_back(l); }, nullptr};
+    options.write_retry_pause = std::chrono::milliseconds(5);
+    RealPortalBridge bridge(&emulated, options);
+    inner.PlaceFigure(0, chop);
+    RunFor(bridge, &real, std::chrono::milliseconds(300));
+    const int copy = FirstFigure(emulated);
+    CHECK(copy == kMaxFigures - 1);
+    emulated.SetWriteCallback([&](int slot, const FigureData& data,
+                                  const std::optional<std::filesystem::path>&) {
+      bridge.OnEmulatedWrite(slot, data);
+    });
+    real.refuse_writes = 4;  // more than the old three tries, fewer than six
+    GameWrite(emulated, copy, 8, 0xA1);
+    RunFor(bridge, &real, std::chrono::milliseconds(300));
+    CHECK(real.refuse_writes == 0);
+    auto on_real = inner.Figure(0);
+    CHECK(on_real && BlockIs(*on_real, 8, 0xA1));
+    // The tries were spread out, not sent back to back: between two W of block 8 something else
+    // went out or time passed (the pause), checked by the count of W sent for it: 4 refused + 1.
+    CHECK(std::count_if(real.sent.begin(), real.sent.end(),
+                        [](const Report& r) { return r[0] == 'W' && r[2] == 8; }) == 5);
+
+    real.refuse_write_block = 9;  // never taken
+    GameWrite(emulated, copy, 9, 0xB2);
+    GameWrite(emulated, copy, 10, 0xC3);
+    RunFor(bridge, &real, std::chrono::milliseconds(300));
+    CHECK(std::any_of(lines.begin(), lines.end(), [](const std::string& l) {
+      return l.find("refused block 9") != std::string::npos;
+    }));
+    CHECK(std::count_if(real.sent.begin(), real.sent.end(),
+                        [](const Report& r) { return r[0] == 'W' && r[2] == 9; }) == 6);
+    on_real = inner.Figure(0);
+    CHECK(on_real && !BlockIs(*on_real, 9, 0xB2));
+    CHECK(on_real && BlockIs(*on_real, 10, 0xC3));  // the write behind it still went out
   }
 
   // One it can't read at all is given up with a log line, and taken once it is put on again.

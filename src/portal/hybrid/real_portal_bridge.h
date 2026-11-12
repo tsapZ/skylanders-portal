@@ -53,6 +53,10 @@ class RealPortalBridge {
     // A block the real portal couldn't read (or didn't answer for) is asked for again after this
     // pause, up to 12 times a block, before the figure is given up (TrapTeamRecomp #22).
     std::chrono::milliseconds read_retry_pause{150};
+    // A block write the real portal refused (or didn't answer) goes out again after this pause, up
+    // to kWriteAttempts times; three tries in a row came and went within a moment of an older
+    // portal not taking writes (the owner's test 2026-11-12, a Legendary Trigger Happy block).
+    std::chrono::milliseconds write_retry_pause{150};
   };
 
   RealPortalBridge(SoftwarePortal* emulated, Options options);
@@ -115,6 +119,7 @@ class RealPortalBridge {
     int block = 0;
     std::array<uint8_t, kBlockSize> bytes{};
     int attempts = 0;
+    std::chrono::steady_clock::time_point retry_at{};  // not sent again before this
   };
   struct Command {
     uint8_t cmd = 0;

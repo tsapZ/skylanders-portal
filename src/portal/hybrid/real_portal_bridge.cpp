@@ -14,10 +14,12 @@ namespace skylanders::portal {
 
 namespace {
 
-// How long the real portal gets to answer a block read or write before it is asked again, and how
-// often; then the figure (or the block) is given up.
+// How long the real portal gets to answer a block read or write before it is asked again.
 constexpr auto kReplyTimeout = std::chrono::milliseconds(250);
-constexpr int kAttempts = 3;
+// A block write, refused or unanswered, is tried this often (Options::write_retry_pause apart) before
+// the block is given up (it stays in the backup file). Three tries in a row were all used up within
+// a moment of an older portal not taking writes (the owner's test 2026-11-12).
+constexpr int kWriteAttempts = 6;
 // A block read, refused or unanswered, is tried this often (Options::read_retry_pause apart) before
 // the figure is given up: a figure just put on, or one not lying flat, can't be read for a moment.
 // With 3 quick tries a figure put back after a swap was given up at once and then ignored until it
@@ -120,10 +122,12 @@ void RealPortalBridge::Step(PortalDevice* real) {
       }
     } else if (timed_out.cmd == 'W') {
       std::lock_guard lock(mu_);
-      if (!writes_.empty() && ++writes_.front().attempts >= kAttempts) {
+      if (!writes_.empty() && ++writes_.front().attempts >= kWriteAttempts) {
         Log("Hybrid portal: block " + std::to_string(writes_.front().block) +
             " could not be written to the real figure; it is in the backup file");
         writes_.pop_front();
+      } else if (!writes_.empty()) {
+        writes_.front().retry_at = Clock::now() + options_.write_retry_pause;
       }
     } else if (timed_out.cmd == 'M') {
       // A portal from before Trap Team doesn't know the command: no speaker.
@@ -213,10 +217,12 @@ void RealPortalBridge::Handle(const Report& report) {
       }
       if (report[1] & 0x10) {
         writes_.pop_front();
-      } else if (++writes_.front().attempts >= kAttempts) {
+      } else if (++writes_.front().attempts >= kWriteAttempts) {
         Log("Hybrid portal: the real portal refused block " + std::to_string(block) +
             "; it is in the backup file");
         writes_.pop_front();
+      } else {
+        writes_.front().retry_at = Clock::now() + options_.write_retry_pause;
       }
       break;
     }
@@ -268,7 +274,9 @@ void RealPortalBridge::SendNext() {
   {
     std::lock_guard lock(mu_);
     while (!writes_.empty() && !mirrored_[writes_.front().real_slot]) writes_.pop_front();
-    if (!writes_.empty()) {
+    // A refused write waits out its pause; the ones behind it wait too, so a block's writes keep
+    // their order. Reads and lights go on meanwhile.
+    if (!writes_.empty() && now >= writes_.front().retry_at) {
       const PendingWrite& w = writes_.front();
       write = Make({'W', uint8_t(w.real_slot), uint8_t(w.block)});
       std::copy(w.bytes.begin(), w.bytes.end(), write->begin() + 3);
