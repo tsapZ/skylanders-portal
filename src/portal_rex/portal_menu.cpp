@@ -47,6 +47,8 @@
 #include "portal/hybrid/real_portal_bridge.h"
 #include "portal/software/software_portal.h"
 #include "portal/trap_villain.h"
+#include "dev/input_script.h"
+#include "dev/where.h"
 #include "portal_rex/achievements_ui.h"
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
@@ -244,6 +246,7 @@ enum class Text {
   kNewRun,
   kNewRunInfo,
   kNewRunDone,
+  kTiredStays,
   kCount,
 };
 
@@ -390,6 +393,7 @@ constexpr const char* kEnglish[] = {
     "New run",
     "Back to the starters: every Soul Gem has to be found again",
     "New run: only the starters are unlocked.",
+    "%s is out of health: back in the next level.",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -545,6 +549,7 @@ constexpr const char* kGerman[] = {
     "Neuer Durchlauf",
     "Zur\xC3\xBC" "ck zu den Startern: Jeder Seelenstein muss neu gefunden werden",
     "Neuer Durchlauf: Nur die Starter sind freigeschaltet.",
+    "%s ist ersch\xC3\xB6pft: im n\xC3\xA4" "chsten Level wieder dabei.",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -2387,8 +2392,9 @@ int FreeSlot(uint32_t user, const std::vector<int>& preferred, const std::vector
 // the level ends): the game says so (Swap Force's and the later games' Dead state, the older games'
 // "this Skylander needs a break"), and its card gets a red cross. It stays pickable, so a wrong
 // mark never keeps a figure from being played: put on again, the mark goes once it has been on a
-// while without the game saying so again (a new level), and stays if the game refuses it at once.
-// UI thread only.
+// while without the game saying so again, and stays if the game refuses it at once. Every mark goes
+// when dev/where.h names another level. With a team size per level (run_team_size) the menu keeps
+// a marked Skylander off until then. UI thread only.
 std::set<uint32_t> g_tired;  // Key(id, variant)
 struct TiredCheck {
   uint32_t key;
@@ -2396,8 +2402,22 @@ struct TiredCheck {
 };
 std::vector<TiredCheck> g_tired_checks;
 constexpr auto kTiredCheckTime = std::chrono::seconds(10);
+// With a team size per level (run_rules.h, Core of Light #52) a Skylander out of health stays out
+// until the level ends, so the marks go when dev/where.h names another level.
+std::string g_tired_level;
 
 bool IsTired(const SkylanderInfo* sky) {
+  // Twice a second at most: the menu asks for every card in every frame.
+  static Clock::time_point level_checked{};
+  if (const auto now = Clock::now(); now - level_checked > std::chrono::milliseconds(500)) {
+    level_checked = now;
+    if (std::string level = dev::CurrentLevel(); level != g_tired_level) {
+      g_tired_level = std::move(level);
+      if (!g_tired.empty()) REXLOG_INFO("Portal menu: a new level, the Skylanders out of health are back");
+      g_tired.clear();
+      g_tired_checks.clear();
+    }
+  }
   if (!sky || g_tired.empty()) return false;
   // Put on again and not refused in time: rested (another level).
   const auto now = Clock::now();
@@ -3870,8 +3890,16 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         return;
       }
     }
-    // A Soul Gem run's lock, a full team in this level (run_rules.h).
+    // A Soul Gem run's lock, a full team in this level (run_rules.h); with a team size, a
+    // Skylander out of health stays out until the level ends (Core of Light #52).
     for (const SkylanderInfo* sky : figures) {
+      if (sky && REXCVAR_GET(run_team_size) > 0 && IsTired(sky)) {
+        char line[256];
+        std::snprintf(line, sizeof(line), T(Text::kTiredStays), FigureName(*sky).c_str());
+        ShowToast(line, 3.5f);
+        REXLOG_INFO("Portal menu: player {}: {} not placed (out of health in this level)", user_ + 1, sky->name);
+        return;
+      }
       std::string why;
       if (sky && run::Refuses(user_, *sky, g_german, why)) {
         ShowToast(why, 3.5f);
@@ -6165,6 +6193,17 @@ void PlayerSkylanderTired(uint32_t user) {
     }
   });
 }
+
+// For tests: an input script's `tired <player 1-4>` marks that player's Skylander as out of health,
+// as the game's own signal does (the games tell it at different moments, hard to bring about).
+static struct TiredCommand {
+  TiredCommand() {
+    dev::RegisterScriptCommand("tired", [](const std::string& args) {
+      const int player = std::atoi(args.c_str());
+      if (player >= 1 && player <= int(rex::input::kMaxGuestUsers)) PlayerSkylanderTired(uint32_t(player - 1));
+    });
+  }
+} g_tired_command;
 
 void CompanionRequestEnded() {
   {
