@@ -31,7 +31,8 @@ void LogPlace(const char* why);
 // SuperChargers, Imaginators keep each level in one archive): `name_of` turns a path the game
 // opened ("game:\archives\Level_503.pak") into the level's name, or "" for any other file. Called
 // for every file the game opens (the SDK's rex::filesystem open observer), on the thread that
-// opened it. Set it once, before the game runs.
+// opened it (through portal_rex/file_watch.h, which shares that observer). Set it once, before the
+// game runs.
 void WatchLevelArchives(std::string (*name_of)(std::string_view path));
 
 // The level of the last level archive the game opened ("" before the first), for ReportPlace.

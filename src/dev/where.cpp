@@ -7,8 +7,9 @@
 #include <cstring>
 #include <mutex>
 
-#include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
+
+#include "portal_rex/file_watch.h"
 
 namespace skylanders::dev {
 namespace {
@@ -104,7 +105,7 @@ std::string CurrentLevel() {
 
 void WatchLevelArchives(std::string (*name_of)(std::string_view path)) {
   g_name_of = name_of;
-  rex::filesystem::SetOpenObserver(&OnOpened);
+  skylanders::AddFileWatcher(&OnOpened);
 }
 
 std::string ArchiveLevel() {
