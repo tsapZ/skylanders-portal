@@ -39,6 +39,14 @@ int main() {
   CHECK(!IsStarter("Imaginators", "Spyro"));
   CHECK(!IsStarter("Unknown game", "Spyro"));
   CHECK(!IsStarter("Trap Team", ""));
+  CHECK(StartersOf("Spyro's Adventure").size() == 3);
+  CHECK(StartersOf("Trap Team").size() == 2);
+  CHECK(StartersOf("").size() == 15);
+  CHECK(StartersOf("Unknown game").empty());
+  // No game known: every game's starters (a run never starts with none).
+  CHECK(IsStarter("", "Spyro"));
+  CHECK(IsStarter("", "King Pen"));
+  CHECK(!IsStarter("", "Bash"));
 
   // A ';' list of names: empty parts dropped, lookups by name in any spelling.
   CHECK(SplitList("Chop Chop;;Bash;").size() == 2);

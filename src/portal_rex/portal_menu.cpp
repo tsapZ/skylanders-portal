@@ -2406,17 +2406,24 @@ constexpr auto kTiredCheckTime = std::chrono::seconds(10);
 // until the level ends, so the marks go when dev/where.h names another level.
 std::string g_tired_level;
 
+// The marks belong to the level they were made in: another level, and they go. Run before a mark is
+// made too, so a mark made in a new level is that level's (a check only in IsTired would come later
+// and take it away).
+void FollowTiredLevel() {
+  if (std::string level = dev::CurrentLevel(); level != g_tired_level) {
+    g_tired_level = std::move(level);
+    if (!g_tired.empty()) REXLOG_INFO("Portal menu: a new level, the Skylanders out of health are back");
+    g_tired.clear();
+    g_tired_checks.clear();
+  }
+}
+
 bool IsTired(const SkylanderInfo* sky) {
   // Twice a second at most: the menu asks for every card in every frame.
   static Clock::time_point level_checked{};
   if (const auto now = Clock::now(); now - level_checked > std::chrono::milliseconds(500)) {
     level_checked = now;
-    if (std::string level = dev::CurrentLevel(); level != g_tired_level) {
-      g_tired_level = std::move(level);
-      if (!g_tired.empty()) REXLOG_INFO("Portal menu: a new level, the Skylanders out of health are back");
-      g_tired.clear();
-      g_tired_checks.clear();
-    }
+    FollowTiredLevel();
   }
   if (!sky || g_tired.empty()) return false;
   // Put on again and not refused in time: rested (another level).
@@ -2433,6 +2440,7 @@ void PlaceForPlayer(uint32_t user, const std::vector<std::filesystem::path>& pat
                     const std::vector<int>& preferred) {
   if (!GetSoftwarePortal()) return;
   auto& slots = g_player_slots[user];
+  bool member = false;  // the placement is one member of the level's team, led by its first figure
   for (const auto& path : paths) {
     int slot = FreeSlot(user, preferred, slots);
     if (slot < 0) {
@@ -2444,8 +2452,11 @@ void PlaceForPlayer(uint32_t user, const std::vector<std::filesystem::path>& pat
       if (const SkylanderInfo* sky = FigureIn(slot); sky && g_tired.contains(Key(*sky))) {
         g_tired_checks.push_back({Key(*sky), Clock::now()});
       }
-      // One of this level's team (run_team_size).
-      if (const SkylanderInfo* sky = FigureIn(slot)) run::Placed(user, *sky);
+      // One of this level's team (run_team_size): a swapper's two halves count once.
+      if (const SkylanderInfo* sky = FigureIn(slot); sky && !member) {
+        run::Placed(user, *sky);
+        member = true;
+      }
     }
   }
 }
@@ -3416,9 +3427,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     if (TakenBy(*character)) return;
     // Locked in a Soul Gem run: the message at once, not after the list of its versions.
-    if (const SkylanderInfo* shown = ShownVersion(*character).sky; shown && run::Locked(*shown)) {
-      std::string why;
-      run::Refuses(user_, *shown, g_german, why);
+    if (std::string why; ShownVersion(*character).sky && run::LockedMessage(*ShownVersion(*character).sky, g_german, why)) {
       ShowToast(why, 3.5f);
       REXLOG_INFO("Portal menu: player {}: {} is locked in this run", user_ + 1, character->name);
       return;
@@ -3890,23 +3899,30 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         return;
       }
     }
-    // A Soul Gem run's lock, a full team in this level (run_rules.h); with a team size, a
-    // Skylander out of health stays out until the level ends (Core of Light #52).
+    // The run's rules (run_rules.h): a Soul Gem run's lock; with a team size, a Skylander out of
+    // health stays out until the level ends (Core of Light #52; not in a hub, as the team), and a
+    // full team takes no one new (the placement is one member, led by its first figure).
     for (const SkylanderInfo* sky : figures) {
-      if (sky && REXCVAR_GET(run_team_size) > 0 && IsTired(sky)) {
+      if (!sky) continue;
+      if (std::string why; run::LockedMessage(*sky, g_german, why)) {
+        ShowToast(why, 3.5f);
+        REXLOG_INFO("Portal menu: player {}: {} not placed (locked in this run)", user_ + 1, sky->name);
+        return;
+      }
+      if (REXCVAR_GET(run_team_size) > 0 && run::InPlay() && IsTired(sky)) {
         char line[256];
         std::snprintf(line, sizeof(line), T(Text::kTiredStays), FigureName(*sky).c_str());
         ShowToast(line, 3.5f);
         REXLOG_INFO("Portal menu: player {}: {} not placed (out of health in this level)", user_ + 1, sky->name);
         return;
       }
-      std::string why;
-      if (sky && run::Refuses(user_, *sky, g_german, why)) {
-        ShowToast(why, 3.5f);
-        REXLOG_INFO("Portal menu: player {}: {} not placed ({})", user_ + 1, sky->name,
-                    run::Locked(*sky) ? "locked in this run" : "the level's team is full");
-        return;
-      }
+    }
+    if (std::string why; !figures.empty() && figures.front() &&
+                         run::TeamRefuses(user_, *figures.front(), g_german, why)) {
+      ShowToast(why, 3.5f);
+      REXLOG_INFO("Portal menu: player {}: {} not placed (the level's team is full)", user_ + 1,
+                  figures.front()->name);
+      return;
     }
     // This player's Skylander stands on the real portal: it stays (LiftPlayer left it on), so
     // another one goes on only once the toy is lifted off (TrapTeamRecomp #22).
@@ -4312,7 +4328,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     if (auto owner = TakenBy(character)) DrawTaken(dl, a, b, *owner);
     if (IsTired(shown)) DrawTired(dl, a, b);
-    if (run::Locked(*shown)) DrawLocked(dl, a, b);
+    // Companions (sidekicks, traps, vehicles) go on another way and aren't locked (run_rules.h).
+    if (!character.sidekick && run::Locked(*shown)) DrawLocked(dl, a, b);
   }
 
   // Locked in a Soul Gem run: the card dimmed, a padlock and "Soul Gem" over its picture.
@@ -6182,6 +6199,7 @@ void AutoOpenPortalMenuForVehicle(uint32_t user, int terrain, portal::Element el
 void PlayerSkylanderTired(uint32_t user) {
   if (!g_app_context || user >= rex::input::kMaxGuestUsers) return;
   g_app_context->CallInUIThread([user] {
+    FollowTiredLevel();  // the mark is this level's
     for (int slot : g_player_slots[user]) {
       const SkylanderInfo* sky = FigureIn(slot);
       if (!sky) continue;

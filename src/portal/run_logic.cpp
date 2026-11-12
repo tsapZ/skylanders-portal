@@ -38,14 +38,23 @@ bool IsHubLevel(std::string_view level) {
          key == "academy" || key.find("overland") != std::string::npos;
 }
 
+std::vector<std::string_view> StartersOf(std::string_view game) {
+  std::vector<std::string_view> out;
+  for (const Starters& s : kStarters) {
+    // No game known (portal_menu_games empty): every game's starters, so a run never starts with none.
+    if (!game.empty() && s.game != game) continue;
+    for (const std::string_view name : s.names) {
+      if (!name.empty()) out.push_back(name);
+    }
+  }
+  return out;
+}
+
 bool IsStarter(std::string_view game, std::string_view character) {
   const std::string key = NameKey(character);
   if (key.empty()) return false;
-  for (const Starters& s : kStarters) {
-    if (s.game != game) continue;
-    for (const std::string_view name : s.names) {
-      if (!name.empty() && NameKey(name) == key) return true;
-    }
+  for (const std::string_view name : StartersOf(game)) {
+    if (NameKey(name) == key) return true;
   }
   return false;
 }

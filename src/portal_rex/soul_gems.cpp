@@ -23,13 +23,18 @@ void OnOpened(std::string_view path) {
   if (!skylander_of) return;
   std::string name = skylander_of(path);
   if (name.empty()) return;
+  bool first = false;
   {
     // A movie can be opened more than once (its header, then the stream): one line per Skylander.
     std::lock_guard lock(g_mutex);
-    if (std::find(g_seen.begin(), g_seen.end(), name) != g_seen.end()) return;
-    g_seen.push_back(name);
+    if (std::find(g_seen.begin(), g_seen.end(), name) == g_seen.end()) {
+      g_seen.push_back(name);
+      first = true;
+    }
   }
-  REXLOG_INFO("Soul Gem movie: {} ({})", name, path);
+  if (first) REXLOG_INFO("Soul Gem movie: {} ({})", name, path);
+  // Every time, not only the first: a new run (or a run switched on later) in the same session must
+  // see a gem picked up again; the run counts each find once itself.
   if (const auto found = g_found.load(std::memory_order_acquire)) found(name);
 }
 

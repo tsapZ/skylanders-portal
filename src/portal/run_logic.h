@@ -20,8 +20,12 @@ std::string NameKey(std::string_view name);
 bool IsHubLevel(std::string_view level);
 
 // Whether `character` belongs to `game`'s starter pack (the Skylanders the game came with), by name
-// in any spelling: "Spyro's Adventure" Spyro, Gill Grunt, Trigger Happy.
+// in any spelling: "Spyro's Adventure" Spyro, Gill Grunt, Trigger Happy. An empty `game` (not known)
+// takes every game's starters.
 bool IsStarter(std::string_view game, std::string_view character);
+
+// The starter pack's names of `game` (every game's for an empty `game`).
+std::vector<std::string_view> StartersOf(std::string_view game);
 
 // A list of names separated by ';', empty parts left out.
 std::vector<std::string> SplitList(std::string_view list);
