@@ -71,6 +71,8 @@ std::string_view FileStem(std::string_view path, std::string_view extension) {
   return file.substr(0, file.size() - extension.size());
 }
 
+bool SameName(std::string_view a, std::string_view b) { return SameNoCase(a, b); }
+
 bool InFolder(std::string_view path, std::string_view folder) {
   const size_t file = path.find_last_of("\\/");
   if (file == std::string_view::npos) return false;

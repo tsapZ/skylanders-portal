@@ -26,6 +26,9 @@ std::vector<std::string> SoulGemsSeen();
 // extension is `extension` (any case), else "": ("game:\movies\Bash.mov", ".mov") -> "Bash".
 std::string_view FileStem(std::string_view path, std::string_view extension);
 
+// Whether two names are the same in any case: ("DaBomb", "Dabomb") -> true.
+bool SameName(std::string_view a, std::string_view b);
+
 // Whether the file's own folder is `folder` (any case): ("game:\movies\Bash.mov", "movies") -> true.
 bool InFolder(std::string_view path, std::string_view folder);
 
