@@ -1,11 +1,13 @@
 #include "portal_rex/button_prompts.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <rex/cvar.h>
@@ -45,12 +47,20 @@ std::optional<PromptStyle> StyleNow() {
   static std::once_flag once;
   static std::optional<PromptStyle> chosen;
   std::call_once(once, [] {
+    // The first prompts load a few seconds after start, maybe before a pad has announced itself: up to 2 s for one,
+    // on a replacement worker only (the game shows its own texture meanwhile), never on the GPU thread.
+    const std::string async = rex::cvar::GetFlagByName("texture_replace_async");
+    const bool may_wait = async != "false" && async != "0";
     std::string name;
-    uint32_t first = UINT32_MAX;
-    for (const menu_input::ConnectedDevice& device : menu_input::ConnectedDevices()) {
-      if (device.keyboard || device.slot >= first) continue;
-      first = device.slot;
-      name = device.name;
+    for (int tries = 0;; ++tries) {
+      uint32_t first = UINT32_MAX;
+      for (const menu_input::ConnectedDevice& device : menu_input::ConnectedDevices()) {
+        if (device.keyboard || device.slot >= first) continue;
+        first = device.slot;
+        name = device.name;
+      }
+      if (!name.empty() || !may_wait || tries >= 20) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     // An XInput pad (Xbox, Steam Input, DS4Windows) is named as one and keeps the game's own.
     switch (input_pictures::PadKindOf(name)) {
