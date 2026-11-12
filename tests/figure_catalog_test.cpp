@@ -71,6 +71,17 @@ int main() {
   auto entries2 = ScanFigureCatalog(root);
   CHECK(entries2.size() == 6);
 
+  // An emulator's figure (.sky: RPCS3, Dolphin, Cemu; the same 1 KB of toy data) counts too, in
+  // any case; a name ending in .sky.bak doesn't (Core of Light #88).
+  Touch(root / L"3. Swap Force" / L"Blast Zone.sky");
+  Touch(root / L"3. Swap Force" / L"Rattle Shake.SKY");
+  Touch(root / L"3. Swap Force" / L"old.sky.bak");
+  auto entries3 = ScanFigureCatalog(root);
+  CHECK(entries3.size() == 8);
+  bool sky_listed = false;
+  for (const auto& e : entries3) sky_listed = sky_listed || e.name == "Blast Zone";
+  CHECK(sky_listed);
+
   fs::remove_all(root);
 
   // Games sort by release order, not alphabetically -- "Trap Team" (4th) must come before

@@ -105,7 +105,10 @@ std::vector<FigureCatalogEntry> ScanFigureCatalog(const std::filesystem::path& r
     const auto& path = it->path();
     // UTF-8, not path::string(): that throws for a name outside the Windows code page (a star or
     // Japanese letters; Core of Light #60, TheBiemGamer) and took the whole list down.
-    if (Lower(Utf8Path(path.extension())) != ".dump") continue;
+    // .sky too: RPCS3's, Dolphin's and Cemu's virtual figures hold the same 1 KB of toy data as a
+    // .dump, so they play as they are (Core of Light #88).
+    const std::string extension = Lower(Utf8Path(path.extension()));
+    if (extension != ".dump" && extension != ".sky") continue;
     const std::string name = Utf8Path(path.stem());
     entries.push_back({name, ResolveDisplayName(path, name), TopLevelFolder(root, path), path});
   }
