@@ -22,6 +22,10 @@ void WatchSoulGems(std::string (*skylander_of)(std::string_view path));
 // Any thread.
 std::vector<std::string> SoulGemsSeen();
 
+// Called with each Skylander's name right after its line (the portal menu: a Soul Gem run's
+// find), on the thread that opened the movie. Set once, before the game runs.
+void OnSoulGem(void (*found)(const std::string& skylander));
+
 // For a game's skylander_of. The file name of `path` without its folders and extension if the
 // extension is `extension` (any case), else "": ("game:\movies\Bash.mov", ".mov") -> "Bash".
 std::string_view FileStem(std::string_view path, std::string_view extension);

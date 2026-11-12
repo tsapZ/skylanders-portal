@@ -17,6 +17,7 @@ namespace {
 using SkylanderOf = std::string (*)(std::string_view);
 
 std::atomic<SkylanderOf> g_skylander_of{nullptr};
+std::atomic<void (*)(const std::string&)> g_found{nullptr};
 std::mutex g_mutex;
 std::vector<std::string> g_seen;
 
@@ -48,6 +49,7 @@ void OnOpened(std::string_view path) {
     g_seen.push_back(name);
   }
   REXLOG_INFO("Soul Gem movie: {} ({})", name, path);
+  if (const auto found = g_found.load(std::memory_order_acquire)) found(name);
 }
 
 }  // namespace
@@ -56,6 +58,8 @@ void WatchSoulGems(std::string (*skylander_of)(std::string_view path)) {
   g_skylander_of.store(skylander_of, std::memory_order_release);
   AddFileWatcher(&OnOpened);
 }
+
+void OnSoulGem(void (*found)(const std::string& skylander)) { g_found.store(found, std::memory_order_release); }
 
 std::vector<std::string> SoulGemsSeen() {
   std::lock_guard lock(g_mutex);

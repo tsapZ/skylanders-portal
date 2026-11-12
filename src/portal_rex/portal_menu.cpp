@@ -52,7 +52,9 @@
 #include "portal_rex/portal_menu_input.h"
 #include "portal_rex/portal_rex.h"
 #include "portal_rex/png_file.h"
+#include "portal_rex/run_rules.h"
 #include "portal_rex/settings_file.h"
+#include "portal_rex/soul_gems.h"
 
 REXCVAR_DEFINE_STRING(export_pictures, "", "Launcher",
                       "Write the figure, hat and achievement pictures to this folder and quit; for the "
@@ -233,6 +235,15 @@ enum class Text {
   kPinRecent,
   kUnpinRecent,
   kRemoveRecent,
+  kLocked,
+  kSoulGemFound,
+  kSoulGemRun,
+  kSoulGemRunInfo,
+  kTeamSize,
+  kTeamSizeOff,
+  kNewRun,
+  kNewRunInfo,
+  kNewRunDone,
   kCount,
 };
 
@@ -370,6 +381,15 @@ constexpr const char* kEnglish[] = {
     "Pin",
     "Unpin",
     "Remove",
+    "SOUL GEM",
+    "Soul Gem found: %s joins the run!",
+    "Soul Gem run",
+    "Only the starters and the Skylanders whose Soul Gem you found",
+    "Team size per level",
+    "No limit",
+    "New run",
+    "Back to the starters: every Soul Gem has to be found again",
+    "New run: only the starters are unlocked.",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -516,6 +536,15 @@ constexpr const char* kGerman[] = {
     "Anpinnen",
     "L\xC3\xB6sen",
     "Entfernen",
+    "SEELENSTEIN",
+    "Seelenstein gefunden: %s ist jetzt dabei!",
+    "Seelenstein-Durchlauf",
+    "Nur die Starter und die Skylander, deren Seelenstein du gefunden hast",
+    "Teamgr\xC3\xB6\xC3\x9F" "e pro Level",
+    "Kein Limit",
+    "Neuer Durchlauf",
+    "Zur\xC3\xBC" "ck zu den Startern: Jeder Seelenstein muss neu gefunden werden",
+    "Neuer Durchlauf: Nur die Starter sind freigeschaltet.",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -2395,6 +2424,8 @@ void PlaceForPlayer(uint32_t user, const std::vector<std::filesystem::path>& pat
       if (const SkylanderInfo* sky = FigureIn(slot); sky && g_tired.contains(Key(*sky))) {
         g_tired_checks.push_back({Key(*sky), Clock::now()});
       }
+      // One of this level's team (run_team_size).
+      if (const SkylanderInfo* sky = FigureIn(slot)) run::Placed(user, *sky);
     }
   }
 }
@@ -3531,7 +3562,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   // --- options ---
 
   struct OptionRow {
-    enum class Kind { kLeave, kGame, kOwnedOnly } kind;
+    enum class Kind { kLeave, kGame, kOwnedOnly, kSoulGemRun, kTeamSize, kNewRun } kind;
     std::string game;
   };
 
@@ -3542,6 +3573,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (user_ > 0) rows.push_back({OptionRow::Kind::kLeave, {}});
     for (const std::string& game : AllowedGames()) rows.push_back({OptionRow::Kind::kGame, game});
     rows.push_back({OptionRow::Kind::kOwnedOnly, {}});
+    // The run's rules (run_rules.h), a new run only while a Soul Gem run is on.
+    rows.push_back({OptionRow::Kind::kSoulGemRun, {}});
+    rows.push_back({OptionRow::Kind::kTeamSize, {}});
+    if (REXCVAR_GET(run_soul_gems)) rows.push_back({OptionRow::Kind::kNewRun, {}});
     return rows;
   }
 
@@ -3587,6 +3622,20 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       case OptionRow::Kind::kOwnedOnly:
         SetOption("portal_menu_owned_only", REXCVAR_GET(portal_menu_owned_only) ? "false" : "true");
         break;
+      case OptionRow::Kind::kSoulGemRun:
+        SetOption("run_soul_gems", REXCVAR_GET(run_soul_gems) ? "false" : "true");
+        REXLOG_INFO("Portal menu: Soul Gem run {} ({} found)", REXCVAR_GET(run_soul_gems) ? "on" : "off",
+                    run::FoundCount());
+        break;
+      case OptionRow::Kind::kTeamSize:
+        // Off, 1, 2, ... 6, off again.
+        SetOption("run_team_size", std::to_string((REXCVAR_GET(run_team_size) + 1) % 7));
+        REXLOG_INFO("Portal menu: team size per level {}", REXCVAR_GET(run_team_size));
+        break;
+      case OptionRow::Kind::kNewRun:
+        run::NewRun();
+        ShowToast(T(Text::kNewRunDone), 3.5f);
+        break;
     }
     RebuildLibrary();
   }
@@ -3622,7 +3671,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   void DrawOptions(ImDrawList* dl, ImVec2 area0, ImVec2 area1) {
     const std::vector<OptionRow> rows = OptionRows();
-    const float row_h = S(62);
+    // Rows of 62 while they fit (Imaginators lists six games), lower ones without their second
+    // line when not.
+    const float row_h = std::max(S(40), std::min(S(62), (area1.y - area0.y - S(110)) / rows.size() - S(8)));
+    const bool roomy = row_h >= S(58);
     ImVec2 a, b;
     DrawOverlayPanel(dl, area0, area1, {S(660), S(96) + rows.size() * (row_h + S(8))}, a, b);
     Label(dl, BoldFont(), S(28), {a.x + S(28), a.y + S(22)}, kGold, T(Text::kOptions));
@@ -3645,13 +3697,15 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       if (active) dl->AddRect(r0, r1, kGold, S(14), 0, S(3));
       std::string label;
       std::optional<bool> on;
+      // A one-line row's text, a two-line row's title (its second line only in a roomy row).
+      const float mid = r0.y + (row_h - S(30)) / 2;
+      const float title = roomy ? r0.y + S(6) : mid;
       switch (row.kind) {
         case OptionRow::Kind::kLeave: {
           char text[96];
           std::snprintf(text, sizeof(text), T(Text::kLeaveInfo), user_ + 1);
-          Label(dl, BoldFont(), S(23), {r0.x + S(20), r0.y + S(6)}, PlayerColor(user_),
-                T(Text::kLeave));
-          Label(dl, BoldFont(), S(16), {r0.x + S(20), r0.y + S(36)}, kDim, text);
+          Label(dl, BoldFont(), S(23), {r0.x + S(20), title}, PlayerColor(user_), T(Text::kLeave));
+          if (roomy) Label(dl, BoldFont(), S(16), {r0.x + S(20), r0.y + S(36)}, kDim, text);
           continue;
         }
         case OptionRow::Kind::kGame:
@@ -3662,8 +3716,27 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
           label = T(Text::kOwnedOnly);
           on = REXCVAR_GET(portal_menu_owned_only);
           break;
+        case OptionRow::Kind::kSoulGemRun: {
+          Label(dl, BoldFont(), S(23), {r0.x + S(20), title}, kWhite, T(Text::kSoulGemRun));
+          if (roomy) Label(dl, BoldFont(), S(15), {r0.x + S(20), r0.y + S(36)}, kDim, T(Text::kSoulGemRunInfo));
+          on = REXCVAR_GET(run_soul_gems);
+          break;
+        }
+        case OptionRow::Kind::kTeamSize: {
+          Label(dl, BoldFont(), S(23), {r0.x + S(20), mid}, kWhite, T(Text::kTeamSize));
+          const int32_t size = REXCVAR_GET(run_team_size);
+          const std::string value = size > 0 ? std::to_string(size) : std::string(T(Text::kTeamSizeOff));
+          const ImVec2 vs = TextSize(BoldFont(), S(23), value.c_str());
+          Label(dl, BoldFont(), S(23), {r1.x - vs.x - S(24), mid}, size > 0 ? kGold : kDim, value);
+          continue;
+        }
+        case OptionRow::Kind::kNewRun: {
+          Label(dl, BoldFont(), S(23), {r0.x + S(20), title}, kGold, T(Text::kNewRun));
+          if (roomy) Label(dl, BoldFont(), S(15), {r0.x + S(20), r0.y + S(36)}, kDim, T(Text::kNewRunInfo));
+          continue;
+        }
       }
-      Label(dl, BoldFont(), S(23), {r0.x + S(20), r0.y + S(16)}, kWhite, label);
+      if (!label.empty()) Label(dl, BoldFont(), S(23), {r0.x + S(20), mid}, kWhite, label);
       // A switch on the right: green and to the right when on.
       const float sw = S(74), sh = S(34);
       const ImVec2 s0{r1.x - sw - S(18), r0.y + (row_h - sh) / 2}, s1{s0.x + sw, s0.y + sh};
@@ -3672,7 +3745,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       dl->AddCircleFilled({*on ? s1.x - sh / 2 : s0.x + sh / 2, (s0.y + s1.y) / 2}, knob, kWhite);
       const char* state = *on ? T(Text::kOn) : T(Text::kOff);
       const ImVec2 ts = TextSize(BoldFont(), S(18), state);
-      Label(dl, BoldFont(), S(18), {s0.x - ts.x - S(12), r0.y + S(20)}, kDim, state);
+      Label(dl, BoldFont(), S(18), {s0.x - ts.x - S(12), r0.y + (row_h - S(22)) / 2}, kDim, state);
     }
   }
 
@@ -3786,6 +3859,16 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     for (const auto& path : paths) {
       if (OnRealPortal(path)) {
         ShowToast(T(Text::kOnRealPortal));
+        return;
+      }
+    }
+    // A Soul Gem run's lock, a full team in this level (run_rules.h).
+    for (const SkylanderInfo* sky : figures) {
+      std::string why;
+      if (sky && run::Refuses(user_, *sky, g_german, why)) {
+        ShowToast(why, 3.5f);
+        REXLOG_INFO("Portal menu: player {}: {} not placed ({})", user_ + 1, sky->name,
+                    run::Locked(*sky) ? "locked in this run" : "the level's team is full");
         return;
       }
     }
@@ -4193,6 +4276,29 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     }
     if (auto owner = TakenBy(character)) DrawTaken(dl, a, b, *owner);
     if (IsTired(shown)) DrawTired(dl, a, b);
+    if (run::Locked(*shown)) DrawLocked(dl, a, b);
+  }
+
+  // Locked in a Soul Gem run: the card dimmed, a padlock and "Soul Gem" over its picture.
+  void DrawLocked(ImDrawList* dl, ImVec2 a, ImVec2 b) {
+    dl->AddRectFilled(a, b, Rgba(8, 10, 24, 170), S(12));
+    const float w = b.x - a.x;
+    const ImVec2 c{(a.x + b.x) / 2, a.y + w * 0.42f};
+    // The shackle, then the body with its keyhole.
+    const float bw = S(46), bh = S(36), r = S(15);
+    dl->PathArcTo({c.x, c.y - bh / 2}, r, 3.14159f, 2 * 3.14159f, 16);
+    dl->PathStroke(kGold, 0, S(7));
+    dl->AddLine({c.x - r, c.y - bh / 2}, {c.x - r, c.y - bh / 2 + S(4)}, kGold, S(7));
+    dl->AddLine({c.x + r, c.y - bh / 2}, {c.x + r, c.y - bh / 2 + S(4)}, kGold, S(7));
+    dl->AddRectFilled({c.x - bw / 2, c.y - bh / 2}, {c.x + bw / 2, c.y + bh / 2}, kGold, S(6));
+    dl->AddCircleFilled({c.x, c.y - S(3)}, S(5), kInk);
+    dl->AddRectFilled({c.x - S(2), c.y - S(3)}, {c.x + S(2), c.y + S(9)}, kInk);
+    const char* text = T(Text::kLocked);
+    const ImVec2 ts = TextSize(BoldFont(), S(16), text);
+    const ImVec2 t{c.x - ts.x / 2, c.y + bh / 2 + S(10)};
+    dl->AddRectFilled({t.x - S(10), t.y - S(4)}, {t.x + ts.x + S(10), t.y + ts.y + S(4)}, Rgba(60, 40, 120, 235),
+                      S(12));
+    Label(dl, BoldFont(), S(16), t, kWhite, text);
   }
 
   // A trap's villain as a pill at most `width` wide (a smaller font, then shortened, for the long
@@ -6176,8 +6282,22 @@ bool PutBackWantedSkylander() {
 
 uint32_t WantedBackCount() { return g_wanted_back_count.load(); }
 
+// A Skylander's Soul Gem movie opened (soul_gems.h, the game's file thread): in a Soul Gem run it
+// joins, and the player sees so.
+static void RunSoulGemFound(const std::string& skylander) {
+  if (!g_app_context || !REXCVAR_GET(run_soul_gems)) return;
+  g_app_context->CallInUIThread([skylander] {
+    if (!run::SoulGemFound(skylander)) return;
+    char line[256];
+    std::snprintf(line, sizeof(line), T(Text::kSoulGemFound), skylander.c_str());
+    ShowToast(line, 4.5f);
+  });
+}
+
 void SetPortalMenuConfigPath(std::filesystem::path config_path) {
   g_config_path = std::move(config_path);
+  run::SetConfigPath(g_config_path);
+  OnSoulGem(&RunSoulGemFound);
 }
 
 void PortalScreenComing(uint32_t user) {

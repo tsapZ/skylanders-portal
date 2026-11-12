@@ -136,6 +136,7 @@ if(TARGET rex::runtime)
         src/portal_rex/movie_skip.cpp
         src/portal_rex/file_watch.cpp
         src/portal_rex/soul_gems.cpp
+        src/portal_rex/run_rules.cpp
         src/portal_rex/remapper_check.cpp
         src/portal/usb/usb_portal.cpp
         src/portal/usb/xbox360_portal.cpp
