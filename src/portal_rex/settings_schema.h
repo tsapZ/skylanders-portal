@@ -50,7 +50,7 @@ void ApplyGraphicsDefaults();
 // An HD texture pack for the game: <Documents>\Skylanders\Textures\<game> (beside the figure
 // pictures, Pictures\<game>), used when that folder exists and texture_replace_dir isn't set
 // otherwise. A pack is the rexglue-sdk's <hash>.dds files: the textures texture_dump_dir writes,
-// made bigger (e.g. 4x by an AI upscaler) in the same block format. Then the button prompts' folder
+// made bigger (e.g. 4x by an AI upscaler) in the same block format. Then the button prompts
 // (button_prompts.h), when they are on. Call from OnPostSetup.
 void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game);
 

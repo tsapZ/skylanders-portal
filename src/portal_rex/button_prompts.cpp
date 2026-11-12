@@ -1,14 +1,9 @@
 #include "portal_rex/button_prompts.h"
 
-#include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
-#include <fstream>
-#include <iterator>
 #include <span>
 #include <string>
-#include <system_error>
 #include <vector>
 
 #include <rex/cvar.h>
@@ -36,15 +31,16 @@ constexpr int kAtlasScale = 4;
 
 std::atomic<PromptStyle> g_style{PromptStyle::kPlayStation};
 
-bool SameFile(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) return false;
-  const std::vector<uint8_t> old{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-  return old == data;
+// The SDK's texture patches (rex/graphics/texture_patch.h): `user` is the table entry. They run on a replacement
+// worker.
+bool PatchTexture(uint64_t, uint32_t width, uint32_t height, const uint8_t*, size_t, std::vector<uint8_t>& dds,
+                  void* user) {
+  const PromptTexture& t = *static_cast<const PromptTexture*>(user);
+  if (width != t.width || height != t.height) return false;
+  dds = portal::EncodeDdsDxt5(portal::DrawPromptIcon(g_style.load(), t.button, kIconSize, t.flipped), kIconSize);
+  return !dds.empty();
 }
 
-// The SDK's texture patch for a button atlas (rex/graphics/texture_patch.h): `user` is its table entry. Runs on a
-// replacement worker, on the game's own texels.
 bool PatchAtlas(uint64_t, uint32_t width, uint32_t height, const uint8_t* data, size_t size, std::vector<uint8_t>& dds,
                 void* user) {
   const PromptAtlas& atlas = *static_cast<const PromptAtlas*>(user);
@@ -53,66 +49,13 @@ bool PatchAtlas(uint64_t, uint32_t width, uint32_t height, const uint8_t* data, 
   return !dds.empty();
 }
 
-// Spyro's Adventure's way: each prompt a file in <user data>\prompts\<style>, that folder last in
-// texture_replace_dir. False when that didn't work.
-bool WritePromptFiles(const std::filesystem::path& user_data_root, const std::string& style_name, PromptStyle style,
-                      std::span<const PromptTexture> textures) {
-  const std::filesystem::path dir = user_data_root / "prompts" / style_name;
-  std::error_code ec;
-  std::filesystem::create_directories(dir, ec);
-  std::vector<std::string> names;
-  for (const PromptTexture& t : textures) {
-    char name[32];
-    std::snprintf(name, sizeof(name), "%016llX.dds", static_cast<unsigned long long>(t.hash));
-    names.push_back(name);
-  }
-  // Files of an older table out, so a texture taken off the table goes back to the game's own.
-  std::vector<std::filesystem::path> stale;
-  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-    const std::filesystem::path& old = entry.path();
-    if (old.extension() != ".dds" || old.stem().string().size() != 16) continue;
-    if (std::find(names.begin(), names.end(), old.filename().string()) == names.end()) stale.push_back(old);
-  }
-  for (const auto& old : stale) {
-    std::error_code remove_ec;
-    std::filesystem::remove(old, remove_ec);
-  }
-  size_t written = 0;
-  for (size_t i = 0; i < textures.size(); ++i) {
-    const PromptTexture& t = textures[i];
-    const std::vector<uint8_t> dds =
-        portal::EncodeDdsDxt5(portal::DrawPromptIcon(style, t.button, kIconSize, t.flipped), kIconSize);
-    const std::filesystem::path path = dir / names[i];
-    if (SameFile(path, dds)) continue;
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(dds.data()), std::streamsize(dds.size()));
-    if (!out) {
-      const std::u8string u8 = path.u8string();
-      REXLOG_WARN("Button prompts: could not write {}, the game's own stay", std::string(u8.begin(), u8.end()));
-      return false;
-    }
-    ++written;
-  }
-  // Last: a later folder's file wins over an earlier one's (an HD pack's) of the same hash.
-  const std::u8string u8 = dir.u8string();
-  const std::string folder(u8.begin(), u8.end());
-  std::string dirs = rex::cvar::GetFlagByName("texture_replace_dir");
-  dirs += (dirs.empty() ? "" : ";") + folder;
-  if (!rex::cvar::SetFlagByName("texture_replace_dir", dirs)) {
-    REXLOG_WARN("Button prompts: could not set texture_replace_dir, the game's own stay");
-    return false;
-  }
-  REXLOG_INFO("Button prompts: {} ({} textures, {} written) from {}", style_name, textures.size(), written, folder);
-  return true;
-}
-
 }  // namespace
 
 bool HasButtonPrompts(std::string_view game) {
   return !portal::PromptTexturesOf(game).empty() || !portal::PromptAtlasesOf(game).empty();
 }
 
-void UseButtonPrompts(const std::filesystem::path& user_data_root, std::string_view game) {
+void UseButtonPrompts(std::string_view game) {
   const std::string style_name = REXCVAR_GET(button_prompts);
   PromptStyle style;
   if (style_name == "playstation") {
@@ -126,21 +69,24 @@ void UseButtonPrompts(const std::filesystem::path& user_data_root, std::string_v
     REXLOG_INFO("Button prompts: none known for {}, the game's own stay", game);
     return;
   }
-  // The replacement exists with the Direct3D 12 renderer only (the GPU plugin defines its setting).
-  if (!rex::cvar::GetFlagInfo("texture_replace_dir")) {
-    REXLOG_INFO("Button prompts: this renderer can't replace textures (Direct3D 12 only), the game's own stay");
+  // The games' own setting (gpu_backend: any = Direct3D 12 where there is one, d3d12, vulkan): the SDK replaces
+  // textures in its Direct3D 12 texture cache only.
+  if (rex::cvar::GetFlagByName("gpu_backend") == "vulkan") {
+    REXLOG_INFO("Button prompts: the Vulkan renderer can't replace textures, the game's own stay");
     return;
   }
   g_style.store(style);
   const std::span<const PromptTexture> textures = portal::PromptTexturesOf(game);
-  if (!textures.empty() && !WritePromptFiles(user_data_root, style_name, style, textures)) return;
+  for (const PromptTexture& t : textures) {
+    rex::graphics::RegisterTexturePatch(t.hash, t.width, t.height, &PatchTexture, const_cast<PromptTexture*>(&t));
+  }
   const std::span<const PromptAtlas> atlases = portal::PromptAtlasesOf(game);
   for (const PromptAtlas& atlas : atlases) {
-    rex::graphics::RegisterTexturePatch(atlas.hash, &PatchAtlas, const_cast<PromptAtlas*>(&atlas));
+    rex::graphics::RegisterTexturePatch(atlas.hash, atlas.width, atlas.height, &PatchAtlas,
+                                        const_cast<PromptAtlas*>(&atlas));
   }
-  if (!atlases.empty()) {
-    REXLOG_INFO("Button prompts: {} ({} button atlases redrawn as they load)", style_name, atlases.size());
-  }
+  REXLOG_INFO("Button prompts: {} ({} prompt textures, {} button atlases, redrawn as they load)", style_name,
+              textures.size(), atlases.size());
 }
 
 void AddButtonPromptsSetting(SettingsPage& page, std::string_view game) {

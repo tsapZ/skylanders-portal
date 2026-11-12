@@ -374,7 +374,7 @@ void Shoulder(Canvas& cv, PromptStyle style, PromptButton button, const Box& b) 
   Vec half;
   float radius;
   if (trigger) {
-    half = b.w >= 1.2f * b.h ? Vec{b.w / 2 * 0.95f, b.h / 2 * 0.88f} : Vec{b.w / 2 * 0.9f, b.h / 2 * 0.92f};
+    half = b.w >= 1.2f * b.h ? PillHalf(b) : Vec{b.w / 2 * 0.9f, b.h / 2 * 0.92f};
     radius = 0.35f * std::min(half.x, half.y);
   } else {
     half = PillHalf(b);
@@ -522,6 +522,37 @@ void Put32(std::vector<uint8_t>& v, uint32_t x) {
   for (int i = 0; i < 4; ++i) v.push_back(uint8_t(x >> (8 * i)));
 }
 
+// "DDS " and the 124-byte header of a picture with `mips` levels: DXT5 (with its linear size), or 32-bit texels with
+// A8R8G8B8 masks (B, G, R, A in memory; with its pitch).
+void PutDdsHeader(std::vector<uint8_t>& out, int width, int height, int mips, bool dxt5) {
+  out.insert(out.end(), {'D', 'D', 'S', ' '});
+  Put32(out, 124);
+  // caps, height, width, pixel format, mips, and the linear size (DXT5) or the pitch
+  Put32(out, 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | (dxt5 ? 0x80000 : 0x8));
+  Put32(out, uint32_t(height));
+  Put32(out, uint32_t(width));
+  Put32(out, dxt5 ? uint32_t(std::max(1, width / 4) * std::max(1, height / 4) * 16) : uint32_t(width) * 4);
+  Put32(out, 0);  // depth
+  Put32(out, uint32_t(mips));
+  out.resize(out.size() + 44, 0);
+  Put32(out, 32);  // the pixel format's size
+  if (dxt5) {
+    Put32(out, 0x4);  // FourCC
+    out.insert(out.end(), {'D', 'X', 'T', '5'});
+    out.resize(out.size() + 20, 0);
+  } else {
+    Put32(out, 0x40 | 0x1);  // RGB, alpha
+    Put32(out, 0);
+    Put32(out, 32);
+    Put32(out, 0x00FF0000);
+    Put32(out, 0x0000FF00);
+    Put32(out, 0x000000FF);
+    Put32(out, 0xFF000000);
+  }
+  Put32(out, 0x8 | 0x1000 | 0x400000);  // complex, texture, mipmap
+  out.resize(out.size() + 16, 0);
+}
+
 // The next mip level of 4-byte texels (any byte order with alpha last), averaged with the colours weighted by their
 // alpha (no dark fringes); an odd side drops its last texel, as D3D sizes mips.
 std::vector<uint8_t> HalfSize(const std::vector<uint8_t>& level, int w, int h, int& nw, int& nh) {
@@ -561,21 +592,8 @@ std::vector<uint8_t> EncodeDdsDxt5(const std::vector<uint8_t>& rgba, int size) {
   if (size < 1 || (size & (size - 1)) != 0 || rgba.size() != size_t(size) * size * 4) return {};
   int mips = 1;
   for (int s = size; s > 1; s /= 2) ++mips;
-  std::vector<uint8_t> out = {'D', 'D', 'S', ' '};
-  Put32(out, 124);
-  Put32(out, 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000);  // caps, height, width, pixel format, mips, linear size
-  Put32(out, uint32_t(size));
-  Put32(out, uint32_t(size));
-  Put32(out, uint32_t(std::max(1, size / 4) * std::max(1, size / 4) * 16));
-  Put32(out, 0);
-  Put32(out, uint32_t(mips));
-  out.resize(out.size() + 44, 0);
-  Put32(out, 32);   // pixel format
-  Put32(out, 0x4);  // FourCC
-  out.insert(out.end(), {'D', 'X', 'T', '5'});
-  out.resize(out.size() + 20, 0);
-  Put32(out, 0x8 | 0x1000 | 0x400000);  // complex, texture, mipmap
-  out.resize(out.size() + 16, 0);
+  std::vector<uint8_t> out;
+  PutDdsHeader(out, size, size, mips, true);
 
   std::vector<uint8_t> level = rgba;
   for (int s = size; s >= 1; s /= 2) {
@@ -618,25 +636,8 @@ std::vector<uint8_t> PatchButtonAtlas(const uint8_t* bgra, int width, int height
   }
   int mips = 1;
   for (int s = std::max(w, h); s > 1; s /= 2) ++mips;
-  std::vector<uint8_t> out = {'D', 'D', 'S', ' '};
-  Put32(out, 124);
-  Put32(out, 0x1 | 0x2 | 0x4 | 0x8 | 0x1000 | 0x20000);  // caps, height, width, pitch, pixel format, mips
-  Put32(out, uint32_t(h));
-  Put32(out, uint32_t(w));
-  Put32(out, uint32_t(w * 4));
-  Put32(out, 0);
-  Put32(out, uint32_t(mips));
-  out.resize(out.size() + 44, 0);
-  Put32(out, 32);          // pixel format
-  Put32(out, 0x40 | 0x1);  // RGB, alpha
-  Put32(out, 0);
-  Put32(out, 32);
-  Put32(out, 0x00FF0000);
-  Put32(out, 0x0000FF00);
-  Put32(out, 0x000000FF);
-  Put32(out, 0xFF000000);
-  Put32(out, 0x8 | 0x1000 | 0x400000);  // complex, texture, mipmap
-  out.resize(out.size() + 16, 0);
+  std::vector<uint8_t> out;
+  PutDdsHeader(out, w, h, mips, false);
   std::vector<uint8_t> level = cv.Bytes(true);
   int lw = w, lh = h;
   for (int m = 0; m < mips; ++m) {

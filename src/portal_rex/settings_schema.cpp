@@ -167,8 +167,8 @@ static void UseHdPack(const std::filesystem::path& user_data_root, std::string_v
 
 void UseTexturePack(const std::filesystem::path& user_data_root, std::string_view game) {
   UseHdPack(user_data_root, game);
-  // The button prompts' folder after the pack's, so the prompts win (button_prompts.h).
-  UseButtonPrompts(user_data_root, game);
+  // The button prompts (button_prompts.h): texture patches, which win over a pack's file of the same texture.
+  UseButtonPrompts(game);
 }
 
 Setting HdTexturesSetting() {

@@ -8,9 +8,9 @@ using B = PromptButton;
 // Spyro's Adventure (dumps of the title, the hub and the pause menu's pages): 128x128 DXT5 each, upright. The game
 // shows no X / Y / Back prompt on those screens.
 constexpr PromptTexture kSpyrosAdventure[] = {
-    {0xB9E607D0F791F494, B::kA, false},
-    {0x6537E008ADF32F89, B::kB, false},
-    {0x9D6716CD0FDB72B0, B::kStart, false},
+    {0xB9E607D0F791F494, 128, 128, B::kA, false},
+    {0x6537E008ADF32F89, 128, 128, B::kB, false},
+    {0x9D6716CD0FDB72B0, 128, 128, B::kStart, false},
 };
 
 // The 256x168 atlas Swap Force and SuperChargers share (the same texels): A B Y X across the top, LT RT between LB
