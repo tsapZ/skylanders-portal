@@ -1,6 +1,7 @@
 #include "portal_rex/button_prompts.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -11,9 +12,11 @@
 #include <vector>
 
 #include <rex/cvar.h>
+#include <rex/graphics/texture_patch.h>
 #include <rex/logging.h>
 
 #include "portal/prompt_icons.h"
+#include "portal/prompt_tables.h"
 
 REXCVAR_DEFINE_STRING(button_prompts, "xbox", "Input",
                       "The button prompts the game shows: xbox (its own), playstation or nintendo (our own "
@@ -22,32 +25,16 @@ REXCVAR_DEFINE_STRING(button_prompts, "xbox", "Input",
 namespace skylanders {
 namespace {
 
-using portal::PromptButton;
+using portal::PromptAtlas;
 using portal::PromptStyle;
+using portal::PromptTexture;
 
-// One of a game's prompt textures: the SDK's hash of its top level (texture_dump_dir's file name), the button it
-// shows, whether the game keeps it upside down (and turns it when drawing).
-struct PromptTexture {
-  uint64_t hash;
-  PromptButton button;
-  bool flipped;
-};
-
-// Spyro's Adventure (research\button-prompts-2026-11-12.md: dumps of the title, the hub, the pause menu's pages):
-// 128x128 DXT5 each, upright. The game shows no X / Y / Back prompt on those screens.
-constexpr PromptTexture kSpyrosAdventure[] = {
-    {0xB9E607D0F791F494, PromptButton::kA, false},
-    {0x6537E008ADF32F89, PromptButton::kB, false},
-    {0x9D6716CD0FDB72B0, PromptButton::kStart, false},
-};
-
-std::span<const PromptTexture> TexturesOf(std::string_view game) {
-  if (game == "Spyro's Adventure") return kSpyrosAdventure;
-  return {};
-}
-
-// 256x256: the games' are 128x128, and the menus show them at up to about twice that at 1440p.
+// 256x256: the games' own are 128x128, and the menus show them at up to about twice that at 1440p.
 constexpr int kIconSize = 256;
+// The atlases at 4x their size: their buttons are 38-53 texels, about 20-40 pixels on a 1080p screen.
+constexpr int kAtlasScale = 4;
+
+std::atomic<PromptStyle> g_style{PromptStyle::kPlayStation};
 
 bool SameFile(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
   std::ifstream in(path, std::ios::binary);
@@ -56,30 +43,20 @@ bool SameFile(const std::filesystem::path& path, const std::vector<uint8_t>& dat
   return old == data;
 }
 
-}  // namespace
+// The SDK's texture patch for a button atlas (rex/graphics/texture_patch.h): `user` is its table entry. Runs on a
+// replacement worker, on the game's own texels.
+bool PatchAtlas(uint64_t, uint32_t width, uint32_t height, const uint8_t* data, size_t size, std::vector<uint8_t>& dds,
+                void* user) {
+  const PromptAtlas& atlas = *static_cast<const PromptAtlas*>(user);
+  if (width != atlas.width || height != atlas.height || size != size_t(width) * height * 4) return false;
+  dds = portal::PatchButtonAtlas(data, int(width), int(height), atlas.cells, g_style.load(), kAtlasScale);
+  return !dds.empty();
+}
 
-bool HasButtonPrompts(std::string_view game) { return !TexturesOf(game).empty(); }
-
-void UseButtonPrompts(const std::filesystem::path& user_data_root, std::string_view game) {
-  const std::string style_name = REXCVAR_GET(button_prompts);
-  PromptStyle style;
-  if (style_name == "playstation") {
-    style = PromptStyle::kPlayStation;
-  } else if (style_name == "nintendo") {
-    style = PromptStyle::kNintendo;
-  } else {
-    return;  // xbox: the game's own
-  }
-  const std::span<const PromptTexture> textures = TexturesOf(game);
-  if (textures.empty()) {
-    REXLOG_INFO("Button prompts: none known for {}, the game's own stay", game);
-    return;
-  }
-  // The setting exists with the Direct3D 12 renderer only (the GPU plugin defines it).
-  if (!rex::cvar::GetFlagInfo("texture_replace_dir")) {
-    REXLOG_INFO("Button prompts: this renderer can't replace textures (Direct3D 12 only), the game's own stay");
-    return;
-  }
+// Spyro's Adventure's way: each prompt a file in <user data>\prompts\<style>, that folder last in
+// texture_replace_dir. False when that didn't work.
+bool WritePromptFiles(const std::filesystem::path& user_data_root, const std::string& style_name, PromptStyle style,
+                      std::span<const PromptTexture> textures) {
   const std::filesystem::path dir = user_data_root / "prompts" / style_name;
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
@@ -112,7 +89,7 @@ void UseButtonPrompts(const std::filesystem::path& user_data_root, std::string_v
     if (!out) {
       const std::u8string u8 = path.u8string();
       REXLOG_WARN("Button prompts: could not write {}, the game's own stay", std::string(u8.begin(), u8.end()));
-      return;
+      return false;
     }
     ++written;
   }
@@ -123,9 +100,47 @@ void UseButtonPrompts(const std::filesystem::path& user_data_root, std::string_v
   dirs += (dirs.empty() ? "" : ";") + folder;
   if (!rex::cvar::SetFlagByName("texture_replace_dir", dirs)) {
     REXLOG_WARN("Button prompts: could not set texture_replace_dir, the game's own stay");
-    return;
+    return false;
   }
   REXLOG_INFO("Button prompts: {} ({} textures, {} written) from {}", style_name, textures.size(), written, folder);
+  return true;
+}
+
+}  // namespace
+
+bool HasButtonPrompts(std::string_view game) {
+  return !portal::PromptTexturesOf(game).empty() || !portal::PromptAtlasesOf(game).empty();
+}
+
+void UseButtonPrompts(const std::filesystem::path& user_data_root, std::string_view game) {
+  const std::string style_name = REXCVAR_GET(button_prompts);
+  PromptStyle style;
+  if (style_name == "playstation") {
+    style = PromptStyle::kPlayStation;
+  } else if (style_name == "nintendo") {
+    style = PromptStyle::kNintendo;
+  } else {
+    return;  // xbox: the game's own
+  }
+  if (!HasButtonPrompts(game)) {
+    REXLOG_INFO("Button prompts: none known for {}, the game's own stay", game);
+    return;
+  }
+  // The replacement exists with the Direct3D 12 renderer only (the GPU plugin defines its setting).
+  if (!rex::cvar::GetFlagInfo("texture_replace_dir")) {
+    REXLOG_INFO("Button prompts: this renderer can't replace textures (Direct3D 12 only), the game's own stay");
+    return;
+  }
+  g_style.store(style);
+  const std::span<const PromptTexture> textures = portal::PromptTexturesOf(game);
+  if (!textures.empty() && !WritePromptFiles(user_data_root, style_name, style, textures)) return;
+  const std::span<const PromptAtlas> atlases = portal::PromptAtlasesOf(game);
+  for (const PromptAtlas& atlas : atlases) {
+    rex::graphics::RegisterTexturePatch(atlas.hash, &PatchAtlas, const_cast<PromptAtlas*>(&atlas));
+  }
+  if (!atlases.empty()) {
+    REXLOG_INFO("Button prompts: {} ({} button atlases redrawn as they load)", style_name, atlases.size());
+  }
 }
 
 void AddButtonPromptsSetting(SettingsPage& page, std::string_view game) {

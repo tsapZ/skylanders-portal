@@ -76,6 +76,7 @@ add_library(skylanders_portal_core STATIC
     src/portal/old_portal_light.cpp
     src/portal/portal_mode.cpp
     src/portal/prompt_icons.cpp
+    src/portal/prompt_tables.cpp
     src/portal/xbox_frame.cpp
     src/portal/software/software_portal.cpp
     src/portal/traffic_log.cpp

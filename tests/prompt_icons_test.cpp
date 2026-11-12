@@ -1,4 +1,5 @@
 #include "portal/prompt_icons.h"
+#include "portal/prompt_tables.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -70,8 +71,10 @@ bool Near(const uint8_t* p, int r, int g, int b) {
 
 int main() {
   const PromptStyle styles[] = {PromptStyle::kPlayStation, PromptStyle::kNintendo};
-  const PromptButton buttons[] = {PromptButton::kA,  PromptButton::kB,     PromptButton::kX,
-                                  PromptButton::kY,  PromptButton::kStart, PromptButton::kBack};
+  const PromptButton buttons[] = {PromptButton::kA,  PromptButton::kB,     PromptButton::kX,  PromptButton::kY,
+                                  PromptButton::kStart, PromptButton::kBack, PromptButton::kLB, PromptButton::kRB,
+                                  PromptButton::kLT, PromptButton::kRT,    PromptButton::kLS, PromptButton::kRS,
+                                  PromptButton::kDpad};
 
   // Every icon: its size, see-through corners, an opaque middle, its own picture, upside down exactly when asked.
   for (const PromptStyle style : styles) {
@@ -154,6 +157,72 @@ int main() {
 
     CHECK(EncodeDdsDxt5(icon, 128).empty());
     CHECK(EncodeDdsDxt5(std::vector<uint8_t>(48 * 48 * 4), 48).empty());
+  }
+
+  // A button atlas: the rest (here a red block) scaled up as it is, the button's cell cleared and redrawn, an 8888
+  // DDS (A8R8G8B8 masks, B, G, R, A bytes) at 4x with every mip.
+  {
+    const int w = 32, h = 16, scale = 4;
+    std::vector<uint8_t> atlas(size_t(w) * h * 4, 0);
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        uint8_t* t = &atlas[(size_t(y) * w + x) * 4];
+        if (x < 17) {
+          t[0] = 0, t[1] = 0, t[2] = 255, t[3] = 255;  // red (B, G, R, A), its last column two texels from the cell
+        } else if (x >= 18 && x < 30 && y >= 2 && y < 14) {
+          t[0] = 0, t[1] = 200, t[2] = 0, t[3] = 255;  // the game's green A
+        }
+      }
+    }
+    const AtlasCell cells[] = {{PromptButton::kA, 18, 2, 12, 12}};
+    const auto dds = PatchButtonAtlas(atlas.data(), w, h, cells, PromptStyle::kPlayStation, scale);
+    const int W = w * scale, H = h * scale;
+    size_t texels = 0;
+    int mips = 0;
+    for (int mw = W, mh = H;; mw = std::max(1, mw / 2), mh = std::max(1, mh / 2)) {
+      texels += size_t(mw) * mh;
+      ++mips;
+      if (mw == 1 && mh == 1) break;
+    }
+    REQUIRE_OR_RETURN(dds.size() == 128 + texels * 4);
+    CHECK(std::memcmp(dds.data(), "DDS ", 4) == 0);
+    CHECK(Get32(dds, 12) == uint32_t(H) && Get32(dds, 16) == uint32_t(W));
+    CHECK(Get32(dds, 20) == uint32_t(W * 4));
+    CHECK(Get32(dds, 28) == uint32_t(mips));
+    CHECK(Get32(dds, 80) == 0x41 && Get32(dds, 88) == 32);
+    CHECK(Get32(dds, 92) == 0x00FF0000 && Get32(dds, 96) == 0x0000FF00 && Get32(dds, 100) == 0x000000FF);
+    const auto texel = [&](int x, int y) { return &dds[128 + (size_t(y) * W + x) * 4]; };
+    const uint8_t* red = texel(4 * 4, 8 * 4);
+    CHECK(red[0] == 0 && red[1] == 0 && red[2] == 255 && red[3] == 255);
+    const uint8_t* cross = texel(4 * 24, 4 * 8);  // the cell's middle: our cross (124, 178, 236)
+    CHECK(std::abs(cross[2] - 124) <= 2 && std::abs(cross[1] - 178) <= 2 && std::abs(cross[0] - 236) <= 2);
+    CHECK(texel(4 * 17 + 1, 4 * 8)[3] == 0);  // the game's button's edge, cleared
+    CHECK(texel(4 * 16 + 2, 4 * 8)[3] == 0);    // two texels around the cell go too (here the red block's last)
+    CHECK(texel(4 * 15 + 2, 4 * 8)[3] == 255);  // the third one stays
+    CHECK(PatchButtonAtlas(atlas.data(), w, h, cells, PromptStyle::kPlayStation, 9).empty());
+  }
+
+  // The tables: the games with prompts we know, every cell inside its atlas, no two cells overlapping.
+  {
+    CHECK(PromptTexturesOf("Spyro's Adventure").size() == 3);
+    for (const char* game : {"Swap Force", "SuperChargers", "Imaginators"}) {
+      const auto atlases = PromptAtlasesOf(game);
+      CHECK(atlases.size() == 2);
+      for (const PromptAtlas& atlas : atlases) {
+        CHECK(!atlas.cells.empty());
+        for (size_t i = 0; i < atlas.cells.size(); ++i) {
+          const AtlasCell& a = atlas.cells[i];
+          CHECK(a.w > 0 && a.h > 0 && a.x + a.w <= atlas.width && a.y + a.h <= atlas.height);
+          for (size_t j = i + 1; j < atlas.cells.size(); ++j) {
+            const AtlasCell& b = atlas.cells[j];
+            const bool apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+            CHECK(apart);
+          }
+        }
+      }
+    }
+    for (const char* game : {"Giants", "Trap Team", "Spyro's Adventure"}) CHECK(PromptAtlasesOf(game).empty());
+    CHECK(PromptTexturesOf("Swap Force").empty());
   }
 
   return Finish("prompt_icons");

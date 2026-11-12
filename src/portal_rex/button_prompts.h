@@ -1,10 +1,13 @@
 #pragma once
 
 // PlayStation or Nintendo button prompts in place of a game's Xbox 360 ones (the small ideas from SkylandersPC, the
-// owner's go 2026-11-12). The icons are our own, drawn by portal/prompt_icons.h; at start they are written as
-// <hash>.dds into <user data root>\prompts\<style> for the game's own prompt textures (each a texture of its own,
-// found with the SDK's texture_dump_dir), and that folder goes last into texture_replace_dir, so it wins over an HD
-// pack. The SDK replaces textures with Direct3D 12 only; with Vulkan the game keeps its own prompts.
+// owner's go 2026-11-12). The icons are our own, drawn by portal/prompt_icons.h; where each game keeps its prompts is
+// in portal/prompt_tables.h. Two ways in:
+// - prompts that are textures of their own (Spyro's Adventure): written at start as <hash>.dds into
+//   <user data root>\prompts\<style>, that folder last in texture_replace_dir, so it wins over an HD pack;
+// - button atlases (Swap Force, SuperChargers, Imaginators): a texture patch (rex/graphics/texture_patch.h) redraws
+//   each from the game's own texels when it loads, only the buttons' cells changed.
+// The SDK replaces textures with Direct3D 12 only; with Vulkan the game keeps its own prompts.
 
 #include <filesystem>
 #include <string_view>
