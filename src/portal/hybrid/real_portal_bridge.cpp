@@ -191,7 +191,12 @@ void RealPortalBridge::Handle(const Report& report) {
       if (!pending_ || pending_->cmd != 'M') break;
       pending_.reset();
       const bool speaker = report[2] == kAudioCapableVersion[0] && report[3] == kAudioCapableVersion[1];
-      NoteSpeaker(speaker, speaker ? "has a speaker" : "has no speaker");
+      // The answer's bytes in the log: an Xbox 360 Traptanium portal answered, and was taken for one
+      // without a speaker (TrapTeamRecomp #22, 2026-11-13), with bytes no log had kept.
+      char answer[64];
+      std::snprintf(answer, sizeof(answer), "has no speaker (answered %02X %02X %02X %02X)", report[0], report[1],
+                    report[2], report[3]);
+      NoteSpeaker(speaker, speaker ? "has a speaker" : answer);
       break;
     }
     case 0x53:
