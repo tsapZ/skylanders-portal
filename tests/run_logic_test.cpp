@@ -1,6 +1,7 @@
 // run_logic: the plain rules of a run (Core of Light #71 / #52) without the menu or ReXGlue.
 
 #include <string>
+#include <vector>
 
 #include "portal/run_logic.h"
 #include "test_util.h"
@@ -57,11 +58,73 @@ int main() {
   CHECK(ListAdd("Chop Chop", "Bash") == "Chop Chop;Bash");
 
   // A level's first finish brings a Skylander, a hub or a level finished before doesn't.
-  CHECK(FirstFinish("Level_027", ""));
-  CHECK(FirstFinish("Level_028", "Level_027"));
-  CHECK(!FirstFinish("Level_027", "Level_026;Level_027"));
-  CHECK(!FirstFinish("Level_Hub", ""));
-  CHECK(!FirstFinish("", ""));
+  CHECK(FirstFinish("Spyro's Adventure", "Level_027", ""));
+  CHECK(FirstFinish("Spyro's Adventure", "Level_028", "Spyro's Adventure/Level_027"));
+  CHECK(!FirstFinish("Spyro's Adventure", "Level_027", "Spyro's Adventure/Level_026;Spyro's Adventure/Level_027"));
+  CHECK(FirstFinish("Giants", "Level_027", "Spyro's Adventure/Level_027"));  // another game's level
+  CHECK(!FirstFinish("Spyro's Adventure", "Level_Hub", ""));
+  CHECK(!FirstFinish("Swap Force", "town_state5", ""));
+  CHECK(!FirstFinish("Spyro's Adventure", "", ""));
+
+  // Spread over the story: the ones left over the levels left, rounded up; no level left: all.
+  CHECK(RewardCount(31, 16) == 2);
+  CHECK(RewardCount(5, 25) == 1);
+  CHECK(RewardCount(0, 10) == 0);
+  CHECK(RewardCount(3, 0) == 3);
+  CHECK(RewardCount(80, 20) == 4);
+  CHECK(RewardCount(81, 20) == 5);
+
+  // The run's state as text, one for all six games.
+  {
+    const RunState s = ParseRunState("open=Chop Chop;Bash\r\ndone=Spyro's Adventure/Level_027\nother=1\n");
+    CHECK(s.open == "Chop Chop;Bash");
+    CHECK(s.done == "Spyro's Adventure/Level_027");
+    CHECK(FormatRunState(s) == "open=Chop Chop;Bash\ndone=Spyro's Adventure/Level_027\n");
+    CHECK(ParseRunState("").open.empty() && ParseRunState("").done.empty());
+    CHECK(ParseRunState("open=Bash").open == "Bash");  // no line end at the end
+    CHECK(LevelKey("Giants", "Level_200") == "Giants/Level_200");
+  }
+
+  // Soul Gems by game, as on the discs, and what a first finish can bring.
+  CHECK(HasSoulGem("Spyro's Adventure", "Chop Chop"));
+  CHECK(!HasSoulGem("Spyro's Adventure", "Bash"));
+  CHECK(HasSoulGem("Giants", "Jet-Vac"));
+  CHECK(!HasSoulGem("Giants", "Chop Chop"));  // Spyro's Adventure's, no gem in Giants
+  CHECK(HasSoulGem("Trap Team", "Snap Shot"));
+  CHECK(!HasSoulGem("Unknown game", "Bash"));
+  {
+    auto list = [](const std::vector<std::string>& v) {
+      std::string out;
+      for (const std::string& n : v) out = ListAdd(out, n);
+      return out;
+    };
+    const std::vector<std::string> ssa = RewardCandidates("Spyro's Adventure");
+    CHECK(ListHas(list(ssa), "Bash") && ListHas(list(ssa), "Zap") && ListHas(list(ssa), "Drobot") &&
+          ListHas(list(ssa), "Boomer"));
+    CHECK(!ListHas(list(ssa), "Chop Chop"));  // has a gem
+    CHECK(!ListHas(list(ssa), "Spyro"));      // a starter
+    CHECK(!ListHas(list(ssa), "Jet-Vac"));    // a later game's
+    const std::vector<std::string> giants = RewardCandidates("Giants");
+    CHECK(ListHas(list(giants), "Chop Chop") && ListHas(list(giants), "Bash") && ListHas(list(giants), "Spyro"));
+    CHECK(!ListHas(list(giants), "Cynder"));   // Giants' starter
+    CHECK(!ListHas(list(giants), "Jet-Vac"));  // its gem is in Giants
+    CHECK(!ListHas(list(giants), "Wash Buckler"));
+    const std::vector<std::string> tt = RewardCandidates("Trap Team");
+    CHECK(ListHas(list(tt), "Jet-Vac") && ListHas(list(tt), "Wash Buckler") && !ListHas(list(tt), "Food Fight"));
+    // The counts (2026-11-13, checked name by name): Spyro's Adventure's four without a gem; Giants
+    // the 32 of Spyro's Adventure less Cynder (a starter); Swap Force those 48 less Stealth Elf; Trap
+    // Team 80; SuperChargers with Trap Team's 36; Imaginators with SuperChargers' 10. No sidekicks,
+    // Minis (Weeruptor is no Eruptor), vehicles or the Nintendo-only Bowser and Donkey Kong.
+    CHECK(ssa.size() == 4);
+    CHECK(giants.size() == 31);
+    CHECK(RewardCandidates("Swap Force").size() == 47);
+    CHECK(tt.size() == 80);
+    CHECK(RewardCandidates("SuperChargers").size() == 116);
+    CHECK(RewardCandidates("Imaginators").size() == 126);
+    CHECK(!ListHas(list(RewardCandidates("Imaginators")), "Tomb Buggy"));
+    CHECK(!ListHas(list(RewardCandidates("SuperChargers")), "Barkley"));
+    CHECK(ListHas(list(tt), "Eruptor"));
+  }
 
   // The reward: one of the candidates the run doesn't have yet, by the number drawn; none left: "".
   {
