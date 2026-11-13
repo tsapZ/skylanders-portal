@@ -9,8 +9,10 @@
 //     copies), so a toy comes in about as fast as on the real portal alone (TheBiemGamer's idea,
 //     Core of Light #62; TrapTeamRecomp #22: reading all 64 blocks first took 1.5 to 1.8 s on an
 //     Xbox 360 portal). Once whole, its 1 KB is saved as a backup file, also the copy's source;
-//   - blocks the game writes to the copy go back onto the real figure, one at a time, in order
-//     (never block 0 or 1 or a sector trailer, which hold the tag's identity and keys);
+//   - blocks the game writes to the copy go back onto the real figure, one at a time, each figure's
+//     in order (never block 0 or 1 or a sector trailer, which hold the tag's identity and keys); a
+//     write the portal refuses goes out again after a pause, which holds up only that figure's
+//     writes;
 //   - lifting the figure off the real portal takes the copy off; a copy the portal menu lifted is
 //     followed by its source path, so it is written again once the menu puts it back;
 //   - the game's light commands (C, and Trap Team's J and L) go on to the real portal.
@@ -120,6 +122,7 @@ class RealPortalBridge {
     std::array<uint8_t, kBlockSize> bytes{};
     int attempts = 0;
     std::chrono::steady_clock::time_point retry_at{};  // not sent again before this
+    bool in_flight = false;  // sent, the real portal's answer not in yet
   };
   struct Command {
     uint8_t cmd = 0;
@@ -129,6 +132,15 @@ class RealPortalBridge {
   };
 
   void Log(const std::string& text) const;
+  // Forgets the command waiting for its answer (the portal is set up anew or replaced); a write it
+  // was goes out again.
+  void DropPending();
+  // Under mu_: the write sent last, its answer not in yet, or writes_.end().
+  std::deque<PendingWrite>::iterator InFlightWrite();
+  // Under mu_: the write `it` was refused or not answered. A newer version of its block queued
+  // behind it takes its place; otherwise it goes out again after the pause, and after kWriteAttempts
+  // tries it is given up with `given_up` in the log (the backup file has it).
+  void WriteMissed(std::deque<PendingWrite>::iterator it, const std::string& given_up);
   void SetUpPortal();
   void Handle(const Report& report);
   void HandleStatus(const Report& report);

@@ -76,7 +76,10 @@ class Habits final : public PortalDevice {
       fake_.push_back(refused);
       return;
     }
-    if (report[0] == 'W' && (refuse_writes > 0 || report[2] == refuse_write_block)) {
+    if (report[0] == 'W' &&
+        (refuse_writes > 0 ||
+         (report[2] == refuse_write_block &&
+          (refuse_write_slot < 0 || (report[1] & 0x0F) == refuse_write_slot)))) {
       // "Couldn't write that block": the reply without the written flag (0x10).
       if (refuse_writes > 0) --refuse_writes;
       Report refused{};
@@ -110,6 +113,7 @@ class Habits final : public PortalDevice {
   int refuse_reads = 0;  // this many block reads are answered "couldn't read"
   int refuse_writes = 0;  // this many block writes are answered "couldn't write"
   int refuse_write_block = -1;  // writes to this block are always answered "couldn't write"
+  int refuse_write_slot = -1;   // with refuse_write_block: only in this real slot (-1: any)
 
  private:
   SoftwarePortal* inner_;
@@ -384,6 +388,77 @@ int main() {
     on_real = inner.Figure(0);
     CHECK(on_real && !BlockIs(*on_real, 9, 0xB2));
     CHECK(on_real && BlockIs(*on_real, 10, 0xC3));  // the write behind it still went out
+  }
+
+  // A refused write waits out the whole pause before it goes out again, and a newer version of its
+  // block the game writes meanwhile takes its place: the stale bytes don't go out again.
+  {
+    const std::filesystem::path sub = dir / "retry_pause";
+    std::filesystem::create_directories(sub);
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    RealPortalBridge::Options options{sub, nullptr, nullptr};
+    options.write_retry_pause = std::chrono::milliseconds(150);
+    RealPortalBridge bridge(&emulated, options);
+    inner.PlaceFigure(0, chop);
+    RunFor(bridge, &real, std::chrono::milliseconds(300));
+    const int copy = FirstFigure(emulated);
+    CHECK(copy == kMaxFigures - 1);
+    emulated.SetWriteCallback([&](int slot, const FigureData& data,
+                                  const std::optional<std::filesystem::path>&) {
+      bridge.OnEmulatedWrite(slot, data);
+    });
+    const auto writes_of = [&](int block) {
+      return std::count_if(real.sent.begin(), real.sent.end(),
+                           [&](const Report& r) { return r[0] == 'W' && r[2] == block; });
+    };
+    real.refuse_writes = 1;
+    GameWrite(emulated, copy, 8, 0xA1);
+    RunFor(bridge, &real, std::chrono::milliseconds(50));
+    CHECK(real.refuse_writes == 0);
+    CHECK(writes_of(8) == 1);  // refused, and not sent again within the pause
+    GameWrite(emulated, copy, 8, 0xD4);
+    RunFor(bridge, &real, std::chrono::milliseconds(400));
+    CHECK(writes_of(8) == 2);  // the refused one, then the newer version (not the stale one again)
+    const auto on_real = inner.Figure(0);
+    CHECK(on_real && BlockIs(*on_real, 8, 0xD4));
+  }
+
+  // A write waiting out its pause holds up only its own figure's writes: another figure's go out
+  // meanwhile (a toy the portal won't take writes for kept every other toy's saves waiting).
+  {
+    const std::filesystem::path sub = dir / "retry_other";
+    std::filesystem::create_directories(sub);
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    RealPortalBridge::Options options{sub, nullptr, nullptr};
+    options.write_retry_pause = std::chrono::milliseconds(150);
+    RealPortalBridge bridge(&emulated, options);
+    const FigureData second = CreateBlankFigure(14, 0, {0x05, 0x06, 0x07, 0x08});
+    inner.PlaceFigure(0, chop);
+    inner.PlaceFigure(1, second);
+    RunFor(bridge, &real, std::chrono::milliseconds(600));
+    int copy_chop = -1, copy_second = -1;
+    for (int slot = 0; slot < kMaxFigures; ++slot) {
+      const auto figure = emulated.Figure(slot);
+      if (!figure) continue;
+      if (RealPortalBridge::UidOf(*figure) == RealPortalBridge::UidOf(chop)) copy_chop = slot;
+      if (RealPortalBridge::UidOf(*figure) == RealPortalBridge::UidOf(second)) copy_second = slot;
+    }
+    CHECK(copy_chop >= 0 && copy_second >= 0);
+    emulated.SetWriteCallback([&](int slot, const FigureData& data,
+                                  const std::optional<std::filesystem::path>&) {
+      bridge.OnEmulatedWrite(slot, data);
+    });
+    real.refuse_write_block = 9;
+    real.refuse_write_slot = 0;  // only the toy in real slot 0
+    GameWrite(emulated, copy_chop, 9, 0xB2);
+    GameWrite(emulated, copy_second, 10, 0xC3);
+    RunFor(bridge, &real, std::chrono::milliseconds(60));  // shorter than one pause
+    const auto second_on_real = inner.Figure(1);
+    CHECK(second_on_real && BlockIs(*second_on_real, 10, 0xC3));
+    const auto chop_on_real = inner.Figure(0);
+    CHECK(chop_on_real && !BlockIs(*chop_on_real, 9, 0xB2));
   }
 
   // One it can't read at all is given up with a log line, and taken once it is put on again.

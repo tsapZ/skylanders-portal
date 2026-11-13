@@ -66,10 +66,40 @@ void RealPortalBridge::Log(const std::string& text) const {
   if (options_.log) options_.log(text);
 }
 
+void RealPortalBridge::DropPending() {
+  pending_.reset();
+  std::lock_guard lock(mu_);
+  for (PendingWrite& w : writes_) w.in_flight = false;
+}
+
+std::deque<RealPortalBridge::PendingWrite>::iterator RealPortalBridge::InFlightWrite() {
+  return std::find_if(writes_.begin(), writes_.end(),
+                      [](const PendingWrite& w) { return w.in_flight; });
+}
+
+void RealPortalBridge::WriteMissed(std::deque<PendingWrite>::iterator it,
+                                   const std::string& given_up) {
+  it->in_flight = false;
+  const int slot = it->real_slot;
+  const int block = it->block;
+  if (std::any_of(std::next(it), writes_.end(), [&](const PendingWrite& w) {
+        return w.real_slot == slot && w.block == block;
+      })) {
+    writes_.erase(it);  // the game wrote the block again meanwhile: only that version goes out
+    return;
+  }
+  if (++it->attempts >= kWriteAttempts) {
+    Log(given_up);
+    writes_.erase(it);
+    return;
+  }
+  it->retry_at = Clock::now() + options_.write_retry_pause;
+}
+
 // Ready first; activate once the ready is answered (Handle): a portal just plugged in can miss an A
 // sent right after the R (Core of Light #62, TheBiemGamer), and then stays switched off.
 void RealPortalBridge::SetUpPortal() {
-  pending_.reset();
+  DropPending();
   wake_ = Wake::kReady;
   last_alive_ = Clock::now();
   real_->Write(Make({'R'}));
@@ -81,7 +111,7 @@ void RealPortalBridge::Step(PortalDevice* real) {
       if (slots_[slot].phase != RealSlot::Phase::kEmpty) Gone(slot, "the real portal went away");
     }
     real_ = real;
-    pending_.reset();
+    DropPending();
     // Another portal (or none): whether it has a speaker is asked again.
     real_speaker_.store(false);
     speaker_known_ = -1;
@@ -122,12 +152,9 @@ void RealPortalBridge::Step(PortalDevice* real) {
       }
     } else if (timed_out.cmd == 'W') {
       std::lock_guard lock(mu_);
-      if (!writes_.empty() && ++writes_.front().attempts >= kWriteAttempts) {
-        Log("Hybrid portal: block " + std::to_string(writes_.front().block) +
-            " could not be written to the real figure; it is in the backup file");
-        writes_.pop_front();
-      } else if (!writes_.empty()) {
-        writes_.front().retry_at = Clock::now() + options_.write_retry_pause;
+      if (const auto it = InFlightWrite(); it != writes_.end()) {
+        WriteMissed(it, "Hybrid portal: block " + std::to_string(it->block) +
+                            " could not be written to the real figure; it is in the backup file");
       }
     } else if (timed_out.cmd == 'M') {
       // A portal from before Trap Team doesn't know the command: no speaker.
@@ -212,17 +239,13 @@ void RealPortalBridge::Handle(const Report& report) {
       if (slot != pending_->slot || block != pending_->block) break;
       pending_.reset();
       std::lock_guard lock(mu_);
-      if (writes_.empty() || writes_.front().real_slot != slot || writes_.front().block != block) {
-        break;
-      }
+      const auto it = InFlightWrite();
+      if (it == writes_.end() || it->real_slot != slot || it->block != block) break;
       if (report[1] & 0x10) {
-        writes_.pop_front();
-      } else if (++writes_.front().attempts >= kWriteAttempts) {
-        Log("Hybrid portal: the real portal refused block " + std::to_string(block) +
-            "; it is in the backup file");
-        writes_.pop_front();
+        writes_.erase(it);
       } else {
-        writes_.front().retry_at = Clock::now() + options_.write_retry_pause;
+        WriteMissed(it, "Hybrid portal: the real portal refused block " + std::to_string(block) +
+                            "; it is in the backup file");
       }
       break;
     }
@@ -274,13 +297,19 @@ void RealPortalBridge::SendNext() {
   {
     std::lock_guard lock(mu_);
     while (!writes_.empty() && !mirrored_[writes_.front().real_slot]) writes_.pop_front();
-    // A refused write waits out its pause; the ones behind it wait too, so a block's writes keep
-    // their order. Reads and lights go on meanwhile.
-    if (!writes_.empty() && now >= writes_.front().retry_at) {
-      const PendingWrite& w = writes_.front();
+    // Each figure's writes go out in their order (a toy's save is several blocks). One waiting out
+    // its pause after a refusal holds up only the writes of its own figure; the other figures',
+    // reads and lights go on meanwhile.
+    std::array<bool, kMaxFigures> held{};
+    for (PendingWrite& w : writes_) {
+      if (held[size_t(w.real_slot)]) continue;
+      held[size_t(w.real_slot)] = true;
+      if (!mirrored_[size_t(w.real_slot)] || now < w.retry_at) continue;
       write = Make({'W', uint8_t(w.real_slot), uint8_t(w.block)});
       std::copy(w.bytes.begin(), w.bytes.end(), write->begin() + 3);
+      w.in_flight = true;
       pending_ = Command{'W', w.real_slot, w.block, Clock::now()};
+      break;
     }
   }
   if (write) {
@@ -551,11 +580,11 @@ void RealPortalBridge::OnEmulatedWrite(int emulated_slot, const FigureData& data
       w.real_slot = slot;
       w.block = block;
       std::copy_n(begin, kBlockSize, w.bytes.begin());
-      // A block queued again replaces its older version that hasn't gone out yet.
-      auto queued = std::find_if(writes_.begin() + (writes_.empty() ? 0 : 1), writes_.end(),
-                                 [&](const PendingWrite& p) {
-                                   return p.real_slot == slot && p.block == block;
-                                 });
+      // A block queued again replaces its older version that hasn't gone out yet, also one waiting
+      // out its pause after a refusal; one sent and not answered yet stays, the new one goes behind.
+      auto queued = std::find_if(writes_.begin(), writes_.end(), [&](const PendingWrite& p) {
+        return !p.in_flight && p.real_slot == slot && p.block == block;
+      });
       if (queued != writes_.end()) {
         queued->bytes = w.bytes;
       } else {
