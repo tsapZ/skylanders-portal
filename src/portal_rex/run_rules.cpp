@@ -172,6 +172,8 @@ bool LockedMessage(const portal::SkylanderInfo& sky, bool german, std::string& w
 
 bool InPlay() { return !logic::IsHubLevel(dev::CurrentLevel()); }
 
+bool KeepsTiredOut() { return REXCVAR_GET(run_team_size) > 0 || REXCVAR_GET(run_soul_gems); }
+
 bool TeamRefuses(uint32_t user, const portal::SkylanderInfo& lead, bool german, std::string& why) {
   const int32_t size = REXCVAR_GET(run_team_size);
   if (size <= 0) return false;

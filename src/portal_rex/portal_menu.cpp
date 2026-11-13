@@ -2397,8 +2397,8 @@ int FreeSlot(uint32_t user, const std::vector<int>& preferred, const std::vector
 // "this Skylander needs a break"), and its card gets a red cross. It stays pickable, so a wrong
 // mark never keeps a figure from being played: put on again, the mark goes once it has been on a
 // while without the game saying so again, and stays if the game refuses it at once. Every mark goes
-// when dev/where.h names another level. With a team size per level (run_team_size) the menu keeps
-// a marked Skylander off until then. UI thread only.
+// when dev/where.h names another level. With a team size per level (run_team_size) or in a Soul Gem
+// run (run_rules.h KeepsTiredOut) the menu keeps a marked Skylander off until then. UI thread only.
 std::set<uint32_t> g_tired;  // Key(id, variant)
 struct TiredCheck {
   uint32_t key;
@@ -3917,7 +3917,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         REXLOG_INFO("Portal menu: player {}: {} not placed (locked in this run)", user_ + 1, sky->name);
         return;
       }
-      if (REXCVAR_GET(run_team_size) > 0 && run::InPlay() && IsTired(sky)) {
+      if (run::KeepsTiredOut() && run::InPlay() && IsTired(sky)) {
         char line[256];
         std::snprintf(line, sizeof(line), T(Text::kTiredStays), FigureName(*sky).c_str());
         ShowToast(line, 3.5f);

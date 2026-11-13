@@ -47,6 +47,11 @@ bool LockedMessage(const portal::SkylanderInfo& sky, bool german, std::string& w
 // Whether the player is in a level now (not a hub, not before the first level).
 bool InPlay();
 
+// Whether a Skylander out of health stays off the portal until the level ends: with a team size per
+// level, and in a Soul Gem run (the owner's yes, 2026-11-13, after the idea's video on #71: a
+// knocked-out Skylander rests until it can be summoned again).
+bool KeepsTiredOut();
+
 // Whether `user`'s team for this level is full for a placement led by `lead` (its first figure);
 // `why` gets the message.
 bool TeamRefuses(uint32_t user, const portal::SkylanderInfo& lead, bool german, std::string& why);
