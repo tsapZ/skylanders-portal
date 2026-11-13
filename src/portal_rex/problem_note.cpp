@@ -8,14 +8,17 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include <imgui.h>
+#include <rex/cvar.h>
 #include <rex/input/input.h>
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
+#include <rex/ui/keybinds.h>
 #include <rex/ui/windowed_app_context.h>
 
 #if defined(_WIN32)
@@ -61,6 +64,99 @@ std::string ProgramName() {
   if (GetModuleFileNameW(nullptr, path, MAX_PATH)) return Utf8Path(std::filesystem::path(path).stem());
 #endif
   return "game";
+}
+
+// The settings a picture or speed problem most often depends on, "name=value, ..." (only those this
+// game has; an empty value is a setting switched off, e.g. scene_size), so a note says them without
+// the log (Core of Light #76, imafuturecorpse: the picture, the place and the settings at once).
+std::string SettingsText() {
+  static constexpr const char* kNames[] = {
+      "gpu_backend",       "render_target_path_d3d12", "resolution_scale", "scene_size",
+      "present_effect",    "frame_rate_limit",         "vsync",            "fullscreen",
+      "draw_resolution_scale_threshold", "gpu_native_surfaces", "anisotropic_override",
+      "bloom_strength",    "swap_post_effect",         "portal_mode",      "language",
+      "button_prompts"};
+  std::string text;
+  for (const char* name : kNames) {
+    if (!rex::cvar::GetFlagInfo(name)) continue;  // not in this game
+    text += (text.empty() ? "" : ", ") + std::string(name) + "=" + rex::cvar::GetFlagByName(name);
+  }
+  return text;
+}
+
+// What a note holds: taken on the UI thread when it is made, written by WriteNote.
+struct Note {
+  std::string kind;   // kKinds' English name, or the quick note's
+  std::string words;  // typed by the player, may be empty
+  std::string portal, place, settings;
+  std::tm when{};
+  long long ran = 0;  // seconds since the program started
+  bool has_picture = false;
+  int picture_w = 0, picture_h = 0;
+  std::vector<uint8_t> picture;
+};
+
+// Everything of a note but the picture and the words, taken now.
+Note TakeNote(std::string kind) {
+  Note note;
+  note.kind = std::move(kind);
+  note.portal = PortalFiguresText();
+  note.place = dev::PlaceText();
+  note.settings = SettingsText();
+  const std::time_t now = std::time(nullptr);
+#if defined(_WIN32)
+  localtime_s(&note.when, &now);
+#else
+  localtime_r(&now, &note.when);
+#endif
+  note.ran = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - g_started).count();
+  return note;
+}
+
+// base + ".txt" without path::string() (it throws for a folder name outside the Windows code page).
+std::filesystem::path WithExtension(const std::filesystem::path& base, const char* extension) {
+  return std::filesystem::path(base.native() + std::filesystem::path(extension).native());
+}
+
+// The logs folder's problem-<date>, or problem-<date>-2 and on when that is taken (two quick notes
+// can come within a second).
+std::filesystem::path NewNoteBase(const Note& note) {
+  std::error_code ec;
+  const std::filesystem::path dir = std::filesystem::current_path(ec) / "logs";
+  std::filesystem::create_directories(dir, ec);
+  char stamp[32];
+  std::strftime(stamp, sizeof(stamp), "%Y-%m-%d-%H%M%S", &note.when);
+  std::filesystem::path base = dir / (std::string("problem-") + stamp);
+  for (int n = 2; std::filesystem::exists(WithExtension(base, ".txt"), ec) && n < 100; ++n) {
+    base = dir / (std::string("problem-") + stamp + "-" + std::to_string(n));
+  }
+  return base;
+}
+
+// Writes <base>.txt and, with a picture, <base>.png. Any thread.
+void WriteNote(const std::filesystem::path& base, const Note& note) {
+  const std::string name = Utf8Path(base.filename());
+  std::string picture_name;
+  if (note.has_picture &&
+      WritePng(WithExtension(base, ".png"), note.picture_w, note.picture_h, note.picture.data())) {
+    picture_name = name + ".png";
+  }
+  char when[64];
+  std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &note.when);
+  char running[32];
+  std::snprintf(running, sizeof(running), "%lld:%02lld:%02lld", note.ran / 3600, note.ran / 60 % 60,
+                note.ran % 60);
+  std::ofstream out(WithExtension(base, ".txt"), std::ios::binary);
+  out << "Problem noted in the game\n"
+      << "Game: " << ProgramName() << "\n"
+      << "When: " << when << " (running for " << running << ")\n"
+      << "Kind: " << note.kind << "\n"
+      << "Note: " << note.words << "\n"
+      << "On the portal: " << (note.portal.empty() ? "nothing" : note.portal) << "\n";
+  // Where the player was when the note was made (games that report it, dev/where.h).
+  if (!note.place.empty()) out << "Where: " << note.place << "\n";
+  out << "Settings: " << note.settings << "\n"
+      << "Picture: " << (picture_name.empty() ? "none" : picture_name) << "\n";
 }
 
 // Edges for one controller: up / down with repeat, A, B.
@@ -117,13 +213,12 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
   ProblemNoteDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> on_done)
       : ImGuiDialog(drawer), on_done_(std::move(on_done)) {
     // The picture first, before anything of the dialog could be in it (the guest output has no
-    // menus anyway).
-    has_picture_ = CaptureGamePicture(picture_w_, picture_h_, picture_);
-    portal_ = PortalFiguresText();
-    place_ = dev::PlaceText();
+    // menus anyway); the place, the portal and the settings of this moment with it.
+    note_ = TakeNote(kKinds[0].en);
+    note_.has_picture = CaptureGamePicture(note_.picture_w, note_.picture_h, note_.picture);
     menu_input::SetMenuOpen(true);
     menu_input::SetMenuCloser([this] { Close(); });
-    REXLOG_INFO("Problem note: opened ({})", has_picture_ ? "picture kept" : "no picture");
+    REXLOG_INFO("Problem note: opened ({})", note_.has_picture ? "picture kept" : "no picture");
   }
   ~ProblemNoteDialog() override {
     if (!done_) menu_input::SetMenuOpen(false);
@@ -158,7 +253,7 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
     OutlinedLabel(dl, TitleFont(), S(40), {p0.x + S(36), p0.y + S(22)}, kGold,
                   Tr("REPORT A PROBLEM", "PROBLEM MELDEN"), S(2.0f));
     Label(dl, BoldFont(), S(20), {p0.x + S(38), p0.y + S(80)}, kDim,
-          has_picture_ ? Tr("The picture of this moment is kept. What's wrong?",
+          note_.has_picture ? Tr("The picture of this moment is kept. What's wrong?",
                             "Das Bild von gerade eben wird gespeichert. Was passt nicht?")
                        : Tr("What's wrong?", "Was passt nicht?"),
           pw - S(76));
@@ -171,7 +266,7 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
     }
     const bool enter = ImGui::InputTextWithHint("##note", Tr("A few words (keyboard, optional)",
                                                               "Kurz beschreiben (Tastatur, freiwillig)"),
-                                                note_, sizeof(note_), ImGuiInputTextFlags_EnterReturnsTrue);
+                                                words_, sizeof(words_), ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::PopItemWidth();
     float y = p0.y + S(176);
     for (int i = 0; i < int(std::size(kKinds)); ++i) {
@@ -222,43 +317,13 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
 
   void Save() {
     save_ = false;
-    std::error_code ec;
-    const std::filesystem::path dir = std::filesystem::current_path(ec) / "logs";
-    std::filesystem::create_directories(dir, ec);
-    const std::time_t now = std::time(nullptr);
-    std::tm tm{};
-#if defined(_WIN32)
-    localtime_s(&tm, &now);
-#else
-    localtime_r(&now, &tm);
-#endif
-    char stamp[32];
-    std::strftime(stamp, sizeof(stamp), "%Y-%m-%d-%H%M%S", &tm);
-    const std::string base = std::string("problem-") + stamp;
-    std::string picture_name;
-    if (has_picture_ && WritePng(dir / (base + ".png"), picture_w_, picture_h_, picture_.data())) {
-      picture_name = base + ".png";
-    }
-    const auto ran = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - g_started).count();
-    char when[64];
-    std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tm);
-    char running[32];
-    std::snprintf(running, sizeof(running), "%lld:%02lld:%02lld", static_cast<long long>(ran / 3600),
-                  static_cast<long long>(ran / 60 % 60), static_cast<long long>(ran % 60));
-    const Kind& kind = kKinds[kind_];
-    std::ofstream out(dir / (base + ".txt"), std::ios::binary);
-    out << "Problem noted in the game\n"
-        << "Game: " << ProgramName() << "\n"
-        << "When: " << when << " (running for " << running << ")\n"
-        << "Kind: " << kind.en << "\n"
-        << "Note: " << note_ << "\n"
-        << "On the portal: " << (portal_.empty() ? "nothing" : portal_) << "\n";
-    // Where the player was when the note opened (games that report it, dev/where.h).
-    if (!place_.empty()) out << "Where: " << place_ << "\n";
-    out << "Picture: " << (picture_name.empty() ? "none" : picture_name) << "\n";
-    out.close();
-    REXLOG_WARN("Problem noted by the player: {}{}{} ({}.txt)", kind.en, note_[0] ? ": " : "", note_, base);
-    if (!place_.empty()) REXLOG_INFO("Where (problem note): {}", place_);
+    note_.kind = kKinds[kind_].en;
+    note_.words = words_;
+    const std::filesystem::path base = NewNoteBase(note_);
+    WriteNote(base, note_);
+    REXLOG_WARN("Problem noted by the player: {}{}{} ({}.txt)", note_.kind, words_[0] ? ": " : "", words_,
+                Utf8Path(base.filename()));
+    if (!note_.place.empty()) REXLOG_INFO("Where (problem note): {}", note_.place);
     ShowPortalToast(Tr("Noted. Report a problem in Core of Light sends it along.",
                        "Notiert. \xE2\x80\x9EProblem melden\xE2\x80\x9C in Core of Light schickt es mit."));
     Close();
@@ -269,12 +334,8 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
   bool first_frame_ = true;
   bool save_ = false;
   int kind_ = 0;
-  char note_[200] = {};
-  bool has_picture_ = false;
-  int picture_w_ = 0, picture_h_ = 0;
-  std::vector<uint8_t> picture_;
-  std::string portal_;
-  std::string place_;
+  char words_[200] = {};
+  Note note_;
   std::unordered_map<uint64_t, Pad> pads_;
 };
 
@@ -287,6 +348,33 @@ std::unique_ptr<ProblemNoteDialog> g_dialog;  // UI thread only
 void RegisterProblemNote(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext* app_context) {
   g_drawer = drawer;
   g_app_context = app_context;
+  // F12: the quick note. F12 is free in the games (the SDK has F3, F4, F7 and the backtick; the
+  // menus F2, F4, F5, F6, F8, F9); F10 is a Windows menu key and Print a Windows screenshot key.
+  rex::ui::RegisterBind("bind_quick_problem_note", "F12",
+                        "Note a problem at once: the picture, the place and the settings, no menu",
+                        [] { QuickProblemNote(); });
+}
+
+void QuickProblemNote() {
+  // Not over a menu or the note dialog (the picture would be of the game behind it, the keys are
+  // theirs), and one note per press: a second within two seconds is the same moment.
+  static Clock::time_point last{};
+  if (!g_drawer || g_dialog || menu_input::MenuOpen()) return;
+  const Clock::time_point now = Clock::now();
+  if (last != Clock::time_point{} && now - last < std::chrono::seconds(2)) return;
+  last = now;
+  auto note = std::make_shared<Note>(TakeNote("Picture or graphics (quick note, F12)"));
+  note->has_picture = CaptureGamePicture(note->picture_w, note->picture_h, note->picture);
+  const std::filesystem::path base = NewNoteBase(*note);
+  // The file is written beside the game: a picture at 2x takes a moment to pack, which would hold
+  // up the picture on the screen right while the player moves on.
+  std::thread([base, note] { WriteNote(base, *note); }).detach();
+  REXLOG_WARN("Problem noted by the player: quick note ({}.txt)", Utf8Path(base.filename()));
+  if (!note->place.empty()) REXLOG_INFO("Where (problem note): {}", note->place);
+  ShowPortalToast(Tr("Noted: the picture, the place and the settings. Report a problem in Core of "
+                     "Light sends it along.",
+                     "Notiert: Bild, Ort und Einstellungen. \xE2\x80\x9EProblem melden\xE2\x80\x9C in "
+                     "Core of Light schickt es mit."));
 }
 
 void OpenProblemNote() {
