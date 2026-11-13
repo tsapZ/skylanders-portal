@@ -88,6 +88,23 @@ std::string ListAdd(std::string_view list, std::string_view name) {
   return out;
 }
 
+bool FirstFinish(std::string_view level, std::string_view done) {
+  return !IsHubLevel(level) && !ListHas(done, level);
+}
+
+std::string PickReward(const std::vector<std::string>& candidates, std::string_view open, uint32_t random) {
+  std::vector<const std::string*> left;
+  for (const std::string& name : candidates) {
+    if (NameKey(name).empty() || ListHas(open, name)) continue;
+    // Each character once, also when the list has it twice (two spellings of one name).
+    if (std::any_of(left.begin(), left.end(), [&](const std::string* n) { return NameKey(*n) == NameKey(name); })) {
+      continue;
+    }
+    left.push_back(&name);
+  }
+  return left.empty() ? std::string() : *left[random % left.size()];
+}
+
 void Teams::Follow(std::string_view level) {
   if (followed_ && level == level_) return;
   followed_ = true;

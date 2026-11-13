@@ -34,6 +34,20 @@ bool ListHas(std::string_view list, std::string_view name);
 // The list with `name` added at the end.
 std::string ListAdd(std::string_view list, std::string_view name);
 
+// A Soul Gem run as the owner described it (2026-11-13): the starters at first, a Soul Gem found
+// brings its Skylander, and the Skylanders the game has no Soul Gem for come one per level
+// finished, not always in the same order; a level played again brings nothing.
+
+// Whether finishing `level` brings a Skylander: a level (not a hub) not in `done`, the levels
+// finished so far in this run (a ';' list).
+bool FirstFinish(std::string_view level, std::string_view done);
+
+// The Skylander a first finish brings: one of `candidates` (the game's Skylanders without a Soul
+// Gem in it, no starters) that `open` (the run's list: the finds and the earlier rewards) doesn't
+// have yet, chosen by `random` (any number: the game draws one, the tests fix it); "" when none is
+// left.
+std::string PickReward(const std::vector<std::string>& candidates, std::string_view open, uint32_t random);
+
 // Each player's team in the current level, as character keys (NameKey).
 class Teams {
  public:

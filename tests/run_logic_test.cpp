@@ -56,6 +56,30 @@ int main() {
   CHECK(ListAdd("", "Chop Chop") == "Chop Chop");
   CHECK(ListAdd("Chop Chop", "Bash") == "Chop Chop;Bash");
 
+  // A level's first finish brings a Skylander, a hub or a level finished before doesn't.
+  CHECK(FirstFinish("Level_027", ""));
+  CHECK(FirstFinish("Level_028", "Level_027"));
+  CHECK(!FirstFinish("Level_027", "Level_026;Level_027"));
+  CHECK(!FirstFinish("Level_Hub", ""));
+  CHECK(!FirstFinish("", ""));
+
+  // The reward: one of the candidates the run doesn't have yet, by the number drawn; none left: "".
+  {
+    const std::vector<std::string> gemless = {"Bash", "Chop Chop", "Eruptor"};
+    CHECK(PickReward(gemless, "", 0) == "Bash");
+    CHECK(PickReward(gemless, "", 1) == "Chop Chop");
+    CHECK(PickReward(gemless, "", 5) == "Eruptor");               // 5 % 3
+    CHECK(PickReward(gemless, "chopchop", 1) == "Eruptor");       // Chop Chop is open already
+    CHECK(PickReward(gemless, "Bash;Chop Chop;Eruptor", 7).empty());
+    CHECK(PickReward({}, "", 3).empty());
+    CHECK(PickReward({"Jet-Vac", "jetvac", "Pop Fizz"}, "", 1) == "Pop Fizz");  // one name, two spellings
+    // Every candidate comes once, whatever is drawn: three finishes open all three.
+    std::string open;
+    for (const uint32_t r : {2u, 2u, 2u}) open = ListAdd(open, PickReward(gemless, open, r));
+    CHECK(ListHas(open, "Bash") && ListHas(open, "Chop Chop") && ListHas(open, "Eruptor"));
+    CHECK(SplitList(open).size() == 3);
+  }
+
   // Teams per level and player.
   Teams teams;
   teams.Follow("Level_027");
