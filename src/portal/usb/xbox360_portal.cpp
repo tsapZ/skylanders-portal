@@ -186,6 +186,8 @@ void Xbox360Portal::ReaderLoop() {
       if (logged < 12) {  // the first answers raw, as UsbPortal does
         ++logged;
         REXLOG_INFO("Portal (Xbox 360): answer {} <- {}", logged, Hex(frame.data(), 16));
+      } else if (frame[2] == 'M') {  // the speaker switch's answer, always (TrapTeamRecomp #22)
+        REXLOG_INFO("Portal (Xbox 360): speaker switch answered <- {}", Hex(frame.data(), 16));
       } else if (frame[2] != 'S' && other_logged < 24) {  // a reply to a command, however late
         ++other_logged;
         REXLOG_INFO("Portal (Xbox 360): answer (not a status) <- {}", Hex(frame.data(), 16));
