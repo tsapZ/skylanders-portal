@@ -33,6 +33,10 @@ $RenderDocDir = Join-Path $RepoRoot "logs\toolchain\RenderDoc_1.46_64"
 $Exe = Join-Path $RepoRoot "out\build\win-amd64-$Config\${GameName}iled.exe"
 
 Add-Type -AssemblyName System.Drawing
+# Once per PowerShell: a test chain runs one game after another in one session, and the same type from
+# another game's checkout (other line endings) is refused as a new type with a taken name (2026-11-13:
+# Trap Team's check after Spyro's Adventure's was lost to "SfrWindow ist bereits vorhanden").
+if (-not ('SfrWindow' -as [type])) {
 Add-Type @"
 using System; using System.Runtime.InteropServices;
 public static class SfrWindow {
@@ -41,6 +45,7 @@ public static class SfrWindow {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
 }
 "@
+}
 
 function Get-GameWindow {
     $script:Game.Refresh()
