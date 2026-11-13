@@ -208,6 +208,10 @@ bool HasSoulGem(std::string_view game, std::string_view character) {
   return true;
 }
 
+bool IsRunCharacter(const SkylanderInfo& sky) {
+  return IsRunCategory(sky.category) && HomeRank(CharacterName(sky)) >= 0;
+}
+
 std::vector<std::string> RewardCandidates(std::string_view game) {
   std::vector<std::string> out;
   const int rank = GameRank(game);

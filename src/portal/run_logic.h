@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 
+#include "portal/figure_catalog.h"
+
 namespace skylanders::portal::run {
 
 // A name's letters and digits in lower case: "Jet-Vac" -> "jetvac".
@@ -71,6 +73,9 @@ std::string LevelKey(std::string_view game, std::string_view level);
 // its 33 (Bash, Zap, Drobot, Boomer and Dark Spyro have none). `character` is a name as
 // CharacterName gives it.
 bool HasSoulGem(std::string_view game, std::string_view character);
+// Whether a figure is one of the run's Skylanders (a character or a version of one), not a sidekick,
+// Mini, vehicle, trap, item, creation crystal or one of the Nintendo-only two.
+bool IsRunCharacter(const SkylanderInfo& sky);
 // The Skylanders a first finish can bring in `game`: every character the game can use (the ones of
 // this game and the games before it; no sidekicks, Minis, vehicles, traps, items or creation
 // crystals) without a Soul Gem in it and not a starter, each once, in the catalog's order.
