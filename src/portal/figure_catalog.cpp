@@ -105,10 +105,12 @@ std::vector<FigureCatalogEntry> ScanFigureCatalog(const std::filesystem::path& r
     const auto& path = it->path();
     // UTF-8, not path::string(): that throws for a name outside the Windows code page (a star or
     // Japanese letters; Core of Light #60, TheBiemGamer) and took the whole list down.
-    // .sky too: RPCS3's, Dolphin's and Cemu's virtual figures hold the same 1 KB of toy data as a
-    // .dump, so they play as they are (Core of Light #88).
-    const std::string extension = Lower(Utf8Path(path.extension()));
-    if (extension != ".dump" && extension != ".sky") continue;
+    // .sky and .bin too (IsFigureFileName): RPCS3's, Dolphin's and Cemu's virtual figures and raw
+    // NFC dumps hold the same 1 KB of toy data as a .dump, so they play as they are (Core of Light
+    // #88). A .bin of another size is something else and stays out.
+    if (!IsFigureFileName(path)) continue;
+    std::error_code size_ec;
+    if (Lower(Utf8Path(path.extension())) == ".bin" && it->file_size(size_ec) != kFigureSize) continue;
     const std::string name = Utf8Path(path.stem());
     entries.push_back({name, ResolveDisplayName(path, name), TopLevelFolder(root, path), path});
   }

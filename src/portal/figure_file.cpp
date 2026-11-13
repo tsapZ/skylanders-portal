@@ -47,11 +47,32 @@ bool SaveFigureFileAtomic(const std::filesystem::path& path, const FigureData& d
   return true;
 }
 
+namespace {
+
+// The extension in lower case, without the dot ("dump", "sky"); ASCII only, as the ones compared.
+std::string LowerExtension(const std::filesystem::path& path) {
+  std::string ext;
+  for (const char32_t c : path.extension().u32string()) {
+    if (c == U'.') continue;
+    ext += c < 0x80 ? char(c >= U'A' && c <= U'Z' ? c - U'A' + U'a' : c) : '?';
+  }
+  return ext;
+}
+
+}  // namespace
+
+bool IsFigureFileName(const std::filesystem::path& path) {
+  const std::string ext = LowerExtension(path);
+  return ext == "dump" || ext == "sky" || ext == "bin";
+}
+
 std::filesystem::path FigureBackupDir(const std::filesystem::path& file, const std::filesystem::path& figures_dir) {
   std::error_code ec;
   std::filesystem::path rel = std::filesystem::relative(file, figures_dir, ec);
   if (ec || rel.empty() || *rel.begin() == "..") rel = std::filesystem::path("Other") / file.filename();
+  const std::string ext = LowerExtension(rel);
   rel.replace_extension();
+  if (!ext.empty() && ext != "dump") rel += " (" + ext + ")";
   return figures_dir.parent_path() / "Backups" / "Figures" / rel;
 }
 

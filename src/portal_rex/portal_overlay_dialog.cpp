@@ -300,7 +300,7 @@ void PortalOverlayDialog::OnDraw(ImGuiIO& io) {
   if (current_dir.empty()) {
     ImGui::TextWrapped(
         "No figures folder is set. Start the game with --portal_figures_dir \"<folder>\" to "
-        "browse your .dump files here.");
+        "browse your figure files (.dump, .sky, .bin) here.");
     ImGui::End();
     return;
   }
@@ -313,7 +313,7 @@ void PortalOverlayDialog::OnDraw(ImGuiIO& io) {
 
   if (entries_.empty()) {
     // Distinguish a typo'd or missing folder from a folder that is genuinely just empty, rather
-    // than showing the same "no .dump files" message for both.
+    // than showing the same "no figure files" message for both.
     std::error_code ec;
     const auto dir_path = Utf8ToPath(figures_dir_at_last_scan_);
     if (!std::filesystem::exists(dir_path, ec) || ec) {
@@ -321,7 +321,8 @@ void PortalOverlayDialog::OnDraw(ImGuiIO& io) {
     } else if (!std::filesystem::is_directory(dir_path, ec) || ec) {
       ImGui::TextWrapped("'%s' is not a folder.", figures_dir_at_last_scan_.c_str());
     } else {
-      ImGui::TextWrapped("No .dump files found under '%s'.", figures_dir_at_last_scan_.c_str());
+      ImGui::TextWrapped("No figure files (.dump, .sky, .bin) found under '%s'.",
+                         figures_dir_at_last_scan_.c_str());
     }
     ImGui::End();
     return;

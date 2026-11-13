@@ -47,6 +47,10 @@ int main() {
     CHECK(dir == data / L"Backups" / L"Figures" / L"Giants" / L"Tree Rex");
     CHECK(FigureBackupDir(fs::temp_directory_path() / L"Loose.dump", data / L"Figures") ==
           data / L"Backups" / L"Figures" / L"Other" / L"Loose");
+    // An emulator's "Tree Rex.sky" next to "Tree Rex.dump" keeps its own backups.
+    CHECK(FigureBackupDir(data / L"Figures" / L"Giants" / L"Tree Rex.SKY", data / L"Figures") ==
+          data / L"Backups" / L"Figures" / L"Giants" / L"Tree Rex (sky)");
+    CHECK(FigureBackupDir(data / L"Figures" / L"Giants" / L"Tree Rex.DUMP", data / L"Figures") == dir);
     // Twelve copies with sortable names: the newest ten stay.
     for (int i = 0; i < 12; ++i) {
       const std::string name = "2026-11-02 15-00-" + std::string(i < 10 ? "0" : "") + std::to_string(i) + ".dump";

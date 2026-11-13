@@ -37,7 +37,8 @@ struct FigureCatalogEntry {
   std::filesystem::path path;
 };
 
-// Recursively finds every *.dump file (case-insensitive extension) under `root`. A missing root,
+// Recursively finds every figure file under `root`: *.dump, *.sky, and *.bin of exactly 1 KB
+// (IsFigureFileName in figure_file.h; any case). A missing root,
 // a root that is not a directory, or a root with nothing found all give an empty result — never an
 // error. `game` is the top-level folder directly under `root` the file was found in ("" if the
 // file sits directly under `root`). Entries are sorted by game, then by name, case-insensitively;

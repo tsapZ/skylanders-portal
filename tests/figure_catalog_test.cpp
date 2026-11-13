@@ -82,6 +82,20 @@ int main() {
   for (const auto& e : entries3) sky_listed = sky_listed || e.name == "Blast Zone";
   CHECK(sky_listed);
 
+  // A raw NFC dump (.bin) counts when it has a figure's size; a .bin of another size is something
+  // else and stays out.
+  {
+    std::ofstream(root / L"3. Swap Force" / L"Hoot Loop.bin", std::ios::binary) << std::string(kFigureSize, 'x');
+    std::ofstream(root / L"3. Swap Force" / L"notes.bin", std::ios::binary) << "x";
+  }
+  auto entries4 = ScanFigureCatalog(root);
+  CHECK(entries4.size() == 9);
+  bool bin_listed = false;
+  for (const auto& e : entries4) bin_listed = bin_listed || e.name == "Hoot Loop";
+  CHECK(bin_listed);
+  CHECK(IsFigureFileName(L"a.Dump") && IsFigureFileName(L"b.sky") && IsFigureFileName(L"c.BIN"));
+  CHECK(!IsFigureFileName(L"old.sky.bak") && !IsFigureFileName(L"readme.txt") && !IsFigureFileName(L"dump"));
+
   fs::remove_all(root);
 
   // Games sort by release order, not alphabetically -- "Trap Team" (4th) must come before

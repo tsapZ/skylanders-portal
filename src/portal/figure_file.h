@@ -21,12 +21,19 @@ std::optional<FigureData> LoadFigureFile(const std::filesystem::path& path);
 // (for example the parent directory does not exist); the temporary file is cleaned up either way.
 bool SaveFigureFileAtomic(const std::filesystem::path& path, const FigureData& data);
 
+// Whether a file's name makes it a figure file, any case: ".dump" (ours), ".sky" (RPCS3's, Dolphin's
+// and Cemu's virtual figures, the same 1 KB of toy data; Core of Light #88) or ".bin" (a raw NFC
+// dump). Core of Light counts the same files (IsFigureFile in its profiles.cpp). The size is checked
+// where the file is read (LoadFigureFile).
+bool IsFigureFileName(const std::filesystem::path& path);
+
 // Backups of figure files, so a bad write or a mistake doesn't cost a figure's progress (level,
 // gold, upgrades live in the file). The folder of `file`'s backups: Backups\Figures next to the
 // figures folder in use (`figures_dir`; normally the data folder's Figures, a test's own copy in a
-// scripted run), followed by the file's path under it without ".dump" (Giants\Tree Rex), or
-// Backups\Figures\Other\<name> for a file elsewhere. Outside the figures folder on purpose: the
-// portal menu reads every figure-sized file under it.
+// scripted run), followed by the file's path under it without ".dump" (Giants\Tree Rex), another
+// kind with its extension in brackets (Giants\Tree Rex (sky)), so "Tree Rex.dump" and "Tree Rex.sky"
+// side by side keep their own backups; or Backups\Figures\Other\<name> for a file elsewhere. Outside
+// the figures folder on purpose: the portal menu reads every figure-sized file under it.
 inline constexpr int kFigureBackups = 10;
 std::filesystem::path FigureBackupDir(const std::filesystem::path& file, const std::filesystem::path& figures_dir);
 // Copies `file` as it is now into `backup_dir` as <name> (default: the local date and time,

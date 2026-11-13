@@ -18,7 +18,7 @@ class ImGuiDrawer;
 
 namespace skylanders {
 
-// The in-game figure picker (F6). Browses .dump files under the portal_figures_dir cvar and
+// The in-game figure picker (F6). Browses figure files (.dump, .sky, .bin) under the portal_figures_dir cvar and
 // places or removes a figure in a chosen slot (0-15) on the active software portal. Talks only to
 // PlaceFigureFromFile/RemoveFigureFromSlot/GetSoftwarePortal (portal_rex/portal_rex.h) and
 // ScanFigureCatalog (portal/figure_catalog.h); it never touches portal protocol bytes.
