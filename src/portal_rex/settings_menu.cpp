@@ -1669,16 +1669,18 @@ void AddQuitSettings(SettingsPage& page) {
   Setting report;
   report.en = "Report a problem";
   report.de = "Problem melden";
+  // The quick note's key as set (F12 unless bind_quick_problem_note says otherwise).
+  const std::string quick_key = QuickProblemNoteKey();
   report.help_en =
       "Keeps the picture of this moment and what kind of problem it is (and a few words typed on the "
-      "keyboard if you like).\n"
-      "F12 in the game does it at once, without this menu: the picture, the place and the settings.\n"
+      "keyboard if you like).\n" +
+      quick_key + " in the game does it at once, without this menu: the picture, the place and the settings.\n"
       "\n"
       "Report a problem in Core of Light sends it along with the logs.";
   report.help_de =
       "Speichert das Bild von genau jetzt und welche Art Problem es ist (auf Wunsch mit ein paar "
-      "Worten von der Tastatur).\n"
-      "F12 im Spiel macht das sofort, ohne dieses Men\xC3\xBC: Bild, Ort und Einstellungen.\n"
+      "Worten von der Tastatur).\n" +
+      quick_key + " im Spiel macht das sofort, ohne dieses Men\xC3\xBC: Bild, Ort und Einstellungen.\n"
       "\n"
       "\xE2\x80\x9EProblem melden\xE2\x80\x9C in Core of Light schickt es mit den Logs mit.";
   report.action = [] { OpenProblemNote(); };

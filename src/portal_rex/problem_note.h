@@ -8,6 +8,8 @@
 // and the settings that matter for the picture; the log gets a line at that moment. The Core of
 // Light launcher's Problem melden takes the newest of them along.
 
+#include <string>
+
 namespace rex::ui {
 class ImGuiDrawer;
 class WindowedAppContext;
@@ -24,8 +26,11 @@ void OpenProblemNote();
 // The quick note (F12, bind_quick_problem_note; UI thread): the picture, the place and the
 // settings saved at once as a note of the kind "Picture or graphics", without the dialog and without
 // stopping the game, for a player who sees something while moving (Core of Light #76,
-// imafuturecorpse). Nothing over an open menu; one per two seconds.
+// imafuturecorpse). Nothing over an open menu; one note per key press (held keys repeat).
 void QuickProblemNote();
+
+// The quick note's key as set (bind_quick_problem_note's first key, "F12" by default), for texts.
+std::string QuickProblemNoteKey();
 
 void ShutdownProblemNote();
 
