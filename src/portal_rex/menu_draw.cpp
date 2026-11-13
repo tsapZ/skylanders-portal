@@ -192,6 +192,14 @@ const ImFontLoader* BitmapLoader() {
   return &loader;
 }
 
+// The Windows font's characters: Latin-1 and Latin Extended-A, the general punctuation the texts use
+// (the German quotes, dashes, the ellipsis), arrows and geometric shapes. The SDK's ImGui renderer
+// builds the font atlas once (it doesn't take new glyphs while running), and ImGui's default for
+// that is Latin-1 only: the German quotes of "Problem melden" in a toast came out as "?"
+// (2026-11-13).
+const ImWchar kWindowsRanges[] = {0x0020, 0x00FF, 0x0100, 0x017F, 0x2000, 0x206F,
+                                  0x2190, 0x21FF, 0x25A0, 0x25FF, 0};
+
 // The game's font with the Windows font merged in for the glyphs it lacks, or just the Windows
 // font without one.
 ImFont* AddFont(ImFontAtlas* atlas, const std::shared_ptr<const GameFont>& game, const char* name,
@@ -217,9 +225,9 @@ ImFont* AddFont(ImFontAtlas* atlas, const std::shared_ptr<const GameFont>& game,
   if (font) {
     ImFontConfig merge;
     merge.MergeMode = true;
-    atlas->AddFontFromFileTTF(windows_ttf, size, &merge);
+    atlas->AddFontFromFileTTF(windows_ttf, size, &merge, kWindowsRanges);
   } else {
-    font = atlas->AddFontFromFileTTF(windows_ttf, size);
+    font = atlas->AddFontFromFileTTF(windows_ttf, size, nullptr, kWindowsRanges);
   }
 #else
   (void)windows_ttf;
