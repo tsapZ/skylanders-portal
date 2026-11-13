@@ -3610,8 +3610,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (user_ > 0) rows.push_back({OptionRow::Kind::kLeave, {}});
     for (const std::string& game : AllowedGames()) rows.push_back({OptionRow::Kind::kGame, game});
     rows.push_back({OptionRow::Kind::kOwnedOnly, {}});
-    // The run's rules (run_rules.h), a new run only while a Soul Gem run is on.
-    rows.push_back({OptionRow::Kind::kSoulGemRun, {}});
+    // The run's rules (run_rules.h), a new run only while a Soul Gem run is on. The Soul Gem run's
+    // row stays out for now (the owner, 2026-11-13): its find is the gem's preview movie, which
+    // Spyro's Adventure plays only when the player says yes to it, and every run unlocks in the
+    // same order; it comes back with the find taken from the pickup itself and a random order.
+    // run_soul_gems still works when set by hand (tests).
+    if (REXCVAR_GET(run_soul_gems)) rows.push_back({OptionRow::Kind::kSoulGemRun, {}});
     rows.push_back({OptionRow::Kind::kTeamSize, {}});
     if (REXCVAR_GET(run_soul_gems)) rows.push_back({OptionRow::Kind::kNewRun, {}});
     return rows;
