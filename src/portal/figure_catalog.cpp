@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <system_error>
+#include <tuple>
 #include <unordered_map>
 
 #include "portal/figure_file.h"
@@ -14,11 +15,27 @@ namespace skylanders::portal {
 
 std::span<const SkylanderInfo> AllSkylanders() { return kSkylanderCatalog; }
 
-const SkylanderInfo* FindSkylander(uint16_t id, uint16_t variant) {
+const SkylanderInfo* FindSkylander(uint16_t id, uint16_t variant, bool* exact) {
+  // The plainest version of the character: the lowest variant without its game nibble (no
+  // LightCore, alternate deco or series bits: Jet-Vac 0x1000, not the Legendary 0x1403), then the
+  // lowest variant; one that was never released only if there is nothing else. Checked against
+  // RPCS3's lists (2021 and 2026-11): 200 of its 216 figures the catalog doesn't know exactly get
+  // their own character; the rest get the plain version of a series figure, or another trap shape
+  // of the same element (seven traps, whose variants differ from the real toys').
+  auto rank = [](const SkylanderInfo& s) {
+    return std::make_tuple(s.category == "Unreleased", s.variant & 0x0FFF, s.variant);
+  };
+  const SkylanderInfo* plainest = nullptr;
   for (const auto& sky : kSkylanderCatalog) {
-    if (sky.id == id && sky.variant == variant) return &sky;
+    if (sky.id != id) continue;
+    if (sky.variant == variant) {
+      if (exact) *exact = true;
+      return &sky;
+    }
+    if (!plainest || rank(sky) < rank(*plainest)) plainest = &sky;
   }
-  return nullptr;
+  if (exact) *exact = false;
+  return plainest;
 }
 
 namespace {
@@ -86,7 +103,8 @@ std::string FigureDisplayName(const FigureData& data) {
       return std::string(v->name);
     }
   }
-  if (const SkylanderInfo* sky = FindSkylander(ReadFigureId(data), ReadFigureVariant(data))) {
+  bool exact = false;
+  if (const SkylanderInfo* sky = FindSkylander(ReadFigureId(data), ReadFigureVariant(data), &exact); sky && exact) {
     return std::string(sky->name);
   }
   return {};
