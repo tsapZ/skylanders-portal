@@ -129,6 +129,33 @@ int main() {
     CHECK(FindSkylander(0xFFFF, 0xFFFF) == nullptr);
   }
 
+  // A variant the catalog doesn't list gets the plainest version of the same character (Core of
+  // Light #92: RPCS3's adventure packs carry variant 0, the toys 0x3000 and 0x2000).
+  {
+    bool exact = true;
+    const SkylanderInfo* museum = FindSkylander(308, 0, &exact);
+    CHECK(museum && museum->name == "Midnight Museum" && museum->category == "Items" && !exact);
+    const SkylanderInfo* mirror = FindSkylander(305, 0);
+    CHECK(mirror && mirror->name == "Mirror of Mystery" && mirror->game == "Trap Team");
+    const SkylanderInfo* sheep = FindSkylander(3300, 0);
+    CHECK(sheep && sheep->name == "Sheep Wreck Island" && sheep->game == "Swap Force");
+    const SkylanderInfo* jet_vac = FindSkylander(100, 0);  // not the LightCore or Legendary one
+    CHECK(jet_vac && jet_vac->name == "Jet-Vac" && jet_vac->variant == 0x1000);
+    const SkylanderInfo* king_pen = FindSkylander(601, 0);  // not "Special King Pen" (0x03DF)
+    CHECK(king_pen && king_pen->name == "King Pen");
+    const SkylanderInfo* spyro = FindSkylander(16, 0, &exact);
+    CHECK(spyro && spyro->name == "Spyro" && exact);
+    // The name shown is the file's own then (it can be a series figure or another trap shape).
+    CHECK(FigureDisplayName(CreateBlankFigure(308, 0)).empty());
+    fs::path dir = fs::temp_directory_path() / L"sp_catalog_other_variant";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    CHECK(SaveFigureFileAtomic(dir / L"Banded Boulder.sky", CreateBlankFigure(216, 0x3000)));
+    auto entries = ScanFigureCatalog(dir);
+    CHECK(entries.size() == 1 && entries[0].display_name == "Banded Boulder");
+    fs::remove_all(dir);
+  }
+
   // Each game's figures are grouped into categories, in this order, with no category split up.
   // Spyro's Adventure chase variants have the same id/variant as the normal figure, so they add
   // no entries of their own.

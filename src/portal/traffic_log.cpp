@@ -97,9 +97,12 @@ void PortalTrafficLog::OnReply(const Report& report) {
           // Block 1 holds the figure's id (bytes 0-1) and variant (bytes 12-13), as figure_file.h.
           const uint16_t id = uint16_t(report[3] | (report[4] << 8));
           const uint16_t variant = uint16_t(report[15] | (report[16] << 8));
-          const SkylanderInfo* info = FindSkylander(id, variant);
+          bool exact = false;
+          const SkylanderInfo* info = FindSkylander(id, variant, &exact);
           Line(Fmt("slot %d: the game read the figure: ", slot) +
-               (info ? std::string(info->name) : std::string("not in the catalog")) +
+               (!info   ? std::string("not in the catalog")
+                : exact ? std::string(info->name)
+                        : "another variant of " + std::string(info->name)) +
                Fmt(" (id %d, variant %04X)", id, variant));
         }
       } else {
