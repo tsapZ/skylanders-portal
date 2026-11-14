@@ -97,6 +97,12 @@ int main() {
   CHECK(character("Metallic Blue Chop Chop") == "Chop Chop");
   CHECK(character("Nitro Freeze Blade Top") == "Freeze Blade");
   CHECK(character("Sparx Dragonfly").empty());
+  // Weeruptor is a Mini of its own: "Weeruptor Mini" contains Eruptor but is not an Eruptor.
+  CHECK(character("Weeruptor Mini") == "Weeruptor");
+  CHECK(ElementOf("Weeruptor Mini") == Element::kFire);
+  CHECK(character("Eggsellent Weeruptor Mini") == "Weeruptor");
+  CHECK(character("Eruptor") == "Eruptor");
+  CHECK(ElementOf("Eruptor") == Element::kFire);
   CHECK(badge("Chop Chop") == "Series 1");
   CHECK(badge("Chop Chop (Series 2)") == "Series 2");
   CHECK(badge("Twin Blade Chop Chop (Series 3)") == "Series 3");
