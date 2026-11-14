@@ -4329,6 +4329,18 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     // A trap: the villain it holds, along its top, left of a level pill (TrapTeamRecomp #17).
     if (owned && owned->trap && character.sidekick) {
       DrawVillainPill(dl, {p0.x + S(6), p0.y + S(6)}, p1.x - p0.x - S(12) - level_w, *owned->trap);
+      // The villain's picture from the game, round as a badge in the picture's bottom-right corner
+      // (SkylandersCoreOfLight #98); above the "on the portal" pill while the trap is on the portal.
+      if (owned->trap->villain_id != 0) {
+        if (ImTextureID art = GameArtTexture("villain:" + std::to_string(owned->trap->villain_id))) {
+          const float r = (p1.x - p0.x) * 0.38f / 2;
+          const float bottom = on_portal ? p1.y - S(36) : p1.y - S(6);
+          const ImVec2 c{p1.x - S(6) - r, bottom - r};
+          dl->AddCircleFilled(c, r + S(3), Rgba(120, 40, 160, 235), 64);
+          dl->AddImageRounded(art, {c.x - r, c.y - r}, {c.x + r, c.y + r}, {0, 0}, {1, 1},
+                              IM_COL32_WHITE, r);
+        }
+      }
     }
     if (auto owner = TakenBy(character)) DrawTaken(dl, a, b, *owner);
     if (IsTired(shown)) DrawTired(dl, a, b);
@@ -4866,8 +4878,20 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       char text[96];
       std::snprintf(text, sizeof(text), T(Text::kTrapHolds), TrapVillainText(*owned->trap).c_str());
       const char* shown = owned->trap->villain_id ? text : T(Text::kTrapEmpty);
-      Pill(dl, {b.x - S(26) - PillWidth(shown, 17), a.y + S(30)}, shown,
+      const float pill_h = TextSize(BoldFont(), S(17), shown).y + S(4);
+      const float pill_x = b.x - S(26) - PillWidth(shown, 17);
+      Pill(dl, {pill_x, a.y + S(30)}, shown,
            owned->trap->villain_id ? Rgba(120, 40, 160, 235) : Rgba(255, 255, 255, 40), kWhite, 17);
+      // The villain's picture from the game, round just left of the pill (SkylandersCoreOfLight #98).
+      if (owned->trap->villain_id != 0) {
+        if (ImTextureID art = GameArtTexture("villain:" + std::to_string(owned->trap->villain_id))) {
+          const float r = S(32);
+          const ImVec2 c{pill_x - S(6) - r - S(3), a.y + S(30) + pill_h / 2};
+          dl->AddCircleFilled(c, r + S(3), Rgba(120, 40, 160, 235), 64);
+          dl->AddImageRounded(art, {c.x - r, c.y - r}, {c.x + r, c.y + r}, {0, 0}, {1, 1},
+                              IM_COL32_WHITE, r);
+        }
+      }
     }
     if (figures.size() == 2) {
       float px = b.x - S(26);
