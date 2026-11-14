@@ -165,5 +165,92 @@ int main() {
   CHECK(!teams.Add(0, "bash"));
   CHECK(!teams.Refuses(0, "spyro", 1));
 
+  // Format then parse keeps the open and done lists.
+  {
+    const RunState before = {"Chop Chop;Bash", "Spyro's Adventure/Level_027;Giants/Level_200"};
+    const RunState after = ParseRunState(FormatRunState(before));
+    CHECK(after.open == before.open);
+    CHECK(after.done == before.done);
+  }
+
+  // Windows line ends are read like Unix ones.
+  {
+    const RunState s = ParseRunState("open=Bash\r\ndone=Giants/Level_200\r\n");
+    CHECK(s.open == "Bash");
+    CHECK(s.done == "Giants/Level_200");
+  }
+
+  // A done line before an open line is read fine.
+  {
+    const RunState s = ParseRunState("done=Giants/Level_200\nopen=Bash\n");
+    CHECK(s.open == "Bash");
+    CHECK(s.done == "Giants/Level_200");
+  }
+
+  // Unknown lines are ignored.
+  {
+    const RunState s = ParseRunState("version=2\nopen=Bash\nnoise\n");
+    CHECK(s.open == "Bash");
+    CHECK(s.done.empty());
+  }
+
+  // An empty open= line gives an empty list.
+  {
+    const RunState s = ParseRunState("open=\ndone=\n");
+    CHECK(s.open.empty());
+    CHECK(s.done.empty());
+  }
+
+  // Nobody left stays none, whatever the levels left.
+  {
+    CHECK(RewardCount(0, 0) == 0);
+    CHECK(RewardCount(0, 7) == 0);
+  }
+
+  // Fewer left than levels left still frees one (rounded up).
+  {
+    CHECK(RewardCount(2, 5) == 1);
+    CHECK(RewardCount(1, 100) == 1);
+  }
+
+  // Left equal to the levels left frees one per level.
+  {
+    CHECK(RewardCount(5, 5) == 1);
+    CHECK(RewardCount(16, 16) == 1);
+  }
+
+  // A large left over few levels rounds up.
+  {
+    CHECK(RewardCount(1000, 3) == 334);
+  }
+
+  // A game name with an apostrophe keys its levels as expected.
+  {
+    const std::string key = LevelKey("Spyro's Adventure", "Level_027");
+    CHECK(key == "Spyro's Adventure/Level_027");
+    CHECK(!FirstFinish("Spyro's Adventure", "Level_027", key));
+    CHECK(FirstFinish("Spyro's Adventure", "Level_028", key));
+  }
+
+  // The same level name in two games counts separately.
+  {
+    const std::string done = LevelKey("Spyro's Adventure", "Level_027");
+    CHECK(FirstFinish("Giants", "Level_027", done));
+    CHECK(LevelKey("Giants", "Level_027") != done);
+  }
+
+  // The same number skips the names already open and picks a later one.
+  {
+    const std::vector<std::string> names = {"Bash", "Chop Chop", "Eruptor"};
+    CHECK(PickReward(names, "", 1) == "Chop Chop");
+    CHECK(PickReward(names, "Bash", 1) == "Eruptor");
+    CHECK(PickReward(names, "Bash;Chop Chop", 1) == "Eruptor");
+  }
+
+  // An empty candidate list gives an empty name.
+  {
+    CHECK(PickReward({}, "", 0).empty());
+  }
+
   return Finish("run_logic");
 }
