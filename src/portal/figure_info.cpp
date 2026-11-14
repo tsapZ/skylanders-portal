@@ -103,6 +103,9 @@ constexpr CharacterElement kCharacters[] = {
     {"Drobit", Element::kTech},           {"Hijinx", Element::kUndead},
     {"Pet Vac", Element::kAir},           {"Small Fry", Element::kFire},
     {"Spry", Element::kMagic},
+    // Weeruptor: without its own entry, "Weeruptor Mini" matched Eruptor (the longest name inside it)
+    // and counted as an Eruptor (2026-11-13).
+    {"Weeruptor", Element::kFire},
     // SuperChargers
     {"Astroblast", Element::kLight},      {"Dive-Clops", Element::kWater},
     {"Fiesta", Element::kUndead},         {"Hammer Slam Bowser", Element::kFire},
