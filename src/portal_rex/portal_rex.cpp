@@ -608,6 +608,10 @@ class Xbox360BridgeDevice final : public skylanders::portal::PortalDevice {
 
   bool SeemsDisconnected() const { return x360_->SeemsDisconnected(); }
 
+  // An Xbox 360 portal answers the speaker switch without the audio version, so any answer from it
+  // means a speaker (RealPortalBridge).
+  bool IsXbox360Portal() const override { return true; }
+
   // From the game's thread: one of its speaker frames (0B 17, G.726) for this portal. The bridge's
   // thread sends it (FlushSpeakerFrames), as it sends everything else here: Xbox360Portal's writes
   // are for one thread. At most kMaxSpeakerFrames wait (about half a second); the oldest go first.

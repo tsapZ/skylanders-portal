@@ -190,13 +190,27 @@ void RealPortalBridge::Handle(const Report& report) {
       last_alive_ = Clock::now();
       if (!pending_ || pending_->cmd != 'M') break;
       pending_.reset();
-      const bool speaker = report[2] == kAudioCapableVersion[0] && report[3] == kAudioCapableVersion[1];
-      // The answer's bytes in the log: an Xbox 360 Traptanium portal answered, and was taken for one
-      // without a speaker (TrapTeamRecomp #22, 2026-11-13), with bytes no log had kept.
+      const bool audio_version =
+          report[2] == kAudioCapableVersion[0] && report[3] == kAudioCapableVersion[1];
+      // An Xbox 360 Traptanium portal has a speaker but answers without the audio version
+      // (4D 01 00 00 switched on, 4D 00 00 00 off), so any answer from it means one (TrapTeamRecomp #22).
+      const bool xbox = real_->IsXbox360Portal();
+      const bool speaker = audio_version || xbox;
       char answer[64];
-      std::snprintf(answer, sizeof(answer), "has no speaker (answered %02X %02X %02X %02X)", report[0], report[1],
-                    report[2], report[3]);
-      NoteSpeaker(speaker, speaker ? "has a speaker" : answer);
+      if (xbox) {
+        std::snprintf(answer, sizeof(answer),
+                      "has a speaker (an Xbox 360 portal, answered %02X %02X %02X %02X)", report[0],
+                      report[1], report[2], report[3]);
+        NoteSpeaker(speaker, answer);
+      } else if (speaker) {
+        NoteSpeaker(speaker, "has a speaker");
+      } else {
+        // The answer's bytes in the log: that is how the Xbox 360 portal's answer above was found
+        // (TrapTeamRecomp #22, a player's report 2026-11-14), and how the next odd one will be.
+        std::snprintf(answer, sizeof(answer), "has no speaker (answered %02X %02X %02X %02X)", report[0],
+                      report[1], report[2], report[3]);
+        NoteSpeaker(speaker, answer);
+      }
       break;
     }
     case 0x53:

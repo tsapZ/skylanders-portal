@@ -35,6 +35,10 @@ class PortalDevice {
 
   // Game to portal: decoded speaker audio (8 kHz mono PCM). Default: no speaker, dropped.
   virtual void WriteAudio(std::span<const int16_t> pcm) { (void)pcm; }
+
+  // Whether this is an Xbox 360 portal. Its answer to the speaker switch has no audio version, so
+  // any answer from it means a speaker.
+  virtual bool IsXbox360Portal() const { return false; }
 };
 
 }  // namespace skylanders::portal
