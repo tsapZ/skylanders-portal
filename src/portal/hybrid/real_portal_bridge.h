@@ -81,8 +81,9 @@ class RealPortalBridge {
   // so the game's speaker audio can go there instead of the PC (TrapTeamRecomp #22).
   void OnSpeakerSwitch(const Report& report);
   // The real portal answered the speaker switch as one with a speaker (4D, then the audio version
-  // kAudioCapableVersion, as a Trap Team portal answers). False until then, without an answer, and
-  // again for each new real portal. Any thread.
+  // kAudioCapableVersion, as a Trap Team portal answers, or any answer from an Xbox 360 portal,
+  // which has no audio version in its answer). False until then, without an answer, and again for
+  // each new real portal. Any thread.
   bool RealHasSpeaker() const { return real_speaker_.load(); }
 
   // Waiting for the real portal's reply to a command: the caller polls again soon instead of sleeping.

@@ -542,6 +542,47 @@ int main() {
     CHECK(!bridge.RealHasSpeaker());
     CHECK(FirstFigure(emulated) == kMaxFigures - 1);
   }
+  // An Xbox 360 Trap Team portal has a speaker, though its answer has no audio version.
+  {
+    class Xbox360Speaker final : public PortalDevice {
+     public:
+      explicit Xbox360Speaker(SoftwarePortal* inner, bool xbox) : inner_(inner), xbox_(xbox) {}
+      void Write(const Report& report) override { inner_->Write(report); }
+      Report Read() override {
+        Report report = inner_->Read();
+        if (report[0] == 0x4D) {
+          report[2] = 0x00;
+          report[3] = 0x00;
+        }
+        return report;
+      }
+      bool IsXbox360Portal() const override { return xbox_; }
+
+     private:
+      SoftwarePortal* inner_;
+      bool xbox_;
+    };
+    {
+      SoftwarePortal inner, emulated;  // no audio sink: 4D xx 00 19
+      Xbox360Speaker real(&inner, true);
+      std::vector<std::string> lines;
+      RealPortalBridge bridge(&emulated, {dir, [&](const std::string& l) { lines.push_back(l); }, nullptr});
+      bridge.OnSpeakerSwitch(Cmd({'M', 0x01}));
+      Run(bridge, &real);
+      CHECK(bridge.RealHasSpeaker());
+      CHECK(std::any_of(lines.begin(), lines.end(), [](const std::string& l) {
+        return l.find("has a speaker") != std::string::npos && l.find("Xbox 360") != std::string::npos;
+      }));
+    }
+    {
+      SoftwarePortal inner, emulated;  // the same answer, but not an Xbox 360 portal: no speaker
+      Xbox360Speaker real(&inner, false);
+      RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+      bridge.OnSpeakerSwitch(Cmd({'M', 0x01}));
+      Run(bridge, &real);
+      CHECK(!bridge.RealHasSpeaker());
+    }
+  }
 
   // The faster hybrid (TheBiemGamer's idea, Core of Light #62; TrapTeamRecomp #22): the copy goes
   // onto the emulated portal after the toy's first 8 blocks and the rest is read while the game reads
