@@ -14,6 +14,8 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 
+#include "alchemy/case_path.h"
+
 extern "C" {
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -283,7 +285,7 @@ bool DecodeXma(const XmaTrack& track, std::vector<float>& stereo) {
 }
 
 std::optional<XmaTrack> FindTrack(const fs::path& disc, const TitleMusicTrack& t) {
-  const fs::path file = disc / fs::path(std::u8string(t.file.begin(), t.file.end()));
+  const fs::path file = alchemy::ResolveCasePath(disc / fs::path(std::u8string(t.file.begin(), t.file.end())));
   if (file.extension() == ".pck") {
     char* end = nullptr;
     const unsigned long id = std::strtoul(t.name.c_str(), &end, 10);
