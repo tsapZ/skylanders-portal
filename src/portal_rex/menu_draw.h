@@ -18,6 +18,8 @@ namespace skylanders::menu_draw {
 void AddFonts(ImFontAtlas* atlas);
 ImFont* TitleFont();
 ImFont* BoldFont();
+// Returns the first usable UI font path (bundled fonts/ or OS font dir), or empty if none.
+std::string FindDefaultUiFontPath(bool bold = false);
 
 // Sizes are given in 1080p units; SetScale(display height / 1080) once per frame.
 void SetScale(float pixels_per_unit);

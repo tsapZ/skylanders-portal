@@ -291,6 +291,37 @@ void AddFonts(ImFontAtlas* atlas) {
 #endif
 }
 
+std::string FindDefaultUiFontPath(bool bold) {
+#ifdef _WIN32
+  return FindFallbackFontPath(
+      {bold ? "C:\\Windows\\Fonts\\segoeuib.ttf" : "C:\\Windows\\Fonts\\segoeui.ttf"});
+#else
+  if (bold) {
+    return FindFallbackFontPath(
+        {"fonts/NotoSans-Bold.ttf",
+         "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+         "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+         "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
+         "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+         "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+         "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"});
+  }
+  return FindFallbackFontPath(
+      {"fonts/NotoSans-Regular.ttf",
+       "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+       "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+       "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+       "/usr/share/fonts/TTF/DejaVuSans.ttf",
+       "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+       "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+       "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+       "/usr/share/fonts/TTF/OpenSans-Regular.ttf"});
+#endif
+}
+
 ImFont* TitleFont() { return g_font_title ? g_font_title : ImGui::GetFont(); }
 ImFont* BoldFont() { return g_font_bold ? g_font_bold : ImGui::GetFont(); }
 

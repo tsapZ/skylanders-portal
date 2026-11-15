@@ -119,15 +119,20 @@ package-release: build-release
     mkdir -p "$dist" && \
     cp out/build/{{ triple }}-release/{{ exe }}{{ exe_suffix }} "$dist/" && \
     if [ -e out/build/{{ triple }}-release/{{ game }}_xexcheck{{ exe_suffix }} ]; then cp out/build/{{ triple }}-release/{{ game }}_xexcheck{{ exe_suffix }} "$dist/"; fi && \
-    for lib in out/build/{{ triple }}-release/*.dll out/build/{{ triple }}-release/*.so out/build/{{ triple }}-release/*.dylib {{ sdk_lib_dir }}/*.dylib; do [ -e "$lib" ] && cp "$lib" "$dist/"; done && \
+    for lib in out/build/{{ triple }}-release/*.dll out/build/{{ triple }}-release/*.so out/build/{{ triple }}-release/*.dylib {{ sdk_lib_dir }}/*.dylib; do if [ -e "$lib" ]; then cp "$lib" "$dist/"; fi; done && \
     if [ "{{ os() }}" != "windows" ]; then \
-        for lib in {{ sdk_lib_dir }}/librexruntime.so {{ sdk_lib_dir }}/libamd_fidelityfx_vk.so; do [ -e "$lib" ] && [ ! -e "$dist/$(basename "$lib")" ] && cp "$lib" "$dist/"; done; \
+        for lib in {{ sdk_lib_dir }}/librexruntime.so {{ sdk_lib_dir }}/libamd_fidelityfx_vk.so; do if [ -e "$lib" ] && [ ! -e "$dist/$(basename "$lib")" ]; then cp "$lib" "$dist/"; fi; done; \
     fi && \
     cp {{ game }}.toml.example "$dist/{{ game }}.toml" && \
     if [ -d fonts ]; then cp -r fonts "$dist/"; fi && \
     if [ "{{ os() }}" = "linux" ]; then \
-        [ -e thirdparty/skylanders-portal/installer/70-portal-of-power.rules ] && cp thirdparty/skylanders-portal/installer/70-portal-of-power.rules "$dist/"; \
-        [ -e installer/linux-setup.sh ] && cp installer/linux-setup.sh "$dist/"; \
+        if [ -e thirdparty/skylanders-portal/installer/70-portal-of-power.rules ]; then cp thirdparty/skylanders-portal/installer/70-portal-of-power.rules "$dist/"; fi && \
+        if [ -e installer/settings_template.toml ]; then cp installer/settings_template.toml "$dist/"; fi && \
+        if [ -e installer/linux-setup.sh ]; then \
+            cp installer/linux-setup.sh "$dist/" && chmod +x "$dist/linux-setup.sh"; \
+        elif [ -e thirdparty/skylanders-portal/installer/linux-setup.sh ]; then \
+            cp thirdparty/skylanders-portal/installer/linux-setup.sh "$dist/" && chmod +x "$dist/linux-setup.sh"; \
+        fi; \
     fi && \
     echo "Packaged to $dist/" && \
     echo "Copy that folder to the other machine, then add your own rom/ next to {{ exe }}{{ exe_suffix }} there" && \

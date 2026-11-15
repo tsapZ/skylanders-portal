@@ -160,6 +160,7 @@ if(TARGET rex::runtime)
         src/portal/usb/winusb_portal_io.cpp
         src/portal_rex/sdl_audio_sink.cpp
         src/portal_rex/speaker_overlay.cpp
+        src/portal/system_locale.cpp
         # Test tools: scripted input, memory watches, the crash report, GPU crash diagnostics,
         # where the player is (for problem reports).
         src/dev/gpu_diagnostics.cpp
@@ -190,5 +191,9 @@ if(TARGET rex::runtime)
         target_include_directories(skylanders_png_file_test PRIVATE tests)
         target_link_libraries(skylanders_png_file_test PRIVATE skylanders_portal_rex)
         add_test(NAME skylanders_png_file_test COMMAND skylanders_png_file_test)
+        add_executable(skylanders_system_locale_test tests/system_locale_test.cpp src/portal/system_locale.cpp)
+        target_include_directories(skylanders_system_locale_test PRIVATE src tests)
+        target_compile_features(skylanders_system_locale_test PRIVATE cxx_std_23)
+        add_test(NAME skylanders_system_locale_test COMMAND skylanders_system_locale_test)
     endif()
 endif()
