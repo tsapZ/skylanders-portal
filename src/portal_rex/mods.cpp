@@ -15,6 +15,10 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#else
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 REXCVAR_DEFINE_STRING(mods, "", "Game",
@@ -149,6 +153,29 @@ SettingsPage ModsPage(std::string_view game) {
     fs::create_directories(folder, ec);
 #ifdef _WIN32
     ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+    const std::string utf8 = Utf8Path(folder);
+    const pid_t pid = fork();
+    if (pid == 0) {
+      if (fork() == 0) {
+        setsid();
+        const int devnull = ::open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+          dup2(devnull, STDIN_FILENO);
+          dup2(devnull, STDOUT_FILENO);
+          dup2(devnull, STDERR_FILENO);
+          if (devnull > STDERR_FILENO) close(devnull);
+        }
+#ifdef __APPLE__
+        execlp("open", "open", utf8.c_str(), nullptr);
+#else
+        execlp("xdg-open", "xdg-open", utf8.c_str(), nullptr);
+#endif
+        _exit(127);
+      }
+      _exit(0);
+    }
+    if (pid > 0) waitpid(pid, nullptr, 0);
 #endif
   };
   page.settings.push_back(std::move(open));

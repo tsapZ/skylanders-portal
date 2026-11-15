@@ -5,9 +5,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -20,6 +23,11 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#else
+#include <cerrno>
+#include <signal.h>
+#include <unistd.h>
+#include <SDL3/SDL.h>
 #endif
 
 #include <imgui.h>
@@ -482,6 +490,7 @@ std::string LayoutKeyName(const std::string& sdk_name) {
   const bool printable = (vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z') || (vk >= 0xBA && vk <= 0xC0) ||
                          (vk >= 0xDB && vk <= 0xDF) || vk == 0xE2;
   if (!printable) return {};
+#ifdef _WIN32
   static HKL us = LoadKeyboardLayoutW(L"00000409", KLF_NOTELLSHELL);
   const UINT scan = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC, us ? us : GetKeyboardLayout(0));
   wchar_t text[32] = {};
@@ -491,6 +500,34 @@ std::string LayoutKeyName(const std::string& sdk_name) {
   char utf8[96] = {};
   const int n = WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8, sizeof(utf8), nullptr, nullptr);
   return n > 1 ? std::string(utf8) : std::string();
+#else
+  if ((SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0) return {};
+  SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
+  if (vk == '0') sc = SDL_SCANCODE_0;
+  else if (vk >= '1' && vk <= '9') sc = static_cast<SDL_Scancode>(SDL_SCANCODE_1 + (vk - '1'));
+  else if (vk >= 'A' && vk <= 'Z') sc = static_cast<SDL_Scancode>(SDL_SCANCODE_A + (vk - 'A'));
+  else if (vk == 0xBA) sc = SDL_SCANCODE_SEMICOLON;
+  else if (vk == 0xBB) sc = SDL_SCANCODE_EQUALS;
+  else if (vk == 0xBC) sc = SDL_SCANCODE_COMMA;
+  else if (vk == 0xBD) sc = SDL_SCANCODE_MINUS;
+  else if (vk == 0xBE) sc = SDL_SCANCODE_PERIOD;
+  else if (vk == 0xBF) sc = SDL_SCANCODE_SLASH;
+  else if (vk == 0xC0) sc = SDL_SCANCODE_GRAVE;
+  else if (vk == 0xDB) sc = SDL_SCANCODE_LEFTBRACKET;
+  else if (vk == 0xDC) sc = SDL_SCANCODE_BACKSLASH;
+  else if (vk == 0xDD) sc = SDL_SCANCODE_RIGHTBRACKET;
+  else if (vk == 0xDE) sc = SDL_SCANCODE_APOSTROPHE;
+  else if (vk == 0xE2) sc = SDL_SCANCODE_NONUSBACKSLASH;
+  if (sc == SDL_SCANCODE_UNKNOWN) return {};
+  const SDL_Keycode key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);
+  const char* name = key ? SDL_GetKeyName(key) : "";
+  if (name == nullptr || *name == '\0') return {};
+  std::string out(name);
+  if (out.size() == 1 && out[0] >= 'a' && out[0] <= 'z') {
+    out[0] = static_cast<char>(out[0] - ('a' - 'A'));
+  }
+  return out;
+#endif
 }
 
 // One key as shown.
@@ -1589,6 +1626,10 @@ void CloseGameWindow() {
         return FALSE;
       },
       0);
+#else
+  SDL_Event ev{};
+  ev.type = SDL_EVENT_QUIT;
+  SDL_PushEvent(&ev);
 #endif
 }
 
@@ -1613,6 +1654,47 @@ void RestartGame() {
   }
   CloseHandle(info.hThread);
   CloseHandle(info.hProcess);
+  REXLOG_INFO("Settings menu: restarting");
+#elif defined(__linux__)
+  std::error_code ec;
+  const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+  if (ec || exe.empty()) {
+    REXLOG_WARN("Settings menu: could not resolve own executable for restart");
+    return;
+  }
+  std::vector<std::string> args;
+  {
+    std::ifstream in("/proc/self/cmdline", std::ios::binary);
+    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    size_t pos = 0;
+    while (pos < raw.size()) {
+      const size_t nul = raw.find('\0', pos);
+      std::string arg = raw.substr(pos, nul == std::string::npos ? std::string::npos : nul - pos);
+      pos = nul == std::string::npos ? raw.size() : nul + 1;
+      if (arg.starts_with("--restart_wait_pid=")) continue;
+      if (arg == "--restart_wait_pid") {
+        const size_t next_nul = raw.find('\0', pos);
+        pos = next_nul == std::string::npos ? raw.size() : next_nul + 1;
+        continue;
+      }
+      args.push_back(std::move(arg));
+    }
+  }
+  if (args.empty()) args.push_back(exe.string());
+  args.push_back("--restart_wait_pid=" + std::to_string(getpid()));
+  std::vector<char*> argv;
+  argv.reserve(args.size() + 1);
+  for (std::string& a : args) argv.push_back(a.data());
+  argv.push_back(nullptr);
+  const pid_t pid = fork();
+  if (pid < 0) {
+    REXLOG_WARN("Settings menu: could not start the game again");
+    return;
+  }
+  if (pid == 0) {
+    execv(exe.c_str(), argv.data());
+    _exit(127);
+  }
   REXLOG_INFO("Settings menu: restarting");
 #endif
   CloseGameWindow();
@@ -1720,6 +1802,17 @@ void WaitForRestartedInstance() {
     CloseHandle(old);
     REXLOG_INFO("Settings menu: restarted; the old game {}", ended ? "has ended" : "is still running");
   }
+#else
+  bool ended = true;
+  for (int i = 0; i < 400; ++i) {
+    if (kill(static_cast<pid_t>(pid), 0) != 0 && errno == ESRCH) {
+      ended = true;
+      break;
+    }
+    ended = false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  REXLOG_INFO("Settings menu: restarted; the old game {}", ended ? "has ended" : "is still running");
 #endif
 }
 
@@ -1799,6 +1892,21 @@ std::vector<MonitorScreen> ScreensInSdlOrder() {
       if (screen.name.empty() && screen.device == source.viewGdiDeviceName) screen.name = name;
     }
   }
+#else
+  const bool video_inited = (SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) != 0;
+  if (!video_inited && !SDL_InitSubSystem(SDL_INIT_VIDEO)) return screens;
+  int display_count = 0;
+  if (SDL_DisplayID* displays = SDL_GetDisplays(&display_count)) {
+    for (int i = 0; i < display_count; ++i) {
+      const char* name = SDL_GetDisplayName(displays[i]);
+      const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(displays[i]);
+      if (mode && mode->w > 0 && mode->h > 0) {
+        screens.push_back({{}, name ? name : "", mode->w, mode->h});
+      }
+    }
+    SDL_free(displays);
+  }
+  if (!video_inited) SDL_QuitSubSystem(SDL_INIT_VIDEO);
 #endif
   return screens;
 }
@@ -1808,18 +1916,20 @@ std::vector<MonitorScreen> ScreensInSdlOrder() {
 void ResolutionFromScreenIfAutomatic() {
   if (!rex::cvar::GetFlagByName("settings_schema").empty()) return;  // the launcher shows the file's value
   if (!rex::cvar::GetFlagByName("resolution").empty() || !CvarOn("fullscreen")) return;
-#if defined(_WIN32)
   // The mode in pixels of the screen the game opens on (`monitor`, MonitorSetting; else the
   // primary one), whatever its scaling (under Gamescope: its output). A second screen with another
   // size or shape would otherwise get the main one's picture.
   int width = 0, height = 0;
-  if (const int chosen = std::atoi(rex::cvar::GetFlagByName("monitor").c_str()); chosen > 0) {
-    const std::vector<MonitorScreen> screens = ScreensInSdlOrder();
-    if (chosen <= int(screens.size())) {
-      width = screens[size_t(chosen) - 1].width;
-      height = screens[size_t(chosen) - 1].height;
-    }
+  const int chosen = std::atoi(rex::cvar::GetFlagByName("monitor").c_str());
+  const std::vector<MonitorScreen> screens = ScreensInSdlOrder();
+  if (chosen > 0 && chosen <= int(screens.size())) {
+    width = screens[size_t(chosen) - 1].width;
+    height = screens[size_t(chosen) - 1].height;
+  } else if (chosen <= 0 && !screens.empty()) {
+    width = screens[0].width;
+    height = screens[0].height;
   }
+#if defined(_WIN32)
   if (width <= 0 || height <= 0) {
     DEVMODEW mode = {};
     mode.dmSize = sizeof(mode);
@@ -1829,10 +1939,11 @@ void ResolutionFromScreenIfAutomatic() {
     width = int(mode.dmPelsWidth);
     height = int(mode.dmPelsHeight);
   }
+#endif
+  if (width <= 0 || height <= 0) return;
   const std::string size = std::to_string(width) + "x" + std::to_string(height);
   rex::cvar::SetFlagByName("resolution", size.c_str());
   REXLOG_INFO("Settings menu: resolution automatic in fullscreen, the screen's {}", size);
-#endif
 }
 
 Setting MonitorSetting() {

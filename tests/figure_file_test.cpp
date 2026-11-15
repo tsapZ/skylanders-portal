@@ -330,5 +330,43 @@ int main() {
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
   }
+
+  // Random exclusive temp name: a symlink planted at the old predictable "<path>.tmp" is neither
+  // followed nor removed, and no stray temp file remains after save.
+  {
+    const fs::path dir = fs::temp_directory_path() / L"gr_figure_atomic";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const fs::path p = dir / L"figure.dump";
+    const fs::path victim = dir / L"victim.bin";
+    { std::ofstream out(victim, std::ios::binary); out << "untouched"; }
+    const fs::path planted = dir / L"figure.dump.tmp";
+    bool linked = false;
+#ifndef _WIN32
+    fs::create_symlink(victim, planted, ec);
+    linked = !ec;
+#endif
+    FigureData d{};
+    for (size_t i = 0; i < d.size(); ++i) d[i] = static_cast<uint8_t>(i * 7 + 1);
+    CHECK(SaveFigureFileAtomic(p, d));
+    auto loaded = LoadFigureFile(p);
+    CHECK(loaded.has_value() && *loaded == d);
+    if (linked) {
+      CHECK(fs::is_symlink(planted));
+      std::ifstream in(victim, std::ios::binary);
+      std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      CHECK(content == "untouched");
+      fs::remove(planted, ec);
+    }
+    fs::remove(victim, ec);
+    size_t entries = 0;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+      ++entries;
+      CHECK(entry.path() == p);
+    }
+    CHECK(entries == 1);
+    fs::remove_all(dir, ec);
+  }
   return Finish("figure_file");
 }

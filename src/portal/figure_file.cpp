@@ -1,6 +1,7 @@
 #include "portal/figure_file.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <ctime>
 #include <fstream>
 #include <random>
@@ -24,10 +25,18 @@ std::optional<FigureData> LoadFigureFile(const std::filesystem::path& path) {
 }
 
 bool SaveFigureFileAtomic(const std::filesystem::path& path, const FigureData& data) {
-  std::filesystem::path tmp = path;
-  tmp += L".tmp";
+  // Random per-call sibling name opened exclusively with C++23 ios::noreplace (O_CREAT|O_EXCL on
+  // POSIX, CREATE_NEW on Windows) so a planted "<path>.tmp" symlink cannot be followed to
+  // overwrite another file, while keeping the rename atomic on the same filesystem.
+  std::random_device rd;
+  std::seed_seq seed{rd(), rd(), rd(), rd()};
+  std::mt19937_64 rng(seed);
+  char name[48];
+  std::snprintf(name, sizeof(name), "figure-%016llx%016llx.tmp",
+                static_cast<unsigned long long>(rng()), static_cast<unsigned long long>(rng()));
+  const std::filesystem::path tmp = path.parent_path() / std::filesystem::path(name);
   {
-    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    std::ofstream out(tmp, std::ios::binary | std::ios::noreplace);
     if (!out) return false;
     out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
     if (!out.good()) {

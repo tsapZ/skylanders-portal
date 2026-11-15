@@ -1,0 +1,4 @@
+# Skylanders Portal of Power (PS3, Wii, Wii U HID portals and Xbox 360 USB portal)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1430", ATTR{idProduct}=="0150", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1430", ATTRS{idProduct}=="0150", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1430", ATTR{idProduct}=="1f17", MODE="0660", TAG+="uaccess"

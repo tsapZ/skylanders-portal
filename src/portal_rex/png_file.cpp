@@ -1,5 +1,7 @@
 #include "portal_rex/png_file.h"
 
+#include <cstring>
+#include <fstream>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -7,9 +9,50 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <wincodec.h>
+#else
+#include <zlib.h>
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_STDIO
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
+#endif
+#include <stb_image.h>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #endif
 
 namespace skylanders {
+
+#ifndef _WIN32
+namespace {
+
+constexpr int kMaxPngDimension = 4096;
+
+void AppendBe32(std::vector<uint8_t>& out, uint32_t value) {
+  out.push_back(uint8_t((value >> 24) & 0xFF));
+  out.push_back(uint8_t((value >> 16) & 0xFF));
+  out.push_back(uint8_t((value >> 8) & 0xFF));
+  out.push_back(uint8_t(value & 0xFF));
+}
+
+bool WritePngChunk(std::ofstream& out, const char tag[4], const uint8_t* data, size_t size) {
+  std::vector<uint8_t> chunk;
+  chunk.reserve(4 + 4 + size + 4);
+  AppendBe32(chunk, uint32_t(size));
+  chunk.insert(chunk.end(), reinterpret_cast<const uint8_t*>(tag),
+               reinterpret_cast<const uint8_t*>(tag) + 4);
+  if (size > 0) chunk.insert(chunk.end(), data, data + size);
+  const uLong crc = crc32(0L, chunk.data() + 4, uInt(4 + size));
+  AppendBe32(chunk, uint32_t(crc));
+  out.write(reinterpret_cast<const char*>(chunk.data()), std::streamsize(chunk.size()));
+  return out.good();
+}
+
+}  // namespace
+#endif
 
 bool WritePng(const std::filesystem::path& path, int width, int height, const uint8_t* rgba) {
 #ifdef _WIN32
@@ -50,11 +93,52 @@ bool WritePng(const std::filesystem::path& path, int width, int height, const ui
   if (!ok) std::filesystem::remove(temp, ec);
   return ok;
 #else
-  (void)path;
-  (void)width;
-  (void)height;
-  (void)rgba;
-  return false;
+  if (width <= 0 || height <= 0 || width > kMaxPngDimension || height > kMaxPngDimension || !rgba) {
+    return false;
+  }
+  const size_t stride = size_t(width) * 4;
+  std::vector<uint8_t> raw(size_t(height) * (1 + stride));
+  for (int y = 0; y < height; ++y) {
+    uint8_t* dst = raw.data() + size_t(y) * (1 + stride);
+    dst[0] = 0;  // filter type: None
+    std::memcpy(dst + 1, rgba + size_t(y) * stride, stride);
+  }
+  uLongf comp_size = compressBound(uLong(raw.size()));
+  std::vector<uint8_t> compressed(comp_size);
+  if (compress2(compressed.data(), &comp_size, raw.data(), uLong(raw.size()), Z_DEFAULT_COMPRESSION) != Z_OK) {
+    return false;
+  }
+
+  std::filesystem::path temp = path;
+  temp += ".part";
+  bool ok = false;
+  {
+    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+    if (out) {
+      static constexpr uint8_t kSignature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+      out.write(reinterpret_cast<const char*>(kSignature), sizeof(kSignature));
+      std::vector<uint8_t> ihdr;
+      AppendBe32(ihdr, uint32_t(width));
+      AppendBe32(ihdr, uint32_t(height));
+      ihdr.push_back(8);  // 8 bits per channel
+      ihdr.push_back(6);  // color type: RGBA
+      ihdr.push_back(0);  // compression method: deflate
+      ihdr.push_back(0);  // filter method: adaptive
+      ihdr.push_back(0);  // interlace: none
+      ok = out.good() && WritePngChunk(out, "IHDR", ihdr.data(), ihdr.size()) &&
+           WritePngChunk(out, "IDAT", compressed.data(), comp_size) &&
+           WritePngChunk(out, "IEND", nullptr, 0);
+      out.flush();
+      ok = ok && out.good();
+    }
+  }
+  std::error_code ec;
+  if (ok) {
+    std::filesystem::rename(temp, path, ec);
+    ok = !ec;
+  }
+  if (!ok) std::filesystem::remove(temp, ec);
+  return ok;
 #endif
 }
 
@@ -89,10 +173,27 @@ bool ReadPng(const std::filesystem::path& path, int& width, int& height, std::ve
   if (!ok) rgba.clear();
   return ok;
 #else
-  (void)path;
   width = height = 0;
   rgba.clear();
-  return false;
+  std::ifstream in(path, std::ios::binary | std::ios::ate);
+  if (!in) return false;
+  const std::streamoff size = in.tellg();
+  if (size <= 0 || size > 64 * 1024 * 1024) return false;
+  std::vector<uint8_t> encoded(static_cast<size_t>(size));
+  in.seekg(0);
+  if (!in.read(reinterpret_cast<char*>(encoded.data()), size)) return false;
+
+  int w = 0, h = 0, channels = 0;
+  stbi_uc* decoded = stbi_load_from_memory(encoded.data(), int(encoded.size()), &w, &h, &channels, 4);
+  if (!decoded) return false;
+  const bool ok = w > 0 && h > 0 && w <= kMaxPngDimension && h <= kMaxPngDimension;
+  if (ok) {
+    width = w;
+    height = h;
+    rgba.assign(decoded, decoded + size_t(w) * h * 4);
+  }
+  stbi_image_free(decoded);
+  return ok;
 #endif
 }
 

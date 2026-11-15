@@ -2,14 +2,12 @@
 # project and file prefix, e.g. ssarecomp) and `repo` (the repository name, e.g. SSARecomp).
 # Recipes run in the game's folder; `just` there lists them.
 #
-# Needs: CMake, Ninja, `just`, and clang-20/clang++-20 on PATH.
+# Needs: CMake, Ninja, `just`, and clang/clang++ on PATH.
 #   - Windows: Visual Studio 2022 with the "C++ Clang tools for Windows" component (its bundled
 #     clang is put on PATH below), plus Git for Windows (its own usr/bin isn't on PATH by default,
 #     so it's pointed at directly below -- these recipes run under its sh.exe). Works from any
 #     shell (PowerShell, cmd, Git Bash); the VS "x64 Native Tools" prompt is not required.
-#   - Linux: clang-20/clang++-20 on PATH. Some distros (e.g. Arch's `clang20` package) install them
-#     unversioned under a version-specific directory (e.g. /usr/lib/llvm20/bin/clang++, no
-#     "-20" suffix) -- add that directory to PATH, or symlink clang-20/clang++-20 onto it yourself.
+#   - Linux: clang/clang++ on PATH.
 #   - macOS: Xcode's clang normally suffices.
 
 set windows-shell := ["C:/Program Files/Git/usr/bin/sh.exe", "-cu"]
@@ -120,11 +118,25 @@ package-release: build-release
     rm -rf "$dist" && \
     mkdir -p "$dist" && \
     cp out/build/{{ triple }}-release/{{ exe }}{{ exe_suffix }} "$dist/" && \
-    for lib in out/build/{{ triple }}-release/*.dll out/build/{{ triple }}-release/*.so out/build/{{ triple }}-release/*.dylib {{ sdk_lib_dir }}/*.so {{ sdk_lib_dir }}/*.dylib; do [ -e "$lib" ] && cp "$lib" "$dist/"; done && \
+    if [ -e out/build/{{ triple }}-release/{{ game }}_xexcheck{{ exe_suffix }} ]; then cp out/build/{{ triple }}-release/{{ game }}_xexcheck{{ exe_suffix }} "$dist/"; fi && \
+    for lib in out/build/{{ triple }}-release/*.dll out/build/{{ triple }}-release/*.so out/build/{{ triple }}-release/*.dylib {{ sdk_lib_dir }}/*.dylib; do [ -e "$lib" ] && cp "$lib" "$dist/"; done && \
+    if [ "{{ os() }}" != "windows" ]; then \
+        for lib in {{ sdk_lib_dir }}/librexruntime.so {{ sdk_lib_dir }}/libamd_fidelityfx_vk.so; do [ -e "$lib" ] && [ ! -e "$dist/$(basename "$lib")" ] && cp "$lib" "$dist/"; done; \
+    fi && \
     cp {{ game }}.toml.example "$dist/{{ game }}.toml" && \
+    if [ -d fonts ]; then cp -r fonts "$dist/"; fi && \
+    if [ "{{ os() }}" = "linux" ]; then \
+        [ -e thirdparty/skylanders-portal/installer/70-portal-of-power.rules ] && cp thirdparty/skylanders-portal/installer/70-portal-of-power.rules "$dist/"; \
+        [ -e installer/linux-setup.sh ] && cp installer/linux-setup.sh "$dist/"; \
+    fi && \
     echo "Packaged to $dist/" && \
     echo "Copy that folder to the other machine, then add your own rom/ next to {{ exe }}{{ exe_suffix }} there" && \
     echo "(rom/default.xex must exist) before running it."
+
+# Create a compressed tarball from package-release on Linux/macOS.
+package-linux: package-release
+    tar -C dist -czf dist/{{ repo }}-{{ triple }}.tar.gz {{ game }}-{{ triple }}-release && \
+    echo "Tarball created at dist/{{ repo }}-{{ triple }}.tar.gz"
 
 # Build the release binary, stage it alongside the installer's other inputs, and compile the
 # Windows installer with Inno Setup (ISCC.exe). Windows only -- see docs/releasing.md. Checks both

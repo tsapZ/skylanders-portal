@@ -7,6 +7,10 @@
 // Without the SDK (skylanders_portal_figures): MD5 and AES-128-ECB from Windows' CNG.
 #include <windows.h>
 #include <bcrypt.h>
+#elif defined(SKYLANDERS_PORTAL_CRYPTO_OPENSSL)
+// Without the SDK on POSIX (skylanders_portal_figures): MD5 and AES-128-ECB from OpenSSL.
+#include <memory>
+#include <openssl/evp.h>
 #else
 extern "C" {
 #include <aes.h>
@@ -25,18 +29,24 @@ namespace {
 // The trailing space is part of the constant: dropping it silently produces a wrong key.
 constexpr std::string_view kKeyConstant = " Copyright (C) 2010 Activision. All Rights Reserved. ";
 
-#if defined(SKYLANDERS_PORTAL_CRYPTO_CNG)
-
-// The block's key: MD5 of the tag's first 0x20 bytes, the block index and the constant.
-std::array<uint8_t, 16> BlockKey(const FigureData& data, uint8_t block_index) {
+std::array<uint8_t, 0x20 + 1 + kKeyConstant.size()> BlockKeyMaterial(const FigureData& data, uint8_t block_index) {
   std::array<uint8_t, 0x20 + 1 + kKeyConstant.size()> key_material{};
   std::memcpy(key_material.data(), data.data(), 0x20);
   key_material[0x20] = block_index;
   std::memcpy(key_material.data() + 0x21, kKeyConstant.data(), kKeyConstant.size());
+  return key_material;
+}
+
+#if defined(SKYLANDERS_PORTAL_CRYPTO_CNG)
+
+// The block's key: MD5 of the tag's first 0x20 bytes, the block index and the constant.
+std::array<uint8_t, 16> BlockKey(const FigureData& data, uint8_t block_index) {
+  const auto key_material = BlockKeyMaterial(data, block_index);
   std::array<uint8_t, 16> key{};
   BCRYPT_ALG_HANDLE alg = nullptr;
   if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_MD5_ALGORITHM, nullptr, 0) == 0) {
-    BCryptHash(alg, nullptr, 0, key_material.data(), ULONG(key_material.size()), key.data(), ULONG(key.size()));
+    BCryptHash(alg, nullptr, 0, const_cast<PUCHAR>(key_material.data()), ULONG(key_material.size()), key.data(),
+               ULONG(key.size()));
     BCryptCloseAlgorithmProvider(alg, 0);
   }
   return key;
@@ -76,13 +86,48 @@ FigureBlock EncryptFigureBlock(const FigureData& data, uint8_t block_index, cons
   return Aes(BlockKey(data, block_index), plain.data(), true);
 }
 
+#elif defined(SKYLANDERS_PORTAL_CRYPTO_OPENSSL)
+
+std::array<uint8_t, 16> BlockKey(const FigureData& data, uint8_t block_index) {
+  const auto key_material = BlockKeyMaterial(data, block_index);
+  std::array<uint8_t, 16> key{};
+  std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> md(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+  unsigned int md_len = 0;
+  if (md && EVP_DigestInit_ex(md.get(), EVP_md5(), nullptr) == 1 &&
+      EVP_DigestUpdate(md.get(), key_material.data(), key_material.size()) == 1) {
+    EVP_DigestFinal_ex(md.get(), key.data(), &md_len);
+  }
+  return key;
+}
+
+FigureBlock Aes(const std::array<uint8_t, 16>& key, const uint8_t* in, bool encrypt) {
+  FigureBlock out{};
+  std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)> ctx(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+  if (!ctx) return out;
+  int len = 0;
+  int final_len = 0;
+  if (EVP_CipherInit_ex(ctx.get(), EVP_aes_128_ecb(), nullptr, key.data(), nullptr, encrypt ? 1 : 0) == 1 &&
+      EVP_CIPHER_CTX_set_padding(ctx.get(), 0) == 1 &&
+      EVP_CipherUpdate(ctx.get(), out.data(), &len, in, int(kBlockSize)) == 1) {
+    EVP_CipherFinal_ex(ctx.get(), out.data() + len, &final_len);
+  }
+  return out;
+}
+
+}  // namespace
+
+FigureBlock DecryptFigureBlock(const FigureData& data, uint8_t block_index) {
+  return Aes(BlockKey(data, block_index), data.data() + block_index * kBlockSize, false);
+}
+
+FigureBlock EncryptFigureBlock(const FigureData& data, uint8_t block_index, const FigureBlock& plain) {
+  return Aes(BlockKey(data, block_index), plain.data(), true);
+}
+
 #else
 
 std::array<uint8_t, AES_ROUND_KEY_SIZE> RoundKeys(const FigureData& data, uint8_t block_index) {
-  std::array<uint8_t, 0x20 + 1 + kKeyConstant.size()> key_material{};
-  std::memcpy(key_material.data(), data.data(), 0x20);
-  key_material[0x20] = block_index;
-  std::memcpy(key_material.data() + 0x21, kKeyConstant.data(), kKeyConstant.size());
+  const auto key_material = BlockKeyMaterial(data, block_index);
 
   std::array<uint8_t, 16> key{};
   md5_buffer(reinterpret_cast<const char*>(key_material.data()), key_material.size(), key.data());

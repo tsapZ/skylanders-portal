@@ -32,6 +32,13 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <cerrno>
+#include <cstdlib>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #endif
 
 REXCVAR_DEFINE_BOOL(discord_presence, true, "General",
@@ -188,8 +195,6 @@ std::string Activity(int64_t start, const std::string& party, std::string* shown
   return json;
 }
 
-#ifdef _WIN32
-
 // One connection to the Discord app: frames of an opcode, a length and JSON.
 class DiscordPipe {
  public:
@@ -197,15 +202,46 @@ class DiscordPipe {
 
   ~DiscordPipe() { Close(); }
 
+#ifdef _WIN32
   bool connected() const { return pipe_ != INVALID_HANDLE_VALUE; }
+#else
+  bool connected() const { return fd_ >= 0; }
+#endif
 
   // `refused`: Discord answered, but said no (an unknown application, for instance).
   bool Connect(const char* client_id, bool* refused) {
     *refused = false;
+#ifdef _WIN32
     for (int i = 0; i < 10 && !connected(); ++i) {
       const std::wstring name = L"\\\\.\\pipe\\discord-ipc-" + std::to_wstring(i);
       pipe_ = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
     }
+#else
+    auto try_dir = [&](const std::string& dir) {
+      if (dir.empty()) return;
+      for (int i = 0; i < 10 && !connected(); ++i) {
+        const std::string path = dir + "/discord-ipc-" + std::to_string(i);
+        sockaddr_un addr{};
+        if (path.size() >= sizeof(addr.sun_path)) continue;
+        const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) continue;
+        addr.sun_family = AF_UNIX;
+        std::memcpy(addr.sun_path, path.data(), path.size() + 1);
+        if (::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0) {
+          fd_ = fd;
+        } else {
+          ::close(fd);
+        }
+      }
+    };
+    if (const char* xdg = std::getenv("XDG_RUNTIME_DIR"); xdg && xdg[0]) {
+      try_dir(xdg);
+      try_dir(std::string(xdg) + "/app/com.discordapp.Discord");
+      try_dir(std::string(xdg) + "/snap.discord");
+    }
+    if (const char* tmp = std::getenv("TMPDIR"); tmp && tmp[0]) try_dir(tmp);
+    try_dir("/tmp");
+#endif
     if (!connected()) return false;
     if (!Write(kHandshake, std::string("{\"v\":1,\"client_id\":\"") + client_id + "\"}")) {
       Close();
@@ -233,8 +269,13 @@ class DiscordPipe {
   }
 
   void Close() {
+#ifdef _WIN32
     if (connected()) CloseHandle(pipe_);
     pipe_ = INVALID_HANDLE_VALUE;
+#else
+    if (connected()) ::close(fd_);
+    fd_ = -1;
+#endif
   }
 
   bool Write(uint32_t op, const std::string& json) {
@@ -243,23 +284,55 @@ class DiscordPipe {
     std::memcpy(frame.data(), &op, 4);
     std::memcpy(frame.data() + 4, &size, 4);
     std::memcpy(frame.data() + 8, json.data(), json.size());
+#ifdef _WIN32
     DWORD written = 0;
     if (!WriteFile(pipe_, frame.data(), static_cast<DWORD>(frame.size()), &written, nullptr) ||
         written != frame.size()) {
       Close();
       return false;
     }
+#else
+    size_t sent_bytes = 0;
+    while (sent_bytes < frame.size()) {
+#ifdef MSG_NOSIGNAL
+      const ssize_t n = ::send(fd_, frame.data() + sent_bytes, frame.size() - sent_bytes, MSG_NOSIGNAL);
+#else
+      const ssize_t n = ::write(fd_, frame.data() + sent_bytes, frame.size() - sent_bytes);
+#endif
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) {
+        Close();
+        return false;
+      }
+      sent_bytes += size_t(n);
+    }
+#endif
     return true;
   }
 
   // 1: a frame read; 0: none waiting; -1: the connection is gone.
   int Read(uint32_t* op, std::string* payload) {
+#ifdef _WIN32
     DWORD waiting = 0;
     if (!PeekNamedPipe(pipe_, nullptr, 0, nullptr, &waiting, nullptr)) {
       Close();
       return -1;
     }
     if (waiting < 8) return 0;
+#else
+    pollfd pfd{};
+    pfd.fd = fd_;
+    pfd.events = POLLIN;
+    int pr = 0;
+    do {
+      pr = ::poll(&pfd, 1, 0);
+    } while (pr < 0 && errno == EINTR);
+    if (pr < 0 || (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+      Close();
+      return -1;
+    }
+    if (pr == 0 || (pfd.revents & POLLIN) == 0) return 0;
+#endif
     uint32_t header[2];
     if (!ReadAll(header, sizeof(header)) || header[1] > 1 << 20) {
       Close();
@@ -304,23 +377,39 @@ class DiscordPipe {
   }
 
  private:
-  bool ReadAll(void* to, DWORD size) {
+  bool ReadAll(void* to, size_t size) {
     auto* p = static_cast<char*>(to);
     while (size) {
+#ifdef _WIN32
       DWORD got = 0;
-      if (!ReadFile(pipe_, p, size, &got, nullptr) || got == 0) return false;
+      if (!ReadFile(pipe_, p, static_cast<DWORD>(size), &got, nullptr) || got == 0) return false;
       p += got;
       size -= got;
+#else
+      const ssize_t got = ::recv(fd_, p, size, 0);
+      if (got < 0 && errno == EINTR) continue;
+      if (got <= 0) return false;
+      p += got;
+      size -= size_t(got);
+#endif
     }
     return true;
   }
 
+#ifdef _WIN32
   HANDLE pipe_ = INVALID_HANDLE_VALUE;
+#else
+  int fd_ = -1;
+#endif
 };
 
 void Run(const char* client_id) {
   const int64_t start = static_cast<int64_t>(std::time(nullptr));
-  const DWORD pid = GetCurrentProcessId();
+#ifdef _WIN32
+  const unsigned long pid = static_cast<unsigned long>(GetCurrentProcessId());
+#else
+  const unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
   const std::string party = "skylanders-" + std::to_string(pid) + "-" + std::to_string(start);
   DiscordPipe pipe;
   Clock::time_point next_try{}, last_send{};
@@ -375,20 +464,14 @@ void Run(const char* client_id) {
   }
 }
 
-#endif  // _WIN32
-
 }  // namespace
 
 void StartDiscordPresence(std::string_view game) {
-#ifdef _WIN32
   for (const DiscordApp& app : kApps) {
     if (app.game != game) continue;
     std::thread([id = app.client_id] { Run(id); }).detach();
     return;
   }
-#else
-  (void)game;
-#endif
 }
 
 void SetDiscordLevelNames(DiscordLevelNameProvider provider) {

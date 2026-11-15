@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <initializer_list>
 #include <string>
 #include <unordered_map>
 
@@ -200,10 +202,30 @@ const ImFontLoader* BitmapLoader() {
 const ImWchar kWindowsRanges[] = {0x0020, 0x00FF, 0x0100, 0x017F, 0x2000, 0x206F,
                                   0x2190, 0x21FF, 0x25A0, 0x25FF, 0};
 
-// The game's font with the Windows font merged in for the glyphs it lacks, or just the Windows
-// font without one.
+// Picks the first existing fallback TTF from `candidates`, probing exe-adjacent relative paths first.
+std::string FindFallbackFontPath(std::initializer_list<const char*> candidates) {
+  std::filesystem::path exe_dir;
+#if defined(__linux__)
+  std::error_code sym_ec;
+  const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", sym_ec);
+  if (!sym_ec && !exe.empty()) exe_dir = exe.parent_path();
+#endif
+  std::error_code ec;
+  for (const char* candidate : candidates) {
+    if (!candidate || !candidate[0]) continue;
+    const std::filesystem::path p(candidate);
+    if (p.is_relative() && !exe_dir.empty()) {
+      const std::filesystem::path next_to_exe = exe_dir / p;
+      if (std::filesystem::is_regular_file(next_to_exe, ec)) return next_to_exe.string();
+    }
+    if (std::filesystem::is_regular_file(p, ec)) return p.string();
+  }
+  return {};
+}
+
+// The game's font with a system/bundled TTF merged in for glyphs it lacks, or the fallback TTF alone.
 ImFont* AddFont(ImFontAtlas* atlas, const std::shared_ptr<const GameFont>& game, const char* name,
-                const char* windows_ttf, float size) {
+                std::initializer_list<const char*> fallback_ttfs, float size) {
   ImFont* font = nullptr;
   if (game && !game->glyphs.empty() && game->size > 0) {
     BitmapSource& source = g_bitmap_sources[name];
@@ -221,27 +243,52 @@ ImFont* AddFont(ImFontAtlas* atlas, const std::shared_ptr<const GameFont>& game,
     cfg.SizePixels = size;
     font = atlas->AddFont(&cfg);
   }
-#ifdef _WIN32
-  if (font) {
-    ImFontConfig merge;
-    merge.MergeMode = true;
-    atlas->AddFontFromFileTTF(windows_ttf, size, &merge, kWindowsRanges);
-  } else {
-    font = atlas->AddFontFromFileTTF(windows_ttf, size, nullptr, kWindowsRanges);
+  const std::string fallback = FindFallbackFontPath(fallback_ttfs);
+  if (!fallback.empty()) {
+    if (font) {
+      ImFontConfig merge;
+      merge.MergeMode = true;
+      atlas->AddFontFromFileTTF(fallback.c_str(), size, &merge, kWindowsRanges);
+    } else {
+      font = atlas->AddFontFromFileTTF(fallback.c_str(), size, nullptr, kWindowsRanges);
+    }
   }
-#else
-  (void)windows_ttf;
-#endif
   return font;
 }
 
 }  // namespace
 
 void AddFonts(ImFontAtlas* atlas) {
+#ifdef _WIN32
   g_font_title = AddFont(atlas, g_game_fonts.title, "game font: title",
-                         "C:\\Windows\\Fonts\\seguibl.ttf", kTitleBakeSize);
+                         {"C:\\Windows\\Fonts\\seguibl.ttf"}, kTitleBakeSize);
   g_font_bold = AddFont(atlas, g_game_fonts.body, "game font: body",
-                        "C:\\Windows\\Fonts\\segoeuib.ttf", kBoldBakeSize);
+                        {"C:\\Windows\\Fonts\\segoeuib.ttf"}, kBoldBakeSize);
+#else
+  g_font_title = AddFont(
+      atlas, g_game_fonts.title, "game font: title",
+      {"fonts/NotoSans-Bold.ttf",
+       "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+       "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+       "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+       "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+       "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+       "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+       "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"},
+      kTitleBakeSize);
+  g_font_bold = AddFont(
+      atlas, g_game_fonts.body, "game font: body",
+      {"fonts/NotoSans-Bold.ttf",
+       "fonts/NotoSans-Regular.ttf",
+       "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+       "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+       "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+       "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+       "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+       "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+       "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"},
+      kBoldBakeSize);
+#endif
 }
 
 ImFont* TitleFont() { return g_font_title ? g_font_title : ImGui::GetFont(); }
