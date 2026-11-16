@@ -4399,7 +4399,16 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       }
       return;
     }
-    if (character.swapper) Pill(dl, {p0.x + S(6), p0.y + S(6)}, "SWAP", kGold, kInk);
+    // A favourite: a gold star on a dark disc in the picture's top-left corner, the same place on every card
+    // (the owner, 2026-11-16: easy to see at a glance); the pills that start there move right of it.
+    const float star_r = S(13);
+    const float star_w = favourite ? 2 * (star_r + S(4)) + S(6) : 0;
+    if (favourite) {
+      const ImVec2 c{p0.x + S(6) + star_r + S(4), p0.y + S(6) + star_r + S(4)};
+      dl->AddCircleFilled(c, star_r + S(4), Rgba(10, 12, 30, 225), 32);
+      DrawFavouriteStar(dl, c, star_r);
+    }
+    if (character.swapper) Pill(dl, {p0.x + S(6) + star_w, p0.y + S(6)}, "SWAP", kGold, kInk);
     // On the portal: the sidekick there, or this player's own Skylander; blue for a real toy's copy
     // (TrapTeamRecomp #22: the menu didn't show what was on the portal, nor which was real).
     const bool real = !character.sidekick && mine_real_.count(character.name) != 0;
@@ -4431,17 +4440,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       level_w = PillWidth(lv) + S(6);
       Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
     }
-    // A favourite: a gold star in the picture's top-right corner, left of a level pill, on a dark disc so
-    // it shows on any picture (a gold mask like Double Trouble's hid it).
-    if (favourite) {
-      const float r = S(11);
-      const ImVec2 c{p1.x - S(8) - r - level_w, p0.y + S(8) + r};
-      dl->AddCircleFilled(c, r + S(4), Rgba(10, 12, 30, 225), 32);
-      DrawFavouriteStar(dl, c, r);
-    }
-    // A trap: the villain it holds, along its top, left of a level pill (TrapTeamRecomp #17).
+    // A trap: the villain it holds, along its top, left of a level pill (TrapTeamRecomp #17), right of a
+    // favourite's star.
     if (owned && owned->trap && character.sidekick) {
-      DrawVillainPill(dl, {p0.x + S(6), p0.y + S(6)}, p1.x - p0.x - S(12) - level_w, *owned->trap);
+      DrawVillainPill(dl, {p0.x + S(6) + star_w, p0.y + S(6)}, p1.x - p0.x - S(12) - level_w - star_w,
+                      *owned->trap);
       // The villain's picture from the game, round as a badge in the picture's bottom-right corner
       // (SkylandersCoreOfLight #98); above the "on the portal" pill while the trap is on the portal.
       if (owned->trap->villain_id != 0) {
