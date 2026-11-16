@@ -7,6 +7,9 @@
 // portal/soul_gem_names.h); the log gets one line per Skylander ("Soul Gem movie: Chop Chop
 // (game:\movies\chopchop.bik)"), and a Soul Gem run (run_rules.h) unlocks it.
 
+#include <cstdint>
+#include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,6 +25,17 @@ void WatchSoulGems(std::string (*skylander_of)(std::string_view path));
 // The Skylanders whose Soul Gem movie opened since the game started, oldest first, each once.
 // Any thread.
 std::vector<std::string> SoulGemsSeen();
+
+// Soul Gems from the game's slot saves, for a game whose movie only opens when the player watches the
+// preview (Spyro's Adventure, 2026-11-16: with No nothing opens; the save always gets the gem, see
+// portal/save_medals.h). `slots` lists the slot files to watch; `finds` names the Skylanders whose gems
+// the newer save has and the older one hasn't (an empty `before` for a slot that is new). A thread of its
+// own looks at the files' times once a second and reads a file once its time stayed the same for a
+// second (the game has finished writing it); each name goes the movie's way (a log line "Soul Gem
+// (save): <name>", SoulGemsSeen, OnSoulGem). Set once, before the game runs.
+void WatchSoulGemSaves(std::vector<std::filesystem::path> (*slots)(),
+                       std::vector<std::string> (*finds)(std::span<const uint8_t> before,
+                                                         std::span<const uint8_t> after));
 
 // Called with each Skylander's name right after its line (the portal menu: a Soul Gem run's
 // find), on the thread that opened the movie. Set once, before the game runs.

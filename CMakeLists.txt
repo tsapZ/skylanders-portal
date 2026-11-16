@@ -91,6 +91,7 @@ add_library(skylanders_portal_core STATIC
     src/portal/prompt_icons.cpp
     src/portal/prompt_tables.cpp
     src/portal/run_logic.cpp
+    src/portal/save_medals.cpp
     src/portal/soul_gem_names.cpp
     src/portal/xbox_frame.cpp
     src/portal/software/software_portal.cpp
@@ -116,7 +117,7 @@ if(SKYLANDERS_PORTAL_TESTS)
     foreach(t portal_framing_test portal_mode_test software_portal_test figure_file_test
               figure_catalog_test figure_crypto_test figure_stats_test audio_test xam_bridge_test
               trap_villain_test g726_test figure_info_test real_portal_bridge_test traffic_log_test
-              old_portal_light_test prompt_icons_test run_logic_test soul_gem_names_test mod_list_test
+              old_portal_light_test prompt_icons_test run_logic_test save_medals_test soul_gem_names_test mod_list_test
               menu_favourites_test problem_report_test case_path_test)
         add_executable(skylanders_${t} tests/${t}.cpp)
         target_include_directories(skylanders_${t} PRIVATE tests)
