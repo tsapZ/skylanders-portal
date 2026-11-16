@@ -4431,10 +4431,13 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       level_w = PillWidth(lv) + S(6);
       Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
     }
-    // A favourite: a small gold star in the picture's top-right corner, left of a level pill.
+    // A favourite: a gold star in the picture's top-right corner, left of a level pill, on a dark disc so
+    // it shows on any picture (a gold mask like Double Trouble's hid it).
     if (favourite) {
-      const float r = S(9);
-      DrawFavouriteStar(dl, {p1.x - S(6) - r - level_w, p0.y + S(6) + r}, r);
+      const float r = S(11);
+      const ImVec2 c{p1.x - S(8) - r - level_w, p0.y + S(8) + r};
+      dl->AddCircleFilled(c, r + S(4), Rgba(10, 12, 30, 225), 32);
+      DrawFavouriteStar(dl, c, r);
     }
     // A trap: the villain it holds, along its top, left of a level pill (TrapTeamRecomp #17).
     if (owned && owned->trap && character.sidekick) {
