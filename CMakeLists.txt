@@ -73,6 +73,7 @@ add_library(skylanders_portal_core STATIC
     src/portal/figure_stats.cpp
     src/portal/g726.cpp
     src/portal/hybrid/real_portal_bridge.cpp
+    src/portal/menu_favourites.cpp
     src/portal/mod_list.cpp
     src/portal/old_portal_light.cpp
     src/portal/portal_mode.cpp
@@ -106,7 +107,7 @@ if(SKYLANDERS_PORTAL_TESTS)
               figure_catalog_test figure_stats_test audio_test xam_bridge_test
               trap_villain_test g726_test figure_info_test real_portal_bridge_test traffic_log_test
               old_portal_light_test prompt_icons_test run_logic_test soul_gem_names_test mod_list_test
-              problem_report_test)
+              menu_favourites_test problem_report_test)
         add_executable(skylanders_${t} tests/${t}.cpp)
         target_include_directories(skylanders_${t} PRIVATE tests)
         target_link_libraries(skylanders_${t} PRIVATE skylanders_portal_core)

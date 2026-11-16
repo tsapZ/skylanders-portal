@@ -45,6 +45,7 @@
 #include "portal/figure_info.h"
 #include "portal/figure_stats.h"
 #include "portal/hybrid/real_portal_bridge.h"
+#include "portal/menu_favourites.h"
 #include "portal/software/software_portal.h"
 #include "portal/trap_villain.h"
 #include "dev/input_script.h"
@@ -114,6 +115,9 @@ enum class Text {
   kTitle,
   kPlayer,
   kRecent,
+  kFavourites,
+  kFavourite,
+  kUnfavourite,
   kPlace,
   kBack,
   kElement,
@@ -254,6 +258,9 @@ constexpr const char* kEnglish[] = {
     "PORTAL OF POWER",
     "Player %u",
     "Recent",
+    "Favourites",
+    "Favourite",
+    "Unfavourite",
     "Place",
     "Back",
     "Element",
@@ -399,6 +406,9 @@ constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
     "Spieler %u",
     "Zuletzt",
+    "Favoriten",
+    "Favorit",
+    "Kein Favorit",
     "Auflegen",
     "Zur\xC3\xBC"
     "ck",
@@ -1109,6 +1119,7 @@ struct Tab {
   std::string title;
   std::string game;  // game tabs: every character with a version from this game
   bool recent = false;
+  bool favourites = false;  // the player's favourite characters, grouped like a game tab
   bool items = false;
   bool titled = false;                   // rows named by row_titles (items: games; vehicles: terrain)
   std::vector<Element> elements;         // game tabs: the element of each row
@@ -1257,6 +1268,12 @@ std::filesystem::path PinnedFile(uint32_t user) {
   return FiguresDir() / ("portal_menu_pinned_p" + std::to_string(user + 1) + ".txt");
 }
 
+// The characters a player marked as favourites (R3 / F on a game tab's card), one character name
+// per line. A file of its own, read and written like the pinned entries' one.
+std::filesystem::path FavouritesFile(uint32_t user) {
+  return FiguresDir() / ("portal_menu_favourites_p" + std::to_string(user + 1) + ".txt");
+}
+
 std::vector<std::vector<std::filesystem::path>> LoadEntries(const std::filesystem::path& file) {
   std::vector<std::vector<std::filesystem::path>> recent;
   std::ifstream in(file);
@@ -1315,6 +1332,13 @@ void TogglePinned(uint32_t user, const std::vector<std::filesystem::path>& paths
     pinned.push_back(paths);
   }
   SaveEntries(PinnedFile(user), pinned);
+}
+
+// R3 / F on a game tab's card: the character is a favourite, or no longer one.
+void ToggleFavourite(uint32_t user, std::string_view name) {
+  std::vector<std::string> favourites = portal::LoadFavourites(FavouritesFile(user));
+  portal::ToggleFavourite(favourites, name);
+  portal::SaveFavourites(FavouritesFile(user), favourites);
 }
 
 // L3 in the Recent tab: out of the tab, pinned or not. The figure's file stays.
@@ -1470,13 +1494,51 @@ class Library {
       characters_[it->second].versions.push_back(version);
     }
 
-    // Recent first, then one tab per game with every character that has a version from that game
-    // (Drobot is in Spyro's Adventure with Series 1 and in Giants with Series 2 and LightCore),
-    // grouped by element.
+    // Recent first, then the favourites and one tab per game with every character that has a
+    // version from that game (Drobot is in Spyro's Adventure with Series 1 and in Giants with
+    // Series 2 and LightCore), grouped by element.
     Tab recent;
     recent.title = T(Text::kRecent);
     recent.recent = true;
     tabs_.push_back(recent);
+
+    // The player's favourites (R3 / F on a game tab's card), grouped by element like a game tab.
+    // The tab is only there while there is at least one.
+    favourites_ = portal::LoadFavourites(FavouritesFile(user));
+    std::vector<std::string> character_names;
+    character_names.reserve(characters_.size());
+    for (const Character& character : characters_) character_names.push_back(character.name);
+    Tab favourite_tab;
+    favourite_tab.title = T(Text::kFavourites);
+    favourite_tab.favourites = true;
+    for (size_t i : portal::FavouriteCharacters(character_names, favourites_)) {
+      const Character& character = characters_[i];
+      if (character.item) continue;
+      auto e = std::find(favourite_tab.elements.begin(), favourite_tab.elements.end(),
+                         character.element);
+      if (e == favourite_tab.elements.end()) {
+        favourite_tab.elements.push_back(character.element);
+        favourite_tab.rows.emplace_back();
+        e = favourite_tab.elements.end() - 1;
+      }
+      favourite_tab.rows[size_t(e - favourite_tab.elements.begin())].push_back(i);
+    }
+    if (!favourite_tab.rows.empty()) {
+      std::vector<size_t> order(favourite_tab.elements.size());
+      for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+      std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return ElementRank(favourite_tab.elements[a]) < ElementRank(favourite_tab.elements[b]);
+      });
+      Tab sorted;
+      sorted.title = favourite_tab.title;
+      sorted.favourites = true;
+      for (size_t i : order) {
+        sorted.elements.push_back(favourite_tab.elements[i]);
+        sorted.rows.push_back(std::move(favourite_tab.rows[i]));
+      }
+      tabs_.insert(tabs_.begin() + 1, std::move(sorted));
+    }
+
     const auto pinned = LoadEntries(PinnedFile(user));
     auto add_recent = [&](const std::vector<std::filesystem::path>& paths, bool is_pinned) {
       RecentEntry entry;
@@ -1661,6 +1723,9 @@ class Library {
   }
   const std::vector<RecentEntry>& recent() const { return recent_; }
 
+  // Whether this character is one of the player's favourites (FavouritesFile).
+  bool IsFavourite(std::string_view name) const { return portal::HasFavourite(favourites_, name); }
+
   const OwnedFigure* Owned(const SkylanderInfo* sky) const {
     if (!sky) return nullptr;
     if (g_split_set.contains(sky)) {
@@ -1827,6 +1892,7 @@ class Library {
   std::vector<Character> characters_;
   std::vector<Tab> tabs_;
   std::vector<RecentEntry> recent_;
+  std::vector<std::string> favourites_;  // the player's favourite character names
   std::unordered_map<uint16_t, std::string> known_ids_;  // figure id -> character name
 };
 
@@ -3109,6 +3175,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (!library_.recent().empty()) selected_ = extras_.size();
     if (library_.recent().empty() && extras_.empty() && library_.tabs().size() > 1) {
       tab_ = 1;
+      // The favourites tab comes right after Recent: with nothing to open there, a game tab.
+      while (tab_ + 1 < library_.tabs().size() && library_.tabs()[tab_].favourites) ++tab_;
       for (const LiftedFigure& figure : lifted_) {
         if (figure.sky && library_.Locate(figure.sky, tab_, element_, selected_)) break;
       }
@@ -3190,6 +3258,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       return nullptr;
     }
     return &library_.recent()[std::min(selected_ - extras_.size(), library_.recent().size() - 1)];
+  }
+
+  // A card on a game tab, or on the Favourites tab, which has the same cards.
+  bool OnGameCardTab() const {
+    const Tab& tab = CurrentTab();
+    return tab.favourites || (!tab.recent && !tab.items && !tab.game.empty());
   }
 
   // The player who has this character on the portal, if it's another one.
@@ -3367,6 +3441,18 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       RebuildLibrary();
       // The same place in the list, not back to its start.
       selected_ = ItemCount() ? std::min(keep, ItemCount() - 1) : 0;
+      return;
+    }
+    // R3 / F on a game tab's card: the character is a favourite, or no longer one. The Recent
+    // tab's pin is above and the magic items tab has none.
+    if (const Character* character = SelectedCharacter(); character && a.pin && OnGameCardTab()) {
+      const SkylanderInfo* sky = character->versions.empty() ? nullptr : character->versions.front().sky;
+      const std::string name = character->name;
+      ToggleFavourite(user_, name);
+      RebuildLibrary();
+      // The same card, wherever it is now: the Favourites tab coming or going shifts the tabs
+      // after Recent.
+      if (sky) library_.Locate(sky, tab_, element_, selected_);
       return;
     }
     // A swapper in Recent: LB changes its top, RB its bottom, the other half stays (the owner's
@@ -4064,6 +4150,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         x += Hint(dl, {x, y}, "R3", grey, T(entry->pinned ? Text::kUnpinRecent : Text::kPinRecent), false, "F");
         x += Hint(dl, {x, y}, "L3", grey, T(Text::kRemoveRecent), false, "Del");
       }
+      if (const Character* character = SelectedCharacter(); character && OnGameCardTab()) {
+        x += Hint(dl, {x, y}, "R3", grey,
+                  T(library_.IsFavourite(character->name) ? Text::kUnfavourite : Text::kFavourite),
+                  false, "F");
+      }
       if (current_item_) {
         x += Hint(dl, {x, y}, "Y", Rgba(230, 180, 40), T(Text::kTakeOffItem), true, "P");
       }
@@ -4151,12 +4242,13 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         }
       }
       if (tab.recent && i < extras_.size()) {
-        DrawCharacterCard(dl, a, b, library_.characters()[extras_[i]], i == selected_);
+        DrawCharacterCard(dl, a, b, library_.characters()[extras_[i]], i == selected_, false);
       } else if (tab.recent) {
         DrawRecentCard(dl, a, b, library_.recent()[i - extras_.size()], i == selected_);
       } else {
-        DrawCharacterCard(dl, a, b, library_.characters()[tab.rows[element_][i]],
-                          i == selected_);
+        const Character& character = library_.characters()[tab.rows[element_][i]];
+        DrawCharacterCard(dl, a, b, character, i == selected_,
+                          !tab.items && library_.IsFavourite(character.name));
       }
     }
     dl->PopClipRect();
@@ -4276,8 +4368,21 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     Label(dl, BoldFont(), S(19), {c.x - ts.x / 2, c.y - ts.y / 2}, kWhite, text);
   }
 
+  // A favourite's small gold star, in its picture's top-right corner.
+  void DrawFavouriteStar(ImDrawList* dl, ImVec2 c, float r) {
+    constexpr float kPi = 3.14159265f;
+    ImVec2 pts[10];
+    for (int i = 0; i < 10; ++i) {
+      const float a = -kPi / 2 + i * kPi / 5.0f;
+      const float rr = (i % 2) ? r * 0.42f : r;
+      pts[i] = {c.x + std::cos(a) * rr, c.y + std::sin(a) * rr};
+    }
+    dl->AddConcavePolyFilled(pts, 10, kGold);
+    dl->AddPolyline(pts, 10, kInk, ImDrawFlags_Closed, S(1.5f));
+  }
+
   void DrawCharacterCard(ImDrawList* dl, ImVec2 a, ImVec2 b, const Character& character,
-                         bool selected) {
+                         bool selected, bool favourite) {
     const Version& version = ShownVersion(character);
     const SkylanderInfo* shown = version.sky;
     // Chests of one kind (SplitToys) by their file's name.
@@ -4325,6 +4430,11 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       const std::string lv = "Lv " + std::to_string(owned->stats->level);
       level_w = PillWidth(lv) + S(6);
       Pill(dl, {p1.x - S(6) - PillWidth(lv), p0.y + S(6)}, lv, kGold, kInk);
+    }
+    // A favourite: a small gold star in the picture's top-right corner, left of a level pill.
+    if (favourite) {
+      const float r = S(9);
+      DrawFavouriteStar(dl, {p1.x - S(6) - r - level_w, p0.y + S(6) + r}, r);
     }
     // A trap: the villain it holds, along its top, left of a level pill (TrapTeamRecomp #17).
     if (owned && owned->trap && character.sidekick) {
