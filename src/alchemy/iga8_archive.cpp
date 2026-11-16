@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "alchemy/case_path.h"
 #include "alchemy/lzma_decoder.h"
 
 namespace skylanders::alchemy {
@@ -24,7 +25,7 @@ uint16_t Le16(const uint8_t* p) { return uint16_t(p[0] | (p[1] << 8)); }
 
 std::unique_ptr<Iga8Archive> Iga8Archive::Open(const std::filesystem::path& path) {
   auto archive = std::make_unique<Iga8Archive>();
-  archive->in_.open(path, std::ios::binary | std::ios::ate);
+  archive->in_.open(ResolveCasePath(path), std::ios::binary | std::ios::ate);
   if (!archive->in_) return nullptr;
   archive->file_size_ = uint64_t(archive->in_.tellg());
   uint8_t h[kHeaderSize];

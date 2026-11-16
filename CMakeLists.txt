@@ -52,14 +52,24 @@ set(SKYLANDERS_PORTAL_FIGURE_SOURCES
     src/portal/trap_villain.cpp
 )
 if(NOT REXSDK_DIR)
-    if(NOT WIN32)
-        message(FATAL_ERROR "skylanders-portal: set REXSDK_DIR to a rexglue-sdk source tree")
-    endif()
     add_library(skylanders_portal_figures STATIC ${SKYLANDERS_PORTAL_FIGURE_SOURCES})
     target_include_directories(skylanders_portal_figures PUBLIC src)
-    target_compile_definitions(skylanders_portal_figures PRIVATE SKYLANDERS_PORTAL_CRYPTO_CNG)
-    target_link_libraries(skylanders_portal_figures PRIVATE bcrypt shell32 ole32)
+    if(WIN32)
+        target_compile_definitions(skylanders_portal_figures PRIVATE SKYLANDERS_PORTAL_CRYPTO_CNG)
+        target_link_libraries(skylanders_portal_figures PRIVATE bcrypt shell32 ole32)
+    else()
+        find_package(OpenSSL REQUIRED)
+        target_compile_definitions(skylanders_portal_figures PRIVATE SKYLANDERS_PORTAL_CRYPTO_OPENSSL)
+        target_link_libraries(skylanders_portal_figures PRIVATE OpenSSL::Crypto)
+    endif()
     target_compile_features(skylanders_portal_figures PUBLIC cxx_std_23)
+    if(SKYLANDERS_PORTAL_TESTS AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        enable_testing()
+        add_executable(skylanders_figure_crypto_test tests/figure_crypto_test.cpp)
+        target_include_directories(skylanders_figure_crypto_test PRIVATE tests)
+        target_link_libraries(skylanders_figure_crypto_test PRIVATE skylanders_portal_figures)
+        add_test(NAME skylanders_figure_crypto_test COMMAND skylanders_figure_crypto_test)
+    endif()
     return()
 endif()
 
@@ -104,10 +114,10 @@ option(SKYLANDERS_PORTAL_TESTS "Build skylanders-portal unit tests" ON)
 if(SKYLANDERS_PORTAL_TESTS)
     enable_testing()
     foreach(t portal_framing_test portal_mode_test software_portal_test figure_file_test
-              figure_catalog_test figure_stats_test audio_test xam_bridge_test
+              figure_catalog_test figure_crypto_test figure_stats_test audio_test xam_bridge_test
               trap_villain_test g726_test figure_info_test real_portal_bridge_test traffic_log_test
               old_portal_light_test prompt_icons_test run_logic_test soul_gem_names_test mod_list_test
-              menu_favourites_test problem_report_test)
+              menu_favourites_test problem_report_test case_path_test)
         add_executable(skylanders_${t} tests/${t}.cpp)
         target_include_directories(skylanders_${t} PRIVATE tests)
         target_link_libraries(skylanders_${t} PRIVATE skylanders_portal_core)
@@ -154,6 +164,7 @@ if(TARGET rex::runtime)
         src/portal/usb/winusb_portal_io.cpp
         src/portal_rex/sdl_audio_sink.cpp
         src/portal_rex/speaker_overlay.cpp
+        src/portal/system_locale.cpp
         # Test tools: scripted input, memory watches, the crash report, GPU crash diagnostics,
         # where the player is (for problem reports).
         src/dev/gpu_diagnostics.cpp
@@ -168,5 +179,25 @@ if(TARGET rex::runtime)
     target_link_libraries(skylanders_portal_rex PRIVATE libavcodec libavutil)
     if(WIN32)
         target_link_libraries(skylanders_portal_rex PRIVATE windowscodecs ole32)
+    else()
+        find_package(ZLIB REQUIRED)
+        target_include_directories(skylanders_portal_rex PRIVATE "${REXSDK_DIR}/thirdparty/stb")
+        target_link_libraries(skylanders_portal_rex PRIVATE ZLIB::ZLIB)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(SKYLANDERS_LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
+            target_link_libraries(skylanders_portal_rex PRIVATE PkgConfig::SKYLANDERS_LIBUSB)
+        endif()
+    endif()
+    if(SKYLANDERS_PORTAL_TESTS)
+        enable_testing()
+        add_executable(skylanders_png_file_test tests/png_file_test.cpp)
+        target_include_directories(skylanders_png_file_test PRIVATE tests)
+        target_link_libraries(skylanders_png_file_test PRIVATE skylanders_portal_rex)
+        add_test(NAME skylanders_png_file_test COMMAND skylanders_png_file_test)
+        add_executable(skylanders_system_locale_test tests/system_locale_test.cpp src/portal/system_locale.cpp)
+        target_include_directories(skylanders_system_locale_test PRIVATE src tests)
+        target_compile_features(skylanders_system_locale_test PRIVATE cxx_std_23)
+        add_test(NAME skylanders_system_locale_test COMMAND skylanders_system_locale_test)
     endif()
 endif()

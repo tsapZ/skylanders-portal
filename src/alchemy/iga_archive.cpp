@@ -4,6 +4,7 @@
 #include <cstring>
 #include <fstream>
 
+#include "alchemy/case_path.h"
 #include "alchemy/inflate.h"
 #include "alchemy/lzma_decoder.h"
 
@@ -24,7 +25,7 @@ uint16_t Be16(const std::vector<uint8_t>& d, size_t at) {
 }  // namespace
 
 std::optional<IgaArchive> IgaArchive::Open(const std::filesystem::path& path) {
-  std::ifstream in(path, std::ios::binary | std::ios::ate);
+  std::ifstream in(ResolveCasePath(path), std::ios::binary | std::ios::ate);
   if (!in) return std::nullopt;
   const std::streamsize length = in.tellg();
   if (length < 0x38) return std::nullopt;

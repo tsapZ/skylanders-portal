@@ -68,6 +68,7 @@ fs::path DataFolderPointer() {
 }
 
 fs::path PortableFolder() {
+  fs::path exe_path;
 #ifdef _WIN32
   std::wstring exe(MAX_PATH, L'\0');
   for (;;) {
@@ -79,14 +80,20 @@ fs::path PortableFolder() {
     }
     exe.resize(exe.size() * 2);
   }
-  fs::path dir = fs::path(exe).parent_path();
+  exe_path = fs::path(exe);
+#elif defined(__linux__)
+  std::error_code symlink_ec;
+  exe_path = fs::read_symlink("/proc/self/exe", symlink_ec);
+  if (symlink_ec) return {};
+#endif
+  if (exe_path.empty()) return {};
+  fs::path dir = exe_path.parent_path();
   std::error_code ec;
   for (int up = 0; up <= 3 && !dir.empty(); ++up) {
     if (fs::is_regular_file(dir / kPortableMarker, ec)) return dir;
     if (dir == dir.root_path()) break;
     dir = dir.parent_path();
   }
-#endif
   return {};
 }
 

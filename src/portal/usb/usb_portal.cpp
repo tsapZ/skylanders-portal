@@ -31,12 +31,36 @@ namespace skylanders::portal {
 namespace {
 
 
-// hid_error() returns a UTF-16 string on Windows (wchar_t and char16_t are the same width there,
-// just distinct types) -- narrow it for REXLOG, which expects UTF-8.
+// hid_error() returns a wide string whose encoding matches Windows UTF-16 (wchar_t is 16-bit) or
+// POSIX UTF-32 (wchar_t is 32-bit) -- narrow it for REXLOG, which expects UTF-8.
 std::string HidErrorUtf8(hid_device* device) {
   const wchar_t* message = hid_error(device);
   if (message == nullptr) return "(no error message)";
-  return rex::string::to_utf8(std::u16string_view(reinterpret_cast<const char16_t*>(message)));
+  if constexpr (sizeof(wchar_t) == 2) {
+    return rex::string::to_utf8(std::u16string_view(reinterpret_cast<const char16_t*>(message)));
+  } else {
+    std::string out;
+    for (const wchar_t* p = message; *p != 0; ++p) {
+      uint32_t cp = static_cast<uint32_t>(*p);
+      if (cp >= 0xD800 && cp <= 0xDFFF || cp > 0x10FFFF) cp = 0xFFFD;
+      if (cp < 0x80) {
+        out.push_back(static_cast<char>(cp));
+      } else if (cp < 0x800) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+      } else if (cp < 0x10000) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+      } else {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+      }
+    }
+    return out;
+  }
 }
 
 #ifdef _WIN32

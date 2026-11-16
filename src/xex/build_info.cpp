@@ -4,6 +4,7 @@
 #include "xex/xex_verify.h"
 
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <thread>
 
@@ -13,6 +14,11 @@
 #include <intrin.h>
 #elif defined(__x86_64__) || defined(__i386__)
 #include <cpuid.h>
+#endif
+
+#if !defined(_WIN32)
+#include <sys/utsname.h>
+#include <unistd.h>
 #endif
 
 namespace skylanders::xex {
@@ -52,6 +58,21 @@ std::string OsName() {
 #elif defined(__APPLE__)
   return "macOS";
 #else
+  std::ifstream os_release("/etc/os-release");
+  std::string line;
+  while (std::getline(os_release, line)) {
+    constexpr std::string_view kPrefix = "PRETTY_NAME=";
+    if (!line.starts_with(kPrefix)) continue;
+    std::string value = line.substr(kPrefix.size());
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+      value = value.substr(1, value.size() - 2);
+    }
+    if (!value.empty()) return value;
+  }
+  struct utsname u {};
+  if (uname(&u) == 0 && u.sysname[0] != '\0') {
+    return u.release[0] ? std::string(u.sysname) + " " + u.release : std::string(u.sysname);
+  }
   return "Linux";
 #endif
 }
@@ -61,6 +82,13 @@ std::string MemoryText() {
   MEMORYSTATUSEX status = {sizeof(status)};
   if (GlobalMemoryStatusEx(&status)) {
     return std::to_string((status.ullTotalPhys + (512ull << 20)) >> 30) + " GB RAM";
+  }
+#elif defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+  const long pages = sysconf(_SC_PHYS_PAGES);
+  const long page_size = sysconf(_SC_PAGESIZE);
+  if (pages > 0 && page_size > 0) {
+    const unsigned long long total = static_cast<unsigned long long>(pages) * static_cast<unsigned long long>(page_size);
+    return std::to_string((total + (512ull << 20)) >> 30) + " GB RAM";
   }
 #endif
   return "RAM unknown";

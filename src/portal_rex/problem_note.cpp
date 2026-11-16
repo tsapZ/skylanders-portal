@@ -64,6 +64,10 @@ std::string ProgramName() {
 #if defined(_WIN32)
   wchar_t path[MAX_PATH] = {};
   if (GetModuleFileNameW(nullptr, path, MAX_PATH)) return Utf8Path(std::filesystem::path(path).stem());
+#elif defined(__linux__)
+  std::error_code ec;
+  const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+  if (!ec && !exe.empty()) return Utf8Path(exe.stem());
 #endif
   return "game";
 }
