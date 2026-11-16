@@ -487,6 +487,7 @@ std::optional<FigureData> UsbPortal::CachedFigureData(int slot) const {
 
 void UsbPortal::WriteAudio(std::span<const int16_t> pcm) {
   if (!IsOpen()) return;
+  if (SpeakerGaveUp()) return;
   std::call_once(audio_thread_started_,
                  [this] { audio_thread_ = std::thread([this] { AudioWriterLoop(); }); });
   // Never blocks the game thread: full packets go to the writer thread's bounded queue.
@@ -496,13 +497,24 @@ void UsbPortal::WriteAudio(std::span<const int16_t> pcm) {
 // Speaker audio goes out on the interrupt OUT endpoint (hid_write), unlike commands, which the
 // firmware only accepts as SET_REPORT (hid_send_output_report, see SendRaw).
 void UsbPortal::WriteAudioPacket(const AudioPacket& packet) {
-  std::lock_guard<std::mutex> lock(io_mutex_);
-  uint8_t out[1 + kAudioPacketSize];
-  out[0] = 0;  // report ID
-  std::memcpy(out + 1, packet.data(), kAudioPacketSize);
-  const bool ok = winusb_ ? winusb_->WriteInterrupt(packet.data(), kAudioPacketSize)
-                          : hid_write(device_, out, sizeof(out)) >= 0;
-  if (!ok) REXLOG_WARN("Portal: speaker audio write failed");
+  bool ok = false;
+  if (winusb_) {
+    // WinUsbPortalIo::WriteInterrupt has its own write lock, and the commands go over the control
+    // pipe, so these two don't need io_mutex_ (nor wait for each other).
+    ok = winusb_->WriteInterrupt(packet.data(), kAudioPacketSize);
+  } else {
+    std::lock_guard<std::mutex> lock(io_mutex_);
+    uint8_t out[1 + kAudioPacketSize];
+    out[0] = 0;  // report ID
+    std::memcpy(out + 1, packet.data(), kAudioPacketSize);
+    ok = hid_write(device_, out, sizeof(out)) >= 0;
+  }
+  if (speaker_health_.Note(ok)) {
+    REXLOG_WARN("Portal: the portal's speaker took no sound ({} writes in a row failed); the sound goes to the PC's "
+                "speakers now", SpeakerWriteHealth::kGiveUpAfter);
+  } else if (!ok) {
+    REXLOG_WARN("Portal: speaker audio write failed");
+  }
 }
 
 #if defined(_WIN32) && !defined(CREATE_WAITABLE_TIMER_HIGH_RESOLUTION)

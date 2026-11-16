@@ -46,5 +46,20 @@ int main() {
   });
   CHECK(!q.PopWait(std::chrono::seconds(5)).has_value());
   t.join();
+
+  // A portal's speaker gives up after three failed writes in a row, and only the third says so.
+  {
+    SpeakerWriteHealth health;
+    CHECK(!health.Note(false));
+    CHECK(!health.Note(false));
+    CHECK(!health.Note(true));  // a success resets the count
+    CHECK(!health.Note(false));
+    CHECK(!health.Note(false));
+    CHECK(health.Note(false));  // the third failure in a row gives up
+    CHECK(health.GaveUp());
+    CHECK(!health.Note(false));  // not again
+    CHECK(!health.Note(true));   // a later success doesn't undo it
+    CHECK(health.GaveUp());
+  }
   return Finish("audio");
 }

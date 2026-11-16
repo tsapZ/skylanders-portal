@@ -441,8 +441,13 @@ class UsbHotPlugPortal final : public skylanders::portal::PortalDevice {
       // On the PC's speakers instead of the portal's (Core of Light #67), with or without a portal.
       g_pc_speaker.WriteAudio(pcm);
     } else if (current_ && audio != "off") {
-      // portal_speaker_volume for the portal's own speaker too (Core of Light #67).
-      WritePortalAudioAtVolume(*current_, pcm);
+      if (current_->SpeakerGaveUp()) {
+        // The portal's speaker took no sound (Core of Light #102): the PC's speakers play it instead.
+        g_pc_speaker.WriteAudio(pcm);
+      } else {
+        // portal_speaker_volume for the portal's own speaker too (Core of Light #67).
+        WritePortalAudioAtVolume(*current_, pcm);
+      }
     }
   }
 
@@ -652,6 +657,9 @@ bool HybridSpeakerToPortal() {
 bool RouteHybridSpeakerPcm(std::span<const int16_t> pcm) {
   if (!HybridSpeakerToPortal()) return false;
   if (skylanders::portal::UsbPortal* usb = g_usb_portal.load()) {
+    // The portal's speaker took no sound (Core of Light #102): the usual way, the software portal's
+    // sink on the PC.
+    if (usb->SpeakerGaveUp()) return false;
     WritePortalAudioAtVolume(*usb, pcm);
     return true;
   }

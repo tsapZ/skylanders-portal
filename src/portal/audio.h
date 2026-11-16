@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -23,6 +24,29 @@ using AudioPacket = std::array<uint8_t, kAudioPacketSize>;
 
 // Reply bytes 2-3 to the 'M' command that tell the game the portal has a speaker.
 inline constexpr std::array<uint8_t, 2> kAudioCapableVersion = {0x01, 0x19};
+
+// A real portal's speaker writes: after kGiveUpAfter failures in a row it gives up for good, and the
+// speaker's sound goes elsewhere (Core of Light #102: a portal on WinUSB took none, and every try held
+// up the game for half a second).
+class SpeakerWriteHealth {
+ public:
+  static constexpr int kGiveUpAfter = 3;
+  // One write's result. Returns true only for the write that made it give up (so the caller logs once).
+  bool Note(bool ok) {
+    if (gave_up_.load()) return false;
+    if (ok) {
+      failures_ = 0;
+      return false;
+    }
+    if (++failures_ < kGiveUpAfter) return false;
+    gave_up_.store(true);
+    return true;
+  }
+  bool GaveUp() const { return gave_up_.load(); }   // any thread
+ private:
+  int failures_ = 0;               // writer thread only
+  std::atomic<bool> gave_up_{false};
+};
 
 // Collects PCM samples into full AudioPackets; leftover samples wait for the next Add.
 class PcmPacketizer {
