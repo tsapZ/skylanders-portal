@@ -496,6 +496,269 @@ void CaptureGuestFrames(uint32_t frames, const std::function<uint64_t()>& guest_
 #endif
 }
 
+// One event of the script that isn't a press or a stick move, at its time. `timeline`: false for a live line
+// (it never moves the script's own timeline, see g_timeline_shift).
+void RunEvent(const Event& e, const std::function<uint64_t()>& guest_frame_count, rex::memory::Memory* memory,
+              const std::function<void(std::function<void()>)>& run_in_ui, bool timeline) {
+  if (e.kind == Event::Kind::kLog) {
+    REXLOG_INFO("Input script: {}", e.text);
+  } else if (e.kind == Event::Kind::kFps) {
+    // The frame counter polled every millisecond: the rate, and the gaps between two frames
+    // (a stall, e.g. a shader compiled the first time, shows as a long one).
+    const uint64_t frames_before = guest_frame_count();
+    const auto time_before = Clock::now();
+    const auto until = time_before + std::chrono::duration_cast<Clock::duration>(
+                                         std::chrono::duration<double>(e.duration));
+    uint64_t last_count = frames_before;
+    auto last_frame = time_before;
+    double longest_ms = 0.0;
+    int over50 = 0;
+    while (Clock::now() < until) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      const uint64_t count = guest_frame_count();
+      if (count != last_count) {
+        const auto now = Clock::now();
+        const double gap = std::chrono::duration<double, std::milli>(now - last_frame).count();
+        if (last_count != frames_before) {  // the first gap started before the measurement
+          longest_ms = std::max(longest_ms, gap);
+          over50 += gap > 50.0;
+        }
+        last_count = count;
+        last_frame = now;
+      }
+    }
+    const uint64_t frames = guest_frame_count() - frames_before;
+    const double seconds = std::chrono::duration<double>(Clock::now() - time_before).count();
+    REXLOG_INFO("Input script: {:.1f} guest FPS ({} frames in {:.2f} s), longest frame {:.0f} ms, {} over 50 ms",
+                double(frames) / seconds, frames, seconds, longest_ms, over50);
+  } else if (e.kind == Event::Kind::kScan) {
+    ScanGuestMemory(memory, e.words);
+  } else if (e.kind == Event::Kind::kPoke) {
+    uint32_t address;
+    if (!ResolveAddress(memory, e, address)) return;
+    if (!Readable(memory, address, 4)) {
+      REXLOG_WARN("Input script: poke {:08X}, which isn't mapped", address);
+      return;
+    }
+    auto* host = memory->TranslateVirtual<uint8_t*>(address);
+    const uint32_t value = rex::byte_swap(e.words[1]);
+    std::memcpy(host, &value, 4);
+    REXLOG_INFO("Input script: poke {:08X} = {:08X}", address, e.words[1]);
+  } else if (e.kind == Event::Kind::kRenderDoc) {
+    CaptureGuestFrames(e.frames, guest_frame_count);
+  } else if (e.kind == Event::Kind::kPlayer) {
+    skylanders::menu_input::SetDevicePlayer(kScriptDevice, e.frames - 1);
+    REXLOG_INFO("Input script: now playing as player {}", e.frames);
+  } else if (e.kind == Event::Kind::kWatch) {
+    uint32_t address;
+    if (!ResolveAddress(memory, e, address)) return;
+    StartWriteWatch(memory, address,
+                    e.words.size() > 1 ? std::optional<uint32_t>(e.words[1]) : std::nullopt,
+                    e.text == "watchread", e.words.size() == 4 ? e.words[2] : 0,
+                    e.words.size() == 4 ? e.words[3] : 0);
+  } else if (e.kind == Event::Kind::kPollWatch) {
+    uint32_t address;
+    if (!ResolveAddress(memory, e, address)) return;
+    StartPollWatch(memory, address, uint32_t(e.frames));
+  } else if (e.kind == Event::Kind::kUnwatch) {
+    StopWriteWatch();
+  } else if (e.kind == Event::Kind::kStacks) {
+    LogThreadStacks(int(e.frames));
+  } else if (e.kind == Event::Kind::kSave) {
+    // Pages that aren't committed (or readable) are written as zeros, so any range works.
+    std::ofstream file(std::filesystem::u8path(e.text), std::ios::binary);
+    const std::vector<char> zeros(0x1000);
+    for (uint64_t page = e.words[0]; page < uint64_t(e.words[0]) + e.words[1];
+         page += 0x1000) {
+      rex::memory::BaseHeap* heap = memory->LookupHeap(uint32_t(page));
+      rex::memory::HeapAllocationInfo info{};
+      const bool readable = heap && heap->QueryRegionInfo(uint32_t(page), &info) &&
+                            (info.state & rex::memory::kMemoryAllocationCommit) &&
+                            (info.protect & rex::memory::kMemoryProtectRead);
+      const auto size = std::streamsize(
+          std::min<uint64_t>(0x1000, uint64_t(e.words[0]) + e.words[1] - page));
+      file.write(
+          readable ? memory->TranslateVirtual<const char*>(uint32_t(page)) : zeros.data(),
+          size);
+    }
+    REXLOG_INFO("Input script: saved {:08X}+{:X} to {}{}", e.words[0], e.words[1], e.text,
+                file ? "" : " (failed)");
+  } else if (e.kind == Event::Kind::kDump) {
+    uint32_t address;
+    if (!ResolveAddress(memory, e, address)) return;
+    if (!Readable(memory, address, 4 * e.frames)) {
+      REXLOG_WARN("Input script: dump {:08X}: not mapped", address);
+      return;
+    }
+    for (uint32_t i = 0; i < e.frames; i += 8) {
+      std::string line;
+      for (uint32_t k = i; k < e.frames && k < i + 8; ++k) {
+        uint32_t v;
+        std::memcpy(&v, memory->TranslateVirtual<const uint8_t*>(address + 4 * k), 4);
+        line += fmt::format(" {:08X}", rex::byte_swap(v));
+      }
+      REXLOG_INFO("Input script: dump {:08X}:{}", address + 4 * i, line);
+    }
+  } else if (e.kind == Event::Kind::kKey) {
+    // Through the key binds, as a key press in the window would go.
+    if (run_in_ui) {
+      run_in_ui([key = rex::ui::ParseVirtualKey(e.text)] {
+        rex::ui::KeyEvent event(nullptr, key, 1, false, false, false, false, false);
+        rex::ui::ProcessKeyEvent(event);
+      });
+    }
+    REXLOG_INFO("Input script: key {}", e.text);
+  } else if (e.kind == Event::Kind::kPlace) {
+    if (run_in_ui) {
+      run_in_ui([slot = int(e.frames), path = std::filesystem::u8path(e.text)] {
+        const bool placed = skylanders::PlaceFigureFromFile(slot, path);
+        REXLOG_INFO("Input script: {} slot {}", placed ? "placed in" : "could not place in",
+                    slot);
+      });
+    }
+  } else if (e.kind == Event::Kind::kTrap) {
+    if (run_in_ui) {
+      run_in_ui([slot = int(e.frames), name = e.text] {
+        const skylanders::portal::TrapVillain* villain = nullptr;
+        for (const auto& v : skylanders::portal::AllTrapVillains()) {
+          if (v.name == name && !v.variant) villain = &v;
+        }
+        const bool placed = villain && skylanders::CreateAndPlaceVillainTrap(slot, *villain);
+        REXLOG_INFO("Input script: trap with {} {} slot {}", name,
+                    placed ? "placed in" : "could not be placed in", slot);
+      });
+    }
+  } else if (e.kind == Event::Kind::kRemove) {
+    if (run_in_ui) {
+      run_in_ui([slot = int(e.frames)] {
+        const bool removed = skylanders::RemoveFigureFromSlot(slot);
+        REXLOG_INFO("Input script: {} slot {}", removed ? "removed from" : "nothing in",
+                    slot);
+      });
+    }
+  } else if (e.kind == Event::Kind::kSet) {
+    // On the UI thread, as the F4 menu sets it: change callbacks (a portal_mode switch) run there.
+    if (run_in_ui) {
+      run_in_ui([name = e.text, value = e.args] {
+        const bool set = rex::cvar::SetFlagByName(name, value);
+        REXLOG_INFO("Input script: set {} {}{}", name, value, set ? "" : " (refused)");
+      });
+    }
+  } else if (e.kind == Event::Kind::kPutBack) {
+    if (run_in_ui) {
+      run_in_ui([] {
+        const bool put = skylanders::PutBackWantedSkylander();
+        REXLOG_INFO("Input script: putback: {}", put ? "the Skylander the game wants back goes back"
+                                                      : "the game wants none back");
+      });
+    }
+  } else if (e.kind == Event::Kind::kShot) {
+    if (run_in_ui) {
+      run_in_ui([path = g_script_dir / std::filesystem::u8path(e.text + ".png"), full = e.frames == 1] {
+        int width = 0, height = 0;
+        std::vector<uint8_t> rgba;
+        bool saved = false;
+        if (skylanders::CaptureGamePicture(width, height, rgba)) {
+          // Every n-th pixel, so the picture is at most 960 wide; "full": every pixel.
+          const int step = full ? 1 : (width + 959) / 960;
+          const int w = width / step, h = height / step;
+          std::vector<uint8_t> scaled(size_t(w) * h * 4);
+          for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+              std::memcpy(&scaled[(size_t(y) * w + x) * 4],
+                          &rgba[(size_t(y) * step * width + size_t(x) * step) * 4], 4);
+            }
+          }
+          saved = skylanders::WritePng(path, w, h, scaled.data());
+        }
+        REXLOG_INFO("Input script: shot {}{}", skylanders::Utf8Path(path.filename()), saved ? "" : " (no picture)");
+      });
+    }
+  } else if (e.kind == Event::Kind::kWaitFor) {
+    const auto holds = FindCondition(e.text);
+    const auto begin = Clock::now();
+    auto waited = [&] { return std::chrono::duration<double>(Clock::now() - begin).count(); };
+    bool met = false;
+    while (!(met = holds()) && waited() < e.duration) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    const double seconds = waited();
+    if (met && timeline) g_timeline_shift = g_timeline_shift.load() - std::max(0.0, e.duration - seconds);
+    REXLOG_INFO("Input script: waitfor {} {} after {:.1f} s", e.text, met ? "met" : "timed out",
+                seconds);
+  } else if (e.kind == Event::Kind::kCustom) {
+    const auto run = FindCommand(e.text);
+    const auto begin = Clock::now();
+    run(e.args);
+    if (timeline) {
+      g_timeline_shift =
+          g_timeline_shift.load() + std::chrono::duration<double>(Clock::now() - begin).count();
+    }
+  } else {
+    REXLOG_INFO("Input script: quit");
+    std::_Exit(0);
+  }
+}
+
+// Presses and stick moves from the live file (WatchLive), each from its own moment on.
+struct LivePresses {
+  std::mutex mutex;
+  std::vector<std::pair<Event, Clock::time_point>> events;  // the press, when its line was read
+};
+
+// Live commands (the owner, 2026-11-16: teleporting while he plays, without a restart): lines appended to
+// "<input script>.live" while the game runs, read every 200 ms from the file's end at the start (so an old
+// file does nothing), each batch parsed like the script (wait, tap, lua, goto, pos, place, shot, quit, ...)
+// and run from the moment it was read. Only with --input_script, i.e. scripted test runs; a tool appends the
+// lines (the dev kit's live.ps1).
+std::string g_live_path;
+
+void WatchLive(std::shared_ptr<LivePresses> presses, std::function<uint64_t()> guest_frame_count,
+               rex::memory::Memory* memory, std::function<void(std::function<void()>)> run_in_ui) {
+  const std::filesystem::path path = std::filesystem::u8path(g_live_path);
+  std::error_code ec;
+  uintmax_t offset = std::filesystem::exists(path, ec) ? std::filesystem::file_size(path, ec) : 0;
+  std::string pending;
+  REXLOG_INFO("Input script: live commands from '{}'", g_live_path);
+  for (;;) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const uintmax_t size = std::filesystem::exists(path, ec) ? std::filesystem::file_size(path, ec) : 0;
+    if (ec || size < offset) {  // emptied or replaced: from its start again
+      offset = 0;
+      pending.clear();
+      continue;
+    }
+    if (size == offset) continue;
+    std::ifstream file(path, std::ios::binary);
+    if (!file) continue;
+    file.seekg(std::streamoff(offset));
+    std::string chunk(size_t(size - offset), '\0');
+    file.read(chunk.data(), std::streamsize(chunk.size()));
+    chunk.resize(size_t(file.gcount()));
+    offset += chunk.size();
+    pending += chunk;
+    const size_t end = pending.rfind('\n');
+    if (end == std::string::npos) continue;  // only whole lines
+    const std::string text = pending.substr(0, end + 1);
+    pending.erase(0, end + 1);
+    std::istringstream in(text);
+    std::vector<Event> events;
+    if (!ParseScript(in, events)) continue;  // ParseScript logged the line it couldn't read
+    const auto begin = Clock::now();
+    REXLOG_INFO("Input script: live, {} event(s)", events.size());
+    for (const Event& e : events) {
+      if (e.kind == Event::Kind::kPress || e.kind == Event::Kind::kStick) {
+        std::lock_guard lock(presses->mutex);
+        presses->events.emplace_back(e, begin);
+        continue;
+      }
+      std::this_thread::sleep_until(begin + std::chrono::duration_cast<Clock::duration>(
+                                                std::chrono::duration<double>(e.start)));
+      RunEvent(e, guest_frame_count, memory, run_in_ui, false);
+    }
+  }
+}
+
 class ScriptInputDriver final : public rex::input::InputDriver {
  public:
   ScriptInputDriver(std::vector<Event> events, std::function<uint64_t()> guest_frame_count,
@@ -518,204 +781,12 @@ class ScriptInputDriver final : public rex::input::InputDriver {
         std::this_thread::sleep_until(
             start + std::chrono::duration_cast<Clock::duration>(
                         std::chrono::duration<double>(e.start + g_timeline_shift.load())));
-        if (e.kind == Event::Kind::kLog) {
-          REXLOG_INFO("Input script: {}", e.text);
-        } else if (e.kind == Event::Kind::kFps) {
-          // The frame counter polled every millisecond: the rate, and the gaps between two frames
-          // (a stall, e.g. a shader compiled the first time, shows as a long one).
-          const uint64_t frames_before = guest_frame_count();
-          const auto time_before = Clock::now();
-          const auto until = time_before + std::chrono::duration_cast<Clock::duration>(
-                                               std::chrono::duration<double>(e.duration));
-          uint64_t last_count = frames_before;
-          auto last_frame = time_before;
-          double longest_ms = 0.0;
-          int over50 = 0;
-          while (Clock::now() < until) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            const uint64_t count = guest_frame_count();
-            if (count != last_count) {
-              const auto now = Clock::now();
-              const double gap = std::chrono::duration<double, std::milli>(now - last_frame).count();
-              if (last_count != frames_before) {  // the first gap started before the measurement
-                longest_ms = std::max(longest_ms, gap);
-                over50 += gap > 50.0;
-              }
-              last_count = count;
-              last_frame = now;
-            }
-          }
-          const uint64_t frames = guest_frame_count() - frames_before;
-          const double seconds = std::chrono::duration<double>(Clock::now() - time_before).count();
-          REXLOG_INFO("Input script: {:.1f} guest FPS ({} frames in {:.2f} s), longest frame {:.0f} ms, {} over 50 ms",
-                      double(frames) / seconds, frames, seconds, longest_ms, over50);
-        } else if (e.kind == Event::Kind::kScan) {
-          ScanGuestMemory(memory, e.words);
-        } else if (e.kind == Event::Kind::kPoke) {
-          uint32_t address;
-          if (!ResolveAddress(memory, e, address)) continue;
-          if (!Readable(memory, address, 4)) {
-            REXLOG_WARN("Input script: poke {:08X}, which isn't mapped", address);
-            continue;
-          }
-          auto* host = memory->TranslateVirtual<uint8_t*>(address);
-          const uint32_t value = rex::byte_swap(e.words[1]);
-          std::memcpy(host, &value, 4);
-          REXLOG_INFO("Input script: poke {:08X} = {:08X}", address, e.words[1]);
-        } else if (e.kind == Event::Kind::kRenderDoc) {
-          CaptureGuestFrames(e.frames, guest_frame_count);
-        } else if (e.kind == Event::Kind::kPlayer) {
-          skylanders::menu_input::SetDevicePlayer(kScriptDevice, e.frames - 1);
-          REXLOG_INFO("Input script: now playing as player {}", e.frames);
-        } else if (e.kind == Event::Kind::kWatch) {
-          uint32_t address;
-          if (!ResolveAddress(memory, e, address)) continue;
-          StartWriteWatch(memory, address,
-                          e.words.size() > 1 ? std::optional<uint32_t>(e.words[1]) : std::nullopt,
-                          e.text == "watchread", e.words.size() == 4 ? e.words[2] : 0,
-                          e.words.size() == 4 ? e.words[3] : 0);
-        } else if (e.kind == Event::Kind::kPollWatch) {
-          uint32_t address;
-          if (!ResolveAddress(memory, e, address)) continue;
-          StartPollWatch(memory, address, uint32_t(e.frames));
-        } else if (e.kind == Event::Kind::kUnwatch) {
-          StopWriteWatch();
-        } else if (e.kind == Event::Kind::kStacks) {
-          LogThreadStacks(int(e.frames));
-        } else if (e.kind == Event::Kind::kSave) {
-          // Pages that aren't committed (or readable) are written as zeros, so any range works.
-          std::ofstream file(std::filesystem::u8path(e.text), std::ios::binary);
-          const std::vector<char> zeros(0x1000);
-          for (uint64_t page = e.words[0]; page < uint64_t(e.words[0]) + e.words[1];
-               page += 0x1000) {
-            rex::memory::BaseHeap* heap = memory->LookupHeap(uint32_t(page));
-            rex::memory::HeapAllocationInfo info{};
-            const bool readable = heap && heap->QueryRegionInfo(uint32_t(page), &info) &&
-                                  (info.state & rex::memory::kMemoryAllocationCommit) &&
-                                  (info.protect & rex::memory::kMemoryProtectRead);
-            const auto size = std::streamsize(
-                std::min<uint64_t>(0x1000, uint64_t(e.words[0]) + e.words[1] - page));
-            file.write(
-                readable ? memory->TranslateVirtual<const char*>(uint32_t(page)) : zeros.data(),
-                size);
-          }
-          REXLOG_INFO("Input script: saved {:08X}+{:X} to {}{}", e.words[0], e.words[1], e.text,
-                      file ? "" : " (failed)");
-        } else if (e.kind == Event::Kind::kDump) {
-          uint32_t address;
-          if (!ResolveAddress(memory, e, address)) continue;
-          if (!Readable(memory, address, 4 * e.frames)) {
-            REXLOG_WARN("Input script: dump {:08X}: not mapped", address);
-            continue;
-          }
-          for (uint32_t i = 0; i < e.frames; i += 8) {
-            std::string line;
-            for (uint32_t k = i; k < e.frames && k < i + 8; ++k) {
-              uint32_t v;
-              std::memcpy(&v, memory->TranslateVirtual<const uint8_t*>(address + 4 * k), 4);
-              line += fmt::format(" {:08X}", rex::byte_swap(v));
-            }
-            REXLOG_INFO("Input script: dump {:08X}:{}", address + 4 * i, line);
-          }
-        } else if (e.kind == Event::Kind::kKey) {
-          // Through the key binds, as a key press in the window would go.
-          if (run_in_ui) {
-            run_in_ui([key = rex::ui::ParseVirtualKey(e.text)] {
-              rex::ui::KeyEvent event(nullptr, key, 1, false, false, false, false, false);
-              rex::ui::ProcessKeyEvent(event);
-            });
-          }
-          REXLOG_INFO("Input script: key {}", e.text);
-        } else if (e.kind == Event::Kind::kPlace) {
-          if (run_in_ui) {
-            run_in_ui([slot = int(e.frames), path = std::filesystem::u8path(e.text)] {
-              const bool placed = skylanders::PlaceFigureFromFile(slot, path);
-              REXLOG_INFO("Input script: {} slot {}", placed ? "placed in" : "could not place in",
-                          slot);
-            });
-          }
-        } else if (e.kind == Event::Kind::kTrap) {
-          if (run_in_ui) {
-            run_in_ui([slot = int(e.frames), name = e.text] {
-              const skylanders::portal::TrapVillain* villain = nullptr;
-              for (const auto& v : skylanders::portal::AllTrapVillains()) {
-                if (v.name == name && !v.variant) villain = &v;
-              }
-              const bool placed = villain && skylanders::CreateAndPlaceVillainTrap(slot, *villain);
-              REXLOG_INFO("Input script: trap with {} {} slot {}", name,
-                          placed ? "placed in" : "could not be placed in", slot);
-            });
-          }
-        } else if (e.kind == Event::Kind::kRemove) {
-          if (run_in_ui) {
-            run_in_ui([slot = int(e.frames)] {
-              const bool removed = skylanders::RemoveFigureFromSlot(slot);
-              REXLOG_INFO("Input script: {} slot {}", removed ? "removed from" : "nothing in",
-                          slot);
-            });
-          }
-        } else if (e.kind == Event::Kind::kSet) {
-          // On the UI thread, as the F4 menu sets it: change callbacks (a portal_mode switch) run there.
-          if (run_in_ui) {
-            run_in_ui([name = e.text, value = e.args] {
-              const bool set = rex::cvar::SetFlagByName(name, value);
-              REXLOG_INFO("Input script: set {} {}{}", name, value, set ? "" : " (refused)");
-            });
-          }
-        } else if (e.kind == Event::Kind::kPutBack) {
-          if (run_in_ui) {
-            run_in_ui([] {
-              const bool put = skylanders::PutBackWantedSkylander();
-              REXLOG_INFO("Input script: putback: {}", put ? "the Skylander the game wants back goes back"
-                                                            : "the game wants none back");
-            });
-          }
-        } else if (e.kind == Event::Kind::kShot) {
-          if (run_in_ui) {
-            run_in_ui([path = g_script_dir / std::filesystem::u8path(e.text + ".png"), full = e.frames == 1] {
-              int width = 0, height = 0;
-              std::vector<uint8_t> rgba;
-              bool saved = false;
-              if (skylanders::CaptureGamePicture(width, height, rgba)) {
-                // Every n-th pixel, so the picture is at most 960 wide; "full": every pixel.
-                const int step = full ? 1 : (width + 959) / 960;
-                const int w = width / step, h = height / step;
-                std::vector<uint8_t> scaled(size_t(w) * h * 4);
-                for (int y = 0; y < h; ++y) {
-                  for (int x = 0; x < w; ++x) {
-                    std::memcpy(&scaled[(size_t(y) * w + x) * 4],
-                                &rgba[(size_t(y) * step * width + size_t(x) * step) * 4], 4);
-                  }
-                }
-                saved = skylanders::WritePng(path, w, h, scaled.data());
-              }
-              REXLOG_INFO("Input script: shot {}{}", skylanders::Utf8Path(path.filename()), saved ? "" : " (no picture)");
-            });
-          }
-        } else if (e.kind == Event::Kind::kWaitFor) {
-          const auto holds = FindCondition(e.text);
-          const auto begin = Clock::now();
-          auto waited = [&] { return std::chrono::duration<double>(Clock::now() - begin).count(); };
-          bool met = false;
-          while (!(met = holds()) && waited() < e.duration) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-          }
-          const double seconds = waited();
-          if (met) g_timeline_shift = g_timeline_shift.load() - std::max(0.0, e.duration - seconds);
-          REXLOG_INFO("Input script: waitfor {} {} after {:.1f} s", e.text, met ? "met" : "timed out",
-                      seconds);
-        } else if (e.kind == Event::Kind::kCustom) {
-          const auto run = FindCommand(e.text);
-          const auto begin = Clock::now();
-          run(e.args);
-          g_timeline_shift =
-              g_timeline_shift.load() + std::chrono::duration<double>(Clock::now() - begin).count();
-        } else {
-          REXLOG_INFO("Input script: quit");
-          std::_Exit(0);
-        }
+        RunEvent(e, guest_frame_count, memory, run_in_ui, true);
       }
     }).detach();
+    if (!g_live_path.empty()) {
+      std::thread(WatchLive, live_, guest_frame_count_, memory_, run_in_ui_).detach();
+    }
     return X_STATUS_SUCCESS;
   }
 
@@ -745,6 +816,28 @@ class ScriptInputDriver final : public rex::input::InputDriver {
         x = e.x;
         y = e.y;
       }
+    }
+    std::lock_guard lock(live_->mutex);
+    const auto at = Clock::now();
+    auto& live = live_->events;
+    for (auto it = live.begin(); it != live.end();) {
+      const Event& e = it->first;
+      const double since = std::chrono::duration<double>(at - it->second).count();
+      if (since >= e.start + e.duration) {  // done: out of the list
+        it = live.erase(it);
+        continue;
+      }
+      if (since >= e.start) {
+        if (e.kind == Event::Kind::kPress) {
+          buttons |= e.buttons;
+          lt |= e.left_trigger;
+          rt |= e.right_trigger;
+        } else {
+          x = e.x;
+          y = e.y;
+        }
+      }
+      ++it;
     }
   }
 
@@ -834,6 +927,7 @@ class ScriptInputDriver final : public rex::input::InputDriver {
   std::function<void(std::function<void()>)> run_in_ui_;
   Clock::time_point start_;
   uint32_t packet_number_ = 0;
+  std::shared_ptr<LivePresses> live_ = std::make_shared<LivePresses>();
 };
 
 }  // namespace
@@ -855,6 +949,7 @@ void InstallInputScript(rex::system::IInputSystem* input_system, rex::memory::Me
     return;
   }
   g_script_dir = std::filesystem::u8path(path).parent_path();
+  g_live_path = path + ".live";
   auto driver = std::make_unique<ScriptInputDriver>(std::move(events), std::move(guest_frame_count),
                                                     memory, std::move(run_in_ui));
   driver->Setup();
