@@ -31,6 +31,7 @@
 #include "portal_rex/png_file.h"
 #include "portal_rex/portal_menu.h"
 #include "portal_rex/portal_menu_input.h"
+#include "portal_rex/problem_report.h"
 #include "portal_rex/utf8_path.h"
 
 namespace skylanders {
@@ -336,11 +337,22 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
     note_.words = words_;
     const std::string place = note_.place;
     const std::string name = SaveNote(std::move(note_));
+    std::string report_error;
+    const std::filesystem::path report = WriteGameProblemReport(ProgramName(), report_error);
     REXLOG_WARN("Problem noted by the player: {}{}{} ({}.txt)", kKinds[kind_].en, words_[0] ? ": " : "",
                 words_, name);
     if (!place.empty()) REXLOG_INFO("Where (problem note): {}", place);
-    ShowPortalToast(Tr("Noted. Report a problem in Core of Light sends it along.",
-                       "Notiert. \xE2\x80\x9EProblem melden\xE2\x80\x9C in Core of Light schickt es mit."));
+    if (report.empty()) {
+      REXLOG_WARN("Problem report not written: {}", report_error);
+      ShowPortalToast(Tr("Noted. Report a problem in Core of Light sends it along.",
+                         "Notiert. \xE2\x80\x9EProblem melden\xE2\x80\x9C in Core of Light schickt es mit."));
+    } else {
+      ShowPortalToast(Tr("Noted. The report is on your desktop: ",
+                         "Notiert. Der Bericht liegt auf deinem Desktop: ") +
+                      Utf8Path(report.filename()) +
+                      Tr(". Attach it to a new issue.",
+                         ". H\xC3\xA4ng ihn an ein neues Issue an."));
+    }
     Close();
   }
 
