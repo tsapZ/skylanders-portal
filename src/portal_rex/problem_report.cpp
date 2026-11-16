@@ -1,5 +1,6 @@
 #include "portal_rex/problem_report.h"
 
+#include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iterator>
@@ -115,7 +116,14 @@ std::vector<std::pair<std::string, std::string>> PrivateWords() {
 
 fs::path WriteGameProblemReport(const std::string& program, std::string& error) {
   error.clear();
-  const fs::path folder = ReportFolder();
+  // Scripted test runs set SKYLANDERS_REPORT_DIR, so a test's report lands in its scratch folder and
+  // not on the owner's desktop (RULES.md: tests never touch the owner's data).
+  fs::path folder;
+  if (const char* test_dir = std::getenv("SKYLANDERS_REPORT_DIR"); test_dir && *test_dir) {
+    folder = fs::path(test_dir);  // a scratch folder, ASCII
+  } else {
+    folder = ReportFolder();
+  }
   if (folder.empty()) {
     error = "there is no folder to write the report to";
     return {};

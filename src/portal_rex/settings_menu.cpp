@@ -1676,13 +1676,14 @@ void AddQuitSettings(SettingsPage& page) {
       "keyboard if you like).\n" +
       quick_key + " in the game does it at once, without this menu: the picture, the place and the settings.\n"
       "\n"
-      "Report a problem in Core of Light sends it along with the logs.";
+      "It also puts a report file on your desktop (this game's settings and logs) to attach to an issue.";
   report.help_de =
       "Speichert das Bild von genau jetzt und welche Art Problem es ist (auf Wunsch mit ein paar "
       "Worten von der Tastatur).\n" +
       quick_key + " im Spiel macht das sofort, ohne dieses Men\xC3\xBC: Bild, Ort und Einstellungen.\n"
       "\n"
-      "\xE2\x80\x9EProblem melden\xE2\x80\x9C in Core of Light schickt es mit den Logs mit.";
+      "Dazu legt es eine Bericht-Datei auf deinen Desktop (Einstellungen und Logs dieses Spiels), die du an "
+      "ein Issue h\xC3\xA4ngst.";
   report.action = [] { OpenProblemNote(); };
   page.settings.push_back(std::move(report));
   Setting quit;
