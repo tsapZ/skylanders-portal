@@ -26,7 +26,10 @@ void TestResolveCasePath() {
 
   const fs::path resolved = skylanders::alchemy::ResolveCasePath(base / "level" / "title.arc");
   CHECK(fs::exists(resolved));
+#ifndef _WIN32
+  // ResolveCasePath is a no-op on Windows because the filesystem is already case-insensitive.
   CHECK(resolved.filename() == "Title.arc");
+#endif
 
   const fs::path missing = skylanders::alchemy::ResolveCasePath(base / "level" / "missing.arc");
   CHECK(!fs::exists(missing));
