@@ -26,6 +26,7 @@
 #endif
 #include <rex/logging.h>
 
+#include "dev/input_script.h"
 #include "portal_rex/remapper_check.h"
 
 REXCVAR_DEFINE_BOOL(controller_hide_remapped, true, "Input",
@@ -455,6 +456,16 @@ class MenuInputDriver final : public InputDriver {
     X_RESULT result = inner_->GetDeviceState(id, &state);
     if (result != X_ERROR_SUCCESS) {
       return result;
+    }
+    // --input_record: the raw state of a real pad, before the menu and the remapping see it (a replay
+    // goes through both again).
+    {
+      bool synthetic;
+      {
+        std::lock_guard lock(g_mutex);
+        synthetic = g_devices[uint64_t(id)].synthetic;
+      }
+      if (!synthetic) skylanders::dev::RecordPad(uint64_t(id), state.gamepad);
     }
     bool hide = !is_active() || g_menu_open.load();
     if (!keyboard_ && state.gamepad.buttons) g_last_pad.store(uint64_t(id));

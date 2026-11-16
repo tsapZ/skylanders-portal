@@ -1,6 +1,7 @@
 #include "dev/input_script.h"
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -43,6 +44,10 @@
 REXCVAR_DEFINE_STRING(input_script, "", "Input",
                       "Developer option: play controller input from this script file (see "
                       "src/dev/input_script.h), for automated test runs")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(input_record, "", "Input",
+                      "Developer option: writes the first real controller's input to this file as script lines "
+                      "(pad ...), to play it again with input_script. For test runs")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace skylanders::dev {
@@ -272,6 +277,18 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
       if (cmd == "hold") ok = ok && bool(words >> ms);
       e.kind = Event::Kind::kPress;
       e.duration = ms / 1000.0;
+    } else if (cmd == "pad") {
+      // A recorded state (--input_record): buttons and the left stick held together.
+      std::string buttons;
+      double ms = 0.0;
+      ok = bool(words >> buttons >> e.x >> e.y >> ms) && (buttons == "-" || ParseButton(buttons, e));
+      e.duration = ms / 1000.0;
+      if (ok) {
+        Event stick = e;
+        stick.kind = Event::Kind::kStick;
+        events.push_back(stick);
+      }
+      e.kind = Event::Kind::kPress;
     } else if (cmd == "stick") {
       double ms = 0.0;
       ok = bool(words >> e.x >> e.y >> ms);
@@ -973,6 +990,94 @@ void InstallInputScript(rex::system::IInputSystem* input_system, rex::memory::Me
     }
   }).detach();
 #endif
+}
+
+namespace {
+
+struct Recorder {
+  std::mutex mutex;
+  std::ofstream out;
+  bool open_tried = false;
+  uint64_t device = 0;
+  bool have = false;
+  uint16_t buttons = 0;
+  bool lt = false, rt = false;
+  double x = 0.0, y = 0.0;
+  Clock::time_point since{};
+};
+Recorder g_recorder;
+
+std::string ButtonNames(uint16_t bits, bool lt, bool rt) {
+  static const struct {
+    const char* name;
+    uint16_t bit;
+  } kNames[] = {
+      {"a", rex::input::X_INPUT_GAMEPAD_A},          {"b", rex::input::X_INPUT_GAMEPAD_B},
+      {"x", rex::input::X_INPUT_GAMEPAD_X},          {"y", rex::input::X_INPUT_GAMEPAD_Y},
+      {"start", rex::input::X_INPUT_GAMEPAD_START},  {"back", rex::input::X_INPUT_GAMEPAD_BACK},
+      {"up", rex::input::X_INPUT_GAMEPAD_DPAD_UP},   {"down", rex::input::X_INPUT_GAMEPAD_DPAD_DOWN},
+      {"left", rex::input::X_INPUT_GAMEPAD_DPAD_LEFT}, {"right", rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT},
+      {"lb", rex::input::X_INPUT_GAMEPAD_LEFT_SHOULDER}, {"rb", rex::input::X_INPUT_GAMEPAD_RIGHT_SHOULDER},
+      {"ls", rex::input::X_INPUT_GAMEPAD_LEFT_THUMB}, {"rs", rex::input::X_INPUT_GAMEPAD_RIGHT_THUMB},
+      {"guide", rex::input::X_INPUT_GAMEPAD_GUIDE},
+  };
+  std::string s;
+  for (const auto& b : kNames) {
+    if (bits & b.bit) s += (s.empty() ? "" : "+") + std::string(b.name);
+  }
+  if (lt) s += s.empty() ? "lt" : "+lt";
+  if (rt) s += s.empty() ? "rt" : "+rt";
+  return s.empty() ? "-" : s;
+}
+
+// The left stick in -1..1, with a dead zone and in steps of 0.05, so noise doesn't make a line each poll.
+double StickValue(int16_t v) {
+  const double f = std::clamp(double(v) / 32767.0, -1.0, 1.0);
+  if (std::abs(f) < 0.15) return 0.0;
+  return std::round(f * 20.0) / 20.0;
+}
+
+}  // namespace
+
+void RecordPad(uint64_t device, const rex::input::X_INPUT_GAMEPAD& pad) {
+  static const std::string path = REXCVAR_GET(input_record);
+  if (path.empty()) return;
+  Recorder& r = g_recorder;
+  std::lock_guard lock(r.mutex);
+  if (!r.open_tried) {
+    r.open_tried = true;
+    r.out.open(std::filesystem::u8path(path), std::ios::trunc);
+    if (r.out) {
+      r.out << "# recorded with --input_record: the first real controller, from its first input on\n";
+      REXLOG_INFO("Input record: writing '{}'", path);
+    } else {
+      REXLOG_ERROR("Input record: cannot write '{}'", path);
+    }
+  }
+  if (!r.out) return;
+  const uint16_t buttons = uint16_t(pad.buttons & uint16_t(~rex::input::X_INPUT_GAMEPAD_GUIDE));
+  const bool lt = pad.left_trigger > 96, rt = pad.right_trigger > 96;
+  const double x = StickValue(pad.thumb_lx), y = StickValue(pad.thumb_ly);
+  const auto now = Clock::now();
+  if (!r.have) {
+    if (!buttons && !lt && !rt && x == 0.0 && y == 0.0) return;  // from the first input on
+    r.device = device;
+    r.have = true;
+  } else if (device != r.device) {
+    return;  // only the first pad that pressed something
+  } else if (buttons == r.buttons && lt == r.lt && rt == r.rt && x == r.x && y == r.y) {
+    return;
+  } else {
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - r.since).count();
+    r.out << "pad " << ButtonNames(r.buttons, r.lt, r.rt) << ' ' << r.x << ' ' << r.y << ' ' << ms << '\n';
+    r.out.flush();
+  }
+  r.buttons = buttons;
+  r.lt = lt;
+  r.rt = rt;
+  r.x = x;
+  r.y = y;
+  r.since = now;
 }
 
 void RegisterScriptCommand(const std::string& name, std::function<void(const std::string& args)> run) {
