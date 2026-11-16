@@ -11,6 +11,9 @@
 //   tap <button>             press for 120 ms
 //   hold <button> <ms>
 //   stick <x> <y> <ms>       left stick, x and y in -1..1
+//   pad <buttons|-> <x> <y> <ms>
+//                            buttons (joined with '+', lt/rt for the triggers, '-' for none) and
+//                            the left stick together for that long: what --input_record writes
 //   log <text>               writes a log line, to find a point of the timeline in the log
 //   fps <seconds>            measures the guest frame rate over that time and logs it, with the
 //                            longest time between two frames and how many took over 50 ms
@@ -69,6 +72,8 @@
 #pragma once
 
 #include <cstdint>
+
+#include <rex/input/input.h>
 #include <functional>
 #include <string>
 
@@ -92,6 +97,10 @@ void InstallInputScript(rex::system::IInputSystem* input_system, rex::memory::Me
 // tools. Register before InstallInputScript (a static initializer will do): the script is checked
 // against them when it is read. A command runs on the script thread at its time with the rest of
 // its line; a condition is asked every 50 ms while a waitfor waits for it.
+// The raw state of a real controller (portal_menu_input.cpp, every poll): with --input_record=<file> the
+// first one that presses something is written to the file as pad lines, to play again as a script.
+void RecordPad(uint64_t device, const rex::input::X_INPUT_GAMEPAD& pad);
+
 void RegisterScriptCommand(const std::string& name, std::function<void(const std::string& args)> run);
 void RegisterScriptCondition(const std::string& name, std::function<bool()> holds);
 
