@@ -26,10 +26,15 @@
 #endif
 #include <rex/logging.h>
 
+#include <SDL3/SDL_hints.h>
+
 #include "dev/input_script.h"
 #include "portal_rex/input_pictures.h"
 #include "portal_rex/remapper_check.h"
 
+REXCVAR_DEFINE_BOOL(controller_in_background, false, "Input",
+                    "Controllers keep working while the game window is in the background (another window or "
+                    "screen in front); the keyboard only works with the game in front");
 REXCVAR_DEFINE_BOOL(controller_hide_remapped, true, "Input",
                     "While DS4Windows or DualSenseX runs, leave out the real PlayStation "
                     "controller: they also show it as a virtual Xbox controller, and every press "
@@ -793,6 +798,7 @@ void AddWrapped(rex::input::InputSystem& input, bool pollable, bool keyboard = f
 
 std::unique_ptr<rex::system::IInputSystem> CreatePortalMenuInputSystem(bool tool_mode) {
   auto input = std::make_unique<rex::input::InputSystem>(nullptr);
+  menu_input::ApplyControllerBackground();
   if (!tool_mode) {
 #if REX_PLATFORM_WIN32
     if (REXCVAR_GET(input_backend) == "xinput") {
@@ -960,6 +966,10 @@ void TapButton(uint32_t user, uint16_t button) {
 }
 
 uint16_t ButtonByName(const std::string& name) { return ButtonBit(name); }
+
+void ApplyControllerBackground() {
+  SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, REXCVAR_GET(controller_in_background) ? "1" : "0");
+}
 
 uint16_t TakeNewPresses() { return g_new_presses.exchange(0, std::memory_order_relaxed); }
 uint16_t TakeNewSkipPresses() { return g_new_skip_presses.exchange(0, std::memory_order_relaxed); }

@@ -123,6 +123,9 @@ uint16_t ButtonByName(const std::string& name);
 // The buttons pressed (down after up) on any controller or the keyboard since the last call, as
 // X_INPUT_GAMEPAD_* bits; the game sees them as usual. For the movie skip (movie_skip.h).
 uint16_t TakeNewPresses();
+// Lets SDL pass controller events on while the game window is in the background, as the setting
+// controller_in_background says (Core of Light #111); at the input system's start and when the setting changes.
+void ApplyControllerBackground();
 // The same presses, collected apart for the games' Skip talks option, so it and the movie skip don't take each
 // other's.
 uint16_t TakeNewSkipPresses();
