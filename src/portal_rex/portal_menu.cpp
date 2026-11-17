@@ -251,6 +251,7 @@ enum class Text {
   kNewRunInfo,
   kNewRunDone,
   kTiredStays,
+  kLevelFreed,
   kCount,
 };
 
@@ -394,13 +395,14 @@ constexpr const char* kEnglish[] = {
     "SOUL GEM",
     "Soul Gem found: %s joins the run!",
     "Soul Gem run",
-    "Only the starters and the Skylanders whose Soul Gem you found",
+    "The starters at first; Soul Gems and levels finished free the others. One run for all six games",
     "Team size per level",
     "No limit",
     "New run",
-    "Back to the starters: every Soul Gem has to be found again",
+    "Back to the starters in all six games: every Soul Gem and level counts again",
     "New run: only the starters are unlocked.",
     "%s is out of health: back in the next level.",
+    "Level finished, new in the run: %s",
 };
 constexpr const char* kGerman[] = {
     "MAGISCHES PORTAL",
@@ -553,13 +555,15 @@ constexpr const char* kGerman[] = {
     "SEELENSTEIN",
     "Seelenstein gefunden: %s ist jetzt dabei!",
     "Seelenstein-Durchlauf",
-    "Nur die Starter und die Skylander, deren Seelenstein du gefunden hast",
+    "Erst die Starter; Seelensteine und abgeschlossene Level befreien die anderen. Ein Durchlauf f\xC3\xBCr alle "
+    "sechs Spiele",
     "Teamgr\xC3\xB6\xC3\x9F" "e pro Level",
     "Kein Limit",
     "Neuer Durchlauf",
-    "Zur\xC3\xBC" "ck zu den Startern: Jeder Seelenstein muss neu gefunden werden",
+    "Zur\xC3\xBC" "ck zu den Startern in allen sechs Spielen: Jeder Seelenstein und jedes Level z\xC3\xA4hlt neu",
     "Neuer Durchlauf: Nur die Starter sind freigeschaltet.",
     "%s ist ersch\xC3\xB6pft: im n\xC3\xA4" "chsten Level wieder dabei.",
+    "Level geschafft, neu im Durchlauf: %s",
 };
 static_assert(std::size(kEnglish) == size_t(Text::kCount));
 static_assert(std::size(kGerman) == size_t(Text::kCount));
@@ -2459,8 +2463,8 @@ int FreeSlot(uint32_t user, const std::vector<int>& preferred, const std::vector
 // "this Skylander needs a break"), and its card gets a red cross. It stays pickable, so a wrong
 // mark never keeps a figure from being played: put on again, the mark goes once it has been on a
 // while without the game saying so again, and stays if the game refuses it at once. Every mark goes
-// when dev/where.h names another level. With a team size per level (run_team_size) the menu keeps
-// a marked Skylander off until then. UI thread only.
+// when dev/where.h names another level. With a team size per level (run_team_size) or in a Soul Gem
+// run (run_rules.h KeepsTiredOut) the menu keeps a marked Skylander off until then. UI thread only.
 std::set<uint32_t> g_tired;  // Key(id, variant)
 struct TiredCheck {
   uint32_t key;
@@ -3999,7 +4003,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
         REXLOG_INFO("Portal menu: player {}: {} not placed (locked in this run)", user_ + 1, sky->name);
         return;
       }
-      if (REXCVAR_GET(run_team_size) > 0 && run::InPlay() && IsTired(sky)) {
+      if (run::KeepsTiredOut() && run::InPlay() && IsTired(sky)) {
         char line[256];
         std::snprintf(line, sizeof(line), T(Text::kTiredStays), FigureName(*sky).c_str());
         ShowToast(line, 3.5f);
@@ -6503,9 +6507,25 @@ static void RunSoulGemFound(const std::string& skylander) {
   });
 }
 
+void LevelFinished(std::string_view level) {
+  if (!g_app_context || !REXCVAR_GET(run_soul_gems)) return;
+  g_app_context->CallInUIThread([level = std::string(level)] {
+    const std::vector<std::string> freed = run::LevelFinished(level);
+    if (freed.empty()) return;
+    // "Bash", "Bash and Zap", "Bash, Zap and Boomer" (German "und").
+    std::string names;
+    for (size_t i = 0; i < freed.size(); ++i) {
+      if (i > 0) names += i + 1 == freed.size() ? (g_german ? " und " : " and ") : ", ";
+      names += freed[i];
+    }
+    char line[512];
+    std::snprintf(line, sizeof(line), T(Text::kLevelFreed), names.c_str());
+    ShowToast(line, 5.0f);
+  });
+}
+
 void SetPortalMenuConfigPath(std::filesystem::path config_path) {
   g_config_path = std::move(config_path);
-  run::SetConfigPath(g_config_path);
   OnSoulGem(&RunSoulGemFound);
 }
 
