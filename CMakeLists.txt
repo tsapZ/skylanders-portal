@@ -165,6 +165,7 @@ if(TARGET rex::runtime)
         src/portal/usb/winusb_portal_io.cpp
         src/portal_rex/sdl_audio_sink.cpp
         src/portal_rex/speaker_overlay.cpp
+        src/portal_rex/dev_overlay.cpp
         src/portal/system_locale.cpp
         # Test tools: scripted input, memory watches, the crash report, GPU crash diagnostics,
         # where the player is (for problem reports).
