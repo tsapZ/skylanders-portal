@@ -59,6 +59,12 @@ void AddPortalMenuFonts(ImFontAtlas* atlas);
 void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext* app_context,
                         rex::ui::ImmediateDrawer* immediate_drawer = nullptr);
 
+// The player's Skylander stays on the portal while the menu is open, until another one is picked (Core of Light
+// #99: Giants writes the gold to the toy only at area changes, so lifting it on open and putting it back with B
+// lost what was collected since). Without it the menu lifts the Skylander when it opens (the game's own
+// "put a Skylander on" pause) and B puts it back. Set once, before the game runs.
+void KeepSkylanderOnWhileMenuOpen(bool keep);
+
 // The settings file the menu writes its options to (ReXApp's config path). Without it the options
 // last for this session only.
 void SetPortalMenuConfigPath(std::filesystem::path config_path);
