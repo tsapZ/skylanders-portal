@@ -120,8 +120,17 @@ class UsbPortal final : public PortalDevice {
   std::once_flag audio_thread_started_;
   std::atomic<bool> audio_stopping_{false};
   std::atomic<int> audio_pacing_lead_{0};  // SetAudioPacing
-  void WriteAudioPacket(const AudioPacket& packet);  // takes io_mutex_ on the hidapi path
+  void WriteAudioPacket(const AudioPacket& packet);  // io_mutex_ only when audio_device_ didn't open
+  void OpenAudioHandle();                             // writer thread, once
   SpeakerWriteHealth speaker_health_;
+  // The speaker's own handle to the HID portal (OpenAudioHandle; Core of Light #102), or nullptr: then
+  // the writes share device_ under io_mutex_. Writer thread only, closed by the destructor after the join.
+  hid_device* audio_device_ = nullptr;
+  // The first kAudioWritesTimed speaker writes' times, logged once (writer thread only).
+  static constexpr int kAudioWritesTimed = 500;
+  int audio_writes_timed_ = 0;
+  double audio_write_ms_sum_ = 0;
+  double audio_write_ms_max_ = 0;
   Report ReceiveRaw();                 // unlocked -- callers hold io_mutex_
 
   std::mutex io_mutex_;  // serializes every raw HID transfer: Write(), Read(), DumpFigure()

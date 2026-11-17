@@ -167,6 +167,7 @@ UsbPortal::~UsbPortal() {
   audio_stopping_.store(true);
   audio_queue_.Close();
   if (audio_thread_.joinable()) audio_thread_.join();
+  if (audio_device_ != nullptr) hid_close(audio_device_);
   if (device_ != nullptr) hid_close(device_);
 }
 
@@ -518,6 +519,30 @@ void UsbPortal::WriteAudio(std::span<const int16_t> pcm) {
   audio_packetizer_.Add(pcm, [this](const AudioPacket& packet) { audio_queue_.Push(packet); });
 }
 
+// The speaker's own handle to the HID portal, opened once by the writer thread (Core of Light #102: a
+// Traptanium portal on the Windows HID driver made Trap Team drop frames while the portal's speaker
+// played, on WinUSB it ran smoothly). A hid_write there waits until the portal takes the packet, and
+// the portal takes them at its playback rate (one per 4 ms), so with one handle under io_mutex_ the
+// game's portal commands waited behind the sound nearly all the time. A second handle to the same
+// device path keeps hidapi's per-handle state (overlapped write, error text) apart, so the writes need
+// no lock, like the WinUSB path's interrupt writes. Windows opens HID devices shared; if the open
+// fails anyway, the writes stay on device_ under io_mutex_ as before.
+void UsbPortal::OpenAudioHandle() {
+  if (winusb_ || device_ == nullptr) return;
+  std::string path;
+  {
+    std::lock_guard<std::mutex> lock(io_mutex_);  // every hidapi call on device_ stays serialized
+    const hid_device_info* info = hid_get_device_info(device_);
+    if (info != nullptr && info->path != nullptr) path = info->path;
+  }
+  if (!path.empty()) audio_device_ = hid_open_path(path.c_str());
+  if (audio_device_ != nullptr) {
+    REXLOG_INFO("Portal (usb): speaker sound on its own handle");
+  } else {
+    REXLOG_INFO("Portal (usb): speaker sound shares the commands' handle (a second open failed)");
+  }
+}
+
 // Speaker audio goes out on the interrupt OUT endpoint (hid_write), unlike commands, which the
 // firmware only accepts as SET_REPORT (hid_send_output_report, see SendRaw).
 void UsbPortal::WriteAudioPacket(const AudioPacket& packet) {
@@ -527,11 +552,28 @@ void UsbPortal::WriteAudioPacket(const AudioPacket& packet) {
     // pipe, so these two don't need io_mutex_ (nor wait for each other).
     ok = winusb_->WriteInterrupt(packet.data(), kAudioPacketSize);
   } else {
-    std::lock_guard<std::mutex> lock(io_mutex_);
     uint8_t out[1 + kAudioPacketSize];
     out[0] = 0;  // report ID
     std::memcpy(out + 1, packet.data(), kAudioPacketSize);
-    ok = hid_write(device_, out, sizeof(out)) >= 0;
+    const auto start = std::chrono::steady_clock::now();
+    if (audio_device_ != nullptr) {
+      ok = hid_write(audio_device_, out, sizeof(out)) >= 0;  // its own handle: no io_mutex_ (OpenAudioHandle)
+    } else {
+      std::lock_guard<std::mutex> lock(io_mutex_);
+      ok = hid_write(device_, out, sizeof(out)) >= 0;
+    }
+    // How long the writes take, once per run in the log (Core of Light #102: on the Windows HID driver a
+    // write waits for the portal to take the packet).
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    if (audio_writes_timed_ < kAudioWritesTimed) {
+      audio_write_ms_sum_ += ms;
+      audio_write_ms_max_ = std::max(audio_write_ms_max_, ms);
+      if (++audio_writes_timed_ == kAudioWritesTimed) {
+        REXLOG_INFO("Portal (usb): speaker writes took {:.1f} ms on average, {:.1f} ms at most ({} writes, {})",
+                    audio_write_ms_sum_ / kAudioWritesTimed, audio_write_ms_max_, kAudioWritesTimed,
+                    audio_device_ != nullptr ? "own handle" : "shared handle");
+      }
+    }
   }
   if (speaker_health_.Note(ok)) {
     REXLOG_WARN("Portal: the portal's speaker took no sound ({} writes in a row failed); the sound goes to the PC's "
@@ -576,6 +618,7 @@ void SleepUntilPrecise(std::chrono::steady_clock::time_point when) {
 // in the game's stream longer than the lead restarts the clock (Core of Light #67: a HID Traptanium
 // portal that stutters; the game's own stream is real time, 7.5 ms frames up to ~12 ms apart).
 void UsbPortal::AudioWriterLoop() {
+  OpenAudioHandle();
   using Clock = std::chrono::steady_clock;
   constexpr auto kPacketTime = std::chrono::microseconds(1000000 * kAudioSamplesPerPacket / kAudioSampleRate);
   bool playing = false;
