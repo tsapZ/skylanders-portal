@@ -29,6 +29,7 @@
 #include <rex/input/input_driver.h>
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
+#include <rex/memory/utils.h>
 #include <rex/system/xmemory.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/ui_event.h>
@@ -565,8 +566,21 @@ void RunEvent(const Event& e, const std::function<uint64_t()>& guest_frame_count
     }
     auto* host = memory->TranslateVirtual<uint8_t*>(address);
     const uint32_t value = rex::byte_swap(e.words[1]);
+    // The game image's constants sit on read-only host pages: made writable for the write and put
+    // back (2026-11-17: a poke of a float constant in .rdata crashed the run).
+    size_t length = 4;
+    rex::memory::PageAccess access = rex::memory::PageAccess::kReadWrite;
+    const bool read_only = rex::memory::QueryProtect(host, length, access) &&
+                           access != rex::memory::PageAccess::kNoAccess &&
+                           !(int(access) & int(rex::memory::PageAccess::kReadWrite) & ~1);
+    if (read_only) {
+      rex::memory::Protect(host, 4, (int(access) & 4) ? rex::memory::PageAccess::kExecuteReadWrite
+                                                      : rex::memory::PageAccess::kReadWrite);
+    }
     std::memcpy(host, &value, 4);
-    REXLOG_INFO("Input script: poke {:08X} = {:08X}", address, e.words[1]);
+    if (read_only) rex::memory::Protect(host, 4, access);
+    REXLOG_INFO("Input script: poke {:08X} = {:08X}{}", address, e.words[1],
+                read_only ? " (read-only page)" : "");
   } else if (e.kind == Event::Kind::kRenderDoc) {
     CaptureGuestFrames(e.frames, guest_frame_count);
   } else if (e.kind == Event::Kind::kPlayer) {
