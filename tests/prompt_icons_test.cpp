@@ -204,7 +204,7 @@ int main() {
 
   // The tables: the games with prompts we know, every cell inside its atlas, no two cells overlapping.
   {
-    CHECK(PromptTexturesOf("Spyro's Adventure").size() == 3);
+    CHECK(PromptTexturesOf("Spyro's Adventure").size() == 4);  // A, B, Start and the Y over NPCs (Core of Light #95)
     for (const char* game : {"Swap Force", "SuperChargers", "Imaginators"}) {
       const auto atlases = PromptAtlasesOf(game);
       CHECK(atlases.size() == 2);
