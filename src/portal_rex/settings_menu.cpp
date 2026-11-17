@@ -497,6 +497,19 @@ SettingsPage ControllerPage() {
     }
     page.settings.push_back(std::move(s));
   }
+  // Playing with another window or screen in front (Core of Light #111).
+  if (rex::cvar::GetFlagInfo("controller_in_background")) {
+    Setting s;
+    s.cvar = "controller_in_background";
+    s.en = "Controller in the background";
+    s.de = "Controller im Hintergrund";
+    s.help_en = "The controller keeps working while another window or screen is in front of the game.\n"
+                "The keyboard only works with the game in front.";
+    s.help_de = "Der Controller funktioniert weiter, w\xC3\xA4hrend ein anderes Fenster oder ein anderer "
+                "Bildschirm vor dem Spiel ist.\n"
+                "Die Tastatur geht nur, wenn das Spiel vorne ist.";
+    page.settings.push_back(std::move(s));
+  }
   return page;
 }
 
@@ -1026,6 +1039,8 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
     // The volume: heard at once. The frame rate display: shown or hidden at once.
     if (s.cvar == "game_volume") ApplyGameVolume(std::atoi(value.c_str()));
     if (s.cvar == "show_fps") ToggleFpsWindow();
+    // Controllers in the background: SDL takes the hint at once.
+    if (s.cvar == "controller_in_background") menu_input::ApplyControllerBackground();
   }
 
   // Actions run with the menu closed, after this frame (one may open another overlay); unsaved
