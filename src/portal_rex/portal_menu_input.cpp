@@ -140,6 +140,9 @@ std::unordered_map<uint64_t, DeviceRecord> g_devices;  // by DeviceId
 std::array<std::function<void(DeviceId, uint32_t)>, kActionCount> g_handlers;
 // Buttons newly pressed on any device since TakeNewPresses last took them (the movie skip).
 std::atomic<uint16_t> g_new_presses{0};
+// The same for the games' Skip talks option (TakeNewSkipPresses): its own copy, so that neither takes the other's
+// presses (the Vicarious Visions games ask it every frame, also while a movie plays).
+std::atomic<uint16_t> g_new_skip_presses{0};
 std::atomic<bool> g_menu_open{false};
 // The controller that pressed a button last (a DeviceId), for the hints' button pictures.
 std::atomic<uint64_t> g_last_pad{0};
@@ -348,6 +351,7 @@ std::optional<ButtonAction> ObserveLocked(DeviceRecord& record, const X_INPUT_GA
     record.chord_fired = true;
   }
   g_new_presses.fetch_or(uint16_t(buttons & ~record.last_buttons), std::memory_order_relaxed);
+  g_new_skip_presses.fetch_or(uint16_t(buttons & ~record.last_buttons), std::memory_order_relaxed);
   record.last_buttons = buttons;
   return fired;
 }
@@ -928,6 +932,7 @@ void TapButton(uint32_t user, uint16_t button) {
 uint16_t ButtonByName(const std::string& name) { return ButtonBit(name); }
 
 uint16_t TakeNewPresses() { return g_new_presses.exchange(0, std::memory_order_relaxed); }
+uint16_t TakeNewSkipPresses() { return g_new_skip_presses.exchange(0, std::memory_order_relaxed); }
 
 bool IsActionChord(ButtonAction action, uint16_t buttons) {
   for (const OpenEntry& entry : OpenEntries()) {
