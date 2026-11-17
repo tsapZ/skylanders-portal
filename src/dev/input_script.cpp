@@ -39,6 +39,7 @@
 #include "portal_rex/portal_menu_input.h"
 #include "portal/trap_villain.h"
 #include "portal_rex/portal_rex.h"
+#include "dev/where.h"
 #include "dev/write_watch.h"
 
 REXCVAR_DEFINE_STRING(input_script, "", "Input",
@@ -131,6 +132,11 @@ std::function<void(const std::string&)> FindCommand(const std::string& name) {
 }
 
 std::function<bool()> FindCondition(const std::string& name) {
+  // "level:<name>": until the level dev/where.h reports is that one (all six games; 2026-11-17: after the kit's
+  // level jump in Swap Force, "waitfor player" was met at once by the old level's player).
+  if (name.rfind("level:", 0) == 0 && name.size() > 6) {
+    return [level = name.substr(6)] { return CurrentLevel() == level; };
+  }
   Registry& r = GetRegistry();
   std::lock_guard lock(r.mutex);
   auto it = r.conditions.find(name);

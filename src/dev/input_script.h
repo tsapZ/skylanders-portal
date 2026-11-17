@@ -60,7 +60,8 @@
 //                            onto the slot, as the portal developer tools (F8) make one
 //   set <name> <value>       changes a setting while the game runs, as the F4 menu does (its change
 //                            callbacks run), e.g. portal_mode for a live portal switch
-//   waitfor <name> <seconds> waits until a condition the game registered (RegisterScriptCondition)
+//   waitfor <name> <seconds> waits until a condition the game registered (RegisterScriptCondition);
+//                            waitfor level:<level> <seconds> until dev/where.h reports that level
 //                            holds, at most that long; the rest of the timeline moves up by the
 //                            time not needed, so what follows starts at the event, not the clock
 //   quit                     ends the game
