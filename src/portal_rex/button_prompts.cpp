@@ -108,6 +108,8 @@ bool HasButtonPrompts(std::string_view game) {
 }
 
 void UseButtonPrompts(std::string_view game) {
+  // The Nintendo layout (pad_layout, Core of Light #95) swaps A/B and X/Y on Nintendo pads, so their prompts go by label.
+  portal::SetNintendoLettersByLabel(rex::cvar::GetFlagByName("pad_layout") == "nintendo");
   const std::string setting = REXCVAR_GET(button_prompts);
   if (setting == "playstation") {
     g_style.store(PromptStyle::kPlayStation);

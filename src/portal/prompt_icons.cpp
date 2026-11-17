@@ -290,6 +290,8 @@ void PlayStationFace(Canvas& cv, PromptButton button, const Box& b) {
   }
 }
 
+bool g_nintendo_by_label = false;  // SetNintendoLettersByLabel
+
 // Nintendo's letters sit by position: the bottom button is B, the right one A, the left Y, the top X.
 void NintendoFace(Canvas& cv, PromptButton button, const Box& b) {
   const Palette pal = PaletteOf(PromptStyle::kNintendo);
@@ -424,7 +426,15 @@ void DrawButton(Canvas& cv, PromptStyle style, PromptButton button, const Box& b
       if (style == PromptStyle::kPlayStation) {
         PlayStationFace(cv, button, b);
       } else {
-        NintendoFace(cv, button, b);
+        // By label (the Nintendo layout swapped A/B and X/Y): the game's A is the button labelled A, which
+        // NintendoFace draws for the position of B.
+        NintendoFace(cv,
+                     !g_nintendo_by_label ? button
+                     : button == PromptButton::kA ? PromptButton::kB
+                     : button == PromptButton::kB ? PromptButton::kA
+                     : button == PromptButton::kX ? PromptButton::kY
+                                                  : PromptButton::kX,
+                     b);
       }
       return;
     case PromptButton::kStart:
@@ -651,5 +661,7 @@ std::vector<uint8_t> PatchButtonAtlas(const uint8_t* bgra, int width, int height
   }
   return out;
 }
+
+void SetNintendoLettersByLabel(bool by_label) { g_nintendo_by_label = by_label; }
 
 }  // namespace skylanders::portal

@@ -225,5 +225,22 @@ int main() {
     CHECK(PromptTexturesOf("Swap Force").empty());
   }
 
+  // Nintendo's letters by label (the Nintendo layout, Core of Light #95): the game's A shows the letter A, which by
+  // position is B's icon; PlayStation's icons don't change.
+  {
+    const int s = 64;
+    const auto a_by_position = DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kA, s, false);
+    const auto b_by_position = DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kB, s, false);
+    const auto x_by_position = DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kX, s, false);
+    const auto ps_a = DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kA, s, false);
+    SetNintendoLettersByLabel(true);
+    CHECK(DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kA, s, false) == b_by_position);
+    CHECK(DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kB, s, false) == a_by_position);
+    CHECK(DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kY, s, false) == x_by_position);
+    CHECK(DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kA, s, false) == ps_a);
+    SetNintendoLettersByLabel(false);
+    CHECK(DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kA, s, false) == a_by_position);
+  }
+
   return Finish("prompt_icons");
 }
