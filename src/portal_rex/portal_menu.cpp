@@ -50,6 +50,7 @@
 #include "portal/trap_villain.h"
 #include "dev/input_script.h"
 #include "dev/where.h"
+#include "portal_rex/dev_overlay.h"
 #include "portal_rex/achievements_ui.h"
 #include "portal_rex/menu_draw.h"
 #include "portal_rex/portal_menu_input.h"
@@ -6521,6 +6522,7 @@ void PortalScreenComing(uint32_t user) {
 std::atomic<bool> g_picture_cache_stop{false};
 
 void ShutdownPortalMenu() {
+  ShutdownDevOverlay();
   g_picture_cache_stop = true;
   StopItemThread();
   g_menu.reset();
@@ -7006,6 +7008,7 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
   g_app_context = app_context;
   g_immediate_drawer = immediate_drawer;
   g_item_app_context = app_context;
+  RegisterDevOverlay(drawer);  // the dev_overlay line (off by default)
   menu_input::SetOpenHandler([](DeviceId device, uint32_t user) {
     if (!g_app_context) return;
     g_app_context->CallInUIThread([device, user] { OpenMenu(device, user, false); });
