@@ -437,6 +437,25 @@ constexpr PadRow kPadRows[] = {
 
 SettingsPage ControllerPage() {
   SettingsPage page{"Controller", "Controller", {}};
+  // The buttons of a Nintendo controller by their labels (Core of Light #95): first, before the single buttons'
+  // jobs, which then go by the labels too.
+  if (rex::cvar::GetFlagInfo("pad_layout")) {
+    Setting s;
+    s.cvar = "pad_layout";
+    s.en = "Button layout";
+    s.de = "Tastenbelegung";
+    s.help_en = "Xbox: buttons by position, the bottom one confirms (as on an Xbox controller).\n"
+                "Nintendo: on a Nintendo controller the buttons by their labels: the right one (A) confirms, the "
+                "bottom one (B) goes back, in the game and in these menus. Other controllers stay as they are.\n"
+                "The Nintendo button pictures follow when the game starts again.";
+    s.help_de = "Xbox: die Tasten nach ihrer Lage, die untere best\xC3\xA4tigt (wie auf einem Xbox-Controller).\n"
+                "Nintendo: auf einem Nintendo-Controller die Tasten nach ihrer Beschriftung: die rechte (A) "
+                "best\xC3\xA4tigt, die untere (B) geht zur\xC3\xBC" "ck, im Spiel und in diesen Men\xC3\xBCs. Andere "
+                "Controller bleiben, wie sie sind.\n"
+                "Die Nintendo-Tastenbilder folgen beim n\xC3\xA4" "chsten Spielstart.";
+    s.options = {{"xbox", "Xbox", "Xbox"}, {"nintendo", "Nintendo", "Nintendo"}};
+    page.settings.push_back(std::move(s));
+  }
   for (const PadRow& row : kPadRows) {
     if (!rex::cvar::GetFlagInfo(row.cvar)) continue;
     Setting s;

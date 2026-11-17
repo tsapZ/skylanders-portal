@@ -27,6 +27,7 @@
 #include <rex/logging.h>
 
 #include "dev/input_script.h"
+#include "portal_rex/input_pictures.h"
 #include "portal_rex/remapper_check.h"
 
 REXCVAR_DEFINE_BOOL(controller_hide_remapped, true, "Input",
@@ -54,6 +55,10 @@ REXCVAR_DEFINE_STRING(portal_quick_swap_buttons, "back+x", "Portal",
                       "without opening the menu; same format as portal_menu_open_buttons, empty "
                       "for none");
 // A controller button doing another button's job (F4 > Controller; SwapForceRecomp #71).
+REXCVAR_DEFINE_STRING(pad_layout, "xbox", "Input",
+                      "xbox: buttons by position (the bottom one is A, as on an Xbox pad); nintendo: on Nintendo "
+                      "controllers by their labels (the right one is A), in the game and in the menus")
+    .allowed({"xbox", "nintendo"});
 REXCVAR_DEFINE_STRING(pad_map_a, "", "Input",
                       "What the A button does in the game: a, b, x, y, lb, rb, lt, rt, ls, rs, or off; empty: what it says on it");
 REXCVAR_DEFINE_STRING(pad_map_b, "", "Input",
@@ -381,6 +386,23 @@ const PadSource* FindPadSource(const std::string& name) {
 // Gives the buttons the jobs pad_map_* says, in the state the game gets: each pressed button
 // sends its mapped button instead of its own (so two can do one job, and "off" none). Untouched
 // when nothing is mapped, so the triggers keep their exact values.
+// pad_layout = nintendo: a Nintendo controller's buttons by their labels (Core of Light #95). They come by
+// position (the bottom button is Xbox A, labelled B), so A/B and X/Y swap. Only for a device the name says is a
+// Nintendo pad (input_pictures::PadKindOf), never the keyboard or scripted input.
+void NintendoLayout(const DeviceRecord& record, X_INPUT_GAMEPAD& pad) {
+  if (record.keyboard || record.synthetic || REXCVAR_GET(pad_layout) != "nintendo") return;
+  if (input_pictures::PadKindOf(record.name) != input_pictures::PadKind::kNintendo) return;
+  const uint16_t b = uint16_t(pad.buttons);
+  constexpr uint16_t kA = rex::input::X_INPUT_GAMEPAD_A, kB = rex::input::X_INPUT_GAMEPAD_B;
+  constexpr uint16_t kX = rex::input::X_INPUT_GAMEPAD_X, kY = rex::input::X_INPUT_GAMEPAD_Y;
+  uint16_t out = uint16_t(b & ~(kA | kB | kX | kY));
+  if (b & kA) out |= kB;
+  if (b & kB) out |= kA;
+  if (b & kX) out |= kY;
+  if (b & kY) out |= kX;
+  pad.buttons = out;
+}
+
 void RemapPad(X_INPUT_GAMEPAD& pad) {
   const PadSource* target[std::size(kPadSources)] = {};
   bool any = false;
@@ -483,6 +505,10 @@ class MenuInputDriver final : public InputDriver {
     X_RESULT result = inner_->GetDeviceState(id, &state);
     if (result != X_ERROR_SUCCESS) {
       return result;
+    }
+    {
+      std::lock_guard lock(g_mutex);
+      NintendoLayout(g_devices[uint64_t(id)], state.gamepad);
     }
     // --input_record: the raw state of a real pad, before the menu and the remapping see it (a replay
     // goes through both again).
@@ -650,6 +676,10 @@ class MenuInputDriver final : public InputDriver {
     X_INPUT_STATE state{};
     if (inner_->GetDeviceState(id, &state) != X_ERROR_SUCCESS) {
       return std::nullopt;
+    }
+    {
+      std::lock_guard lock(g_mutex);
+      NintendoLayout(g_devices[uint64_t(id)], state.gamepad);
     }
     if (!keyboard_ && state.gamepad.buttons) g_last_pad.store(uint64_t(id));
     return state.gamepad;

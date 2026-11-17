@@ -22,6 +22,10 @@ enum class PromptButton { kA, kB, kX, kY, kStart, kBack, kLB, kRB, kLT, kRT, kLS
 // `flip` (some games keep their prompt textures that way and turn them when drawing). Empty for a size below 4.
 std::vector<uint8_t> DrawPromptIcon(PromptStyle style, PromptButton button, int size, bool flip);
 
+// Nintendo's letters by label instead of by position: with the Nintendo layout (pad_layout) the game's A is the
+// right button, labelled A, so its prompt shows A (and B, X, Y likewise). Off by default. Set before the first icon.
+void SetNintendoLettersByLabel(bool by_label);
+
 // A DXT5 DDS file of an RGBA picture (`size` x `size`, a power of two) with its whole mip chain; empty when the size
 // isn't a power of two or doesn't match the picture.
 std::vector<uint8_t> EncodeDdsDxt5(const std::vector<uint8_t>& rgba, int size);
