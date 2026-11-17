@@ -2412,6 +2412,8 @@ std::optional<std::string> RealSkylanderOf(uint32_t user) {
   return std::nullopt;
 }
 
+std::atomic<bool> g_keep_on_open{false};  // KeepSkylanderOnWhileMenuOpen
+
 std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
   std::vector<LiftedFigure> lifted;
   portal::SoftwarePortal* software = GetSoftwarePortal();
@@ -2905,8 +2907,10 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     if (software_) {
       library_.Build(user_);
       // Asked for a trap or a vehicle: the Skylander stays on (lifting it made the game forget the
-      // request); it comes off only if the player picks another Skylander after all.
-      if (!companion_request_) lifted_ = LiftPlayer(user_);
+      // request); it comes off only if the player picks another Skylander after all. The same in a
+      // game that keeps it on (KeepSkylanderOnWhileMenuOpen, Giants: its gold, #99).
+      stays_on_ = companion_request_.has_value() || g_keep_on_open.load();
+      if (!stays_on_) lifted_ = LiftPlayer(user_);
       lift_time_ = Clock::now();
       // What this player has on the portal, for the cards' pills: the Skylander just lifted (back on
       // with B), one left on (asked for a trap or a vehicle), and a real toy's copy, which stays.
@@ -4031,9 +4035,9 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     AddRecent(user_, paths);
     pending_paths_ = paths;
     restore_ = false;
-    // Opened while the game asked for a companion, the Skylander is still on: off now, and the
-    // new one follows after the usual wait.
-    if (companion_request_ && lifted_.empty()) {
+    // Opened while the game asked for a companion (or in a game that keeps it on), the Skylander is
+    // still on: off now, and the new one follows after the usual wait.
+    if (stays_on_ && lifted_.empty()) {
       lifted_ = LiftPlayer(user_);
       lift_time_ = Clock::now();
     }
@@ -5403,6 +5407,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   bool auto_opened_;
   bool quick_ = false;  // a quick swap: never shown
   std::optional<Element> companion_request_;  // the game asked for a companion when it opened
+  bool stays_on_ = false;  // the player's Skylander wasn't lifted on open (a companion request, KeepSkylanderOn...)
   bool choosing_companion_ = false;           // the version list is a companion's
   bool keyboard_controls_ = false;
   bool software_ = false;
@@ -6502,6 +6507,8 @@ static void RunSoulGemFound(const std::string& skylander) {
     ShowToast(line, 4.5f);
   });
 }
+
+void KeepSkylanderOnWhileMenuOpen(bool keep) { g_keep_on_open.store(keep); }
 
 void SetPortalMenuConfigPath(std::filesystem::path config_path) {
   g_config_path = std::move(config_path);
