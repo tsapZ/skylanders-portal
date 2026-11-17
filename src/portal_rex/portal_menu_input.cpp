@@ -116,6 +116,7 @@ struct DeviceRecord {
   bool remapped_twin = false;  // a real controller a remapper also shows as a virtual one: left out
   std::string name;
   std::optional<uint32_t> forced_user;  // set by SetDevicePlayer
+  bool pressed = false;  // has pressed a button since the game started (FirstPadIsPlayerOne)
   // Open-button tracking.
   uint16_t last_buttons = 0;
   bool chord_fired = false;  // an open chord fired and its buttons are still down
@@ -142,6 +143,7 @@ std::atomic<uint16_t> g_new_presses{0};
 std::atomic<bool> g_menu_open{false};
 // The controller that pressed a button last (a DeviceId), for the hints' button pictures.
 std::atomic<uint64_t> g_last_pad{0};
+bool g_player_one_pressed = false;  // a real pad of player 1 pressed something (guarded by g_mutex)
 std::function<void()> g_menu_closer;  // UI thread only
 std::atomic<bool> g_menu_closable{false};
 std::optional<DeviceId> g_keyboard;
@@ -423,6 +425,31 @@ uint32_t UserOfLocked(const DeviceRecord& record) {
   return record.ordinal < rex::input::kMaxGuestUsers ? record.ordinal : 0;
 }
 
+// The first real controller that presses anything plays as player 1 while player 1's controller hasn't
+// pressed anything (Core of Light #110): the game signs in a profile for player 1 only, so a pad that
+// another (virtual, second) controller pushed to player 2 got "not signed in, progress won't be saved".
+// The two swap places; once player 1 has pressed something nothing moves (co-op as it is). Not for the
+// keyboard or scripted input. Called with g_mutex held, on each poll that has buttons down.
+void FirstPadIsPlayerOne(uint64_t id, DeviceRecord& record) {
+  if (record.keyboard || record.synthetic) return;
+  const bool first = !record.pressed;
+  record.pressed = true;
+  if (g_player_one_pressed) return;
+  const uint32_t user = UserOfLocked(record);
+  if (user == 0) {
+    g_player_one_pressed = true;
+    return;
+  }
+  if (!first) return;  // it pressed before without taking player 1: someone chose this order
+  for (auto& [other_id, other] : g_devices) {
+    if (other_id == id || other.keyboard || other.synthetic || !other.driver) continue;
+    if (UserOfLocked(other) == 0) other.forced_user = user;
+  }
+  record.forced_user = 0;
+  g_player_one_pressed = true;
+  REXLOG_INFO("Input: {} pressed first while player 1's controller was idle: it plays as player 1 now", record.name);
+}
+
 class MenuInputDriver final : public InputDriver {
  public:
   // `keyboard`: the inner driver is the keyboard/mouse emulation, whose device plays as player 0.
@@ -468,7 +495,11 @@ class MenuInputDriver final : public InputDriver {
       if (!synthetic) skylanders::dev::RecordPad(uint64_t(id), state.gamepad);
     }
     bool hide = !is_active() || g_menu_open.load();
-    if (!keyboard_ && state.gamepad.buttons) g_last_pad.store(uint64_t(id));
+    if (!keyboard_ && state.gamepad.buttons) {
+      g_last_pad.store(uint64_t(id));
+      std::lock_guard lock(g_mutex);
+      FirstPadIsPlayerOne(uint64_t(id), g_devices[uint64_t(id)]);
+    }
     uint16_t visible = state.gamepad.buttons;
     if (Observe(id, state.gamepad, &hide, &visible)) {
       hide = true;
