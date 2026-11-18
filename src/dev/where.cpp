@@ -45,12 +45,15 @@ std::string g_level_shared;
 std::string (*g_name_of)(std::string_view) = nullptr;
 std::mutex g_archive_mutex;
 std::string g_archive_level;
+Clock::time_point g_archive_since{};  // when g_archive_level last changed
+std::string g_settled_level;          // the level of a player first seen after that (LevelReady)
 
 void OnOpened(std::string_view path) {
   if (!g_name_of) return;
   std::string name = g_name_of(path);
   if (name.empty()) return;
   std::lock_guard lock(g_archive_mutex);
+  if (name != g_archive_level) g_archive_since = Clock::now();
   g_archive_level = std::move(name);
 }
 
@@ -103,6 +106,13 @@ std::string CurrentLevel() {
   return g_level_shared;
 }
 
+bool LevelReady(const std::string& level) {
+  if (CurrentLevel() != level) return false;
+  if (!g_name_of) return true;
+  std::lock_guard lock(g_archive_mutex);
+  return g_settled_level == level;
+}
+
 void WatchLevelArchives(std::string (*name_of)(std::string_view path)) {
   g_name_of = name_of;
   skylanders::AddFileWatcher(&OnOpened);
@@ -139,7 +149,12 @@ void ReportPlayerFrame(uint32_t who, float x, float y, float z, bool relative) {
   for (const Seen& s : seen) {
     if (&s != mine && s.who && now - s.last < std::chrono::milliseconds(500) && s.first < mine->first) return;
   }
-  std::string level = ArchiveLevel();
+  std::string level;
+  {
+    std::lock_guard lock(g_archive_mutex);
+    level = g_archive_level;
+    if (mine->first >= g_archive_since) g_settled_level = level;
+  }
   if (level.empty()) level = "(level unknown)";
   if (relative) level += " (on something; the position is relative to it)";
   ReportPlace(level, true, x, y, z);

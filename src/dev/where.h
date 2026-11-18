@@ -38,6 +38,11 @@ void WatchLevelArchives(std::string (*name_of)(std::string_view path));
 // The level of the last level archive the game opened ("" before the first), for ReportPlace.
 std::string ArchiveLevel();
 
+// Whether `level` is the level now and has its player: in a game with WatchLevelArchives a player first seen
+// after that level's archive opened (the old level's player is still reported while the new archive loads),
+// elsewhere CurrentLevel() == level. Any thread (the input script's "waitfor level:<name>").
+bool LevelReady(const std::string& level);
+
 // For a game that sees each player once a frame without knowing which one is player 1 (the
 // per-player checks of Swap Force, SuperChargers and Imaginators): `who` the player's object, its
 // position, and whether that is relative to something it stands in or on (a vehicle). The first
