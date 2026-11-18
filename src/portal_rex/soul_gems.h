@@ -38,8 +38,10 @@ void WatchSoulGemSaves(std::vector<std::filesystem::path> (*slots)(),
                                                          std::span<const uint8_t> after));
 
 // Called with each Skylander's name right after its line (the portal menu: a Soul Gem run's
-// find), on the thread that opened the movie. Set once, before the game runs.
-void OnSoulGem(void (*found)(const std::string& skylander));
+// find), on the thread that opened the movie or read the save; `from_save` for a find from a save
+// (only a real pickup sets it, also in a hub; a movie can be watched again there). Set once, before
+// the game runs.
+void OnSoulGem(void (*found)(const std::string& skylander, bool from_save));
 
 // The games' SoulGemOf helpers (portal/soul_gem_names.h), here as the games know them.
 using portal::AfterPrefix;

@@ -19,7 +19,7 @@ namespace {
 using SkylanderOf = std::string (*)(std::string_view);
 
 std::atomic<SkylanderOf> g_skylander_of{nullptr};
-std::atomic<void (*)(const std::string&)> g_found{nullptr};
+std::atomic<void (*)(const std::string&, bool)> g_found{nullptr};
 std::mutex g_mutex;
 std::vector<std::string> g_seen;
 
@@ -36,7 +36,7 @@ void Found(const std::string& name, std::string_view source) {
     }
   }
   if (first) REXLOG_INFO("Soul Gem {}: {}", source, name);
-  if (const auto found = g_found.load(std::memory_order_acquire)) found(name);
+  if (const auto found = g_found.load(std::memory_order_acquire)) found(name, source == "save");
 }
 
 void OnOpened(std::string_view path) {
@@ -114,7 +114,9 @@ void WatchSoulGemSaves(std::vector<std::filesystem::path> (*slots)(),
   }).detach();
 }
 
-void OnSoulGem(void (*found)(const std::string& skylander)) { g_found.store(found, std::memory_order_release); }
+void OnSoulGem(void (*found)(const std::string& skylander, bool from_save)) {
+  g_found.store(found, std::memory_order_release);
+}
 
 std::vector<std::string> SoulGemsSeen() {
   std::lock_guard lock(g_mutex);

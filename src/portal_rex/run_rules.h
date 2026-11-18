@@ -60,8 +60,8 @@ bool TeamRefuses(uint32_t user, const portal::SkylanderInfo& lead, bool german, 
 void Placed(uint32_t user, const portal::SkylanderInfo& lead);
 
 // A Skylander's Soul Gem was found (its catalog or game name): true if that frees it now (not a
-// starter, not free yet, not in a hub). Writes the run file.
-bool SoulGemFound(std::string_view skylander);
+// starter, not free yet, not in a hub unless the find came from the save). Writes the run file.
+bool SoulGemFound(std::string_view skylander, bool from_save = false);
 
 // A level was finished (the game's own signal): the Skylanders its first finish in this run frees,
 // picked at random; empty for a hub, a level finished before, or when none is left. Writes the run

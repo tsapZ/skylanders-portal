@@ -6497,10 +6497,10 @@ uint32_t WantedBackCount() { return g_wanted_back_count.load(); }
 
 // A Skylander's Soul Gem movie opened (soul_gems.h, the game's file thread): in a Soul Gem run it
 // joins, and the player sees so.
-static void RunSoulGemFound(const std::string& skylander) {
+static void RunSoulGemFound(const std::string& skylander, bool from_save) {
   if (!g_app_context || !REXCVAR_GET(run_soul_gems)) return;
-  g_app_context->CallInUIThread([skylander] {
-    if (!run::SoulGemFound(skylander)) return;
+  g_app_context->CallInUIThread([skylander, from_save] {
+    if (!run::SoulGemFound(skylander, from_save)) return;
     char line[256];
     std::snprintf(line, sizeof(line), T(Text::kSoulGemFound), skylander.c_str());
     ShowToast(line, 4.5f);

@@ -197,9 +197,11 @@ void Placed(uint32_t user, const portal::SkylanderInfo& lead) {
   }
 }
 
-bool SoulGemFound(std::string_view skylander) {
+bool SoulGemFound(std::string_view skylander, bool from_save) {
   if (!REXCVAR_GET(run_soul_gems) || logic::NameKey(skylander).empty()) return false;
-  if (const std::string level = dev::CurrentLevel(); logic::IsHubLevel(level)) {
+  // A movie in a hub can be one watched again; a gem's bit in the save comes only from a pickup (Swap
+  // Force has two gems in its hub, Woodburrow).
+  if (const std::string level = dev::CurrentLevel(); !from_save && logic::IsHubLevel(level)) {
     REXLOG_INFO("Run: {}'s Soul Gem in {} not counted (a hub, the gems are found in levels)", skylander,
                 level.empty() ? std::string("no level yet") : level);
     return false;
