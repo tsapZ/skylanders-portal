@@ -81,6 +81,10 @@ struct Save {
   std::vector<MetaObject> meta_objects;
   std::vector<std::pair<uint32_t, std::span<const uint8_t>>> objects;  // (class, fields)
   std::vector<int32_t> ref_object;  // per ref: the object's index, -1 for a memory block
+  std::vector<uint16_t> ref_entry;  // per ref: its entry
+  std::vector<std::span<const uint8_t>> entries;  // each entry's words after (class, size)
+  size_t memory_at = 0;    // the memory blocks, right after the last object
+  size_t memory_size = 0;  // the header's memory size
 };
 
 bool Parse(std::span<const uint8_t> data, Save& s) {
@@ -157,6 +161,7 @@ bool Parse(std::span<const uint8_t> data, Save& s) {
     const uint32_t size = r.U32();
     if (size < 8) return false;
     r.SkipTo(at, size);
+    if (r.ok) s.entries.push_back(data.subspan(at + 8, size - 8));
   }
   r.SkipTo(entries_at, h[0]);
   uint32_t object_entry = 0xFFFFFFFF;
@@ -172,6 +177,7 @@ bool Parse(std::span<const uint8_t> data, Save& s) {
     const uint16_t entry = r.U16();
     const bool object = entry < entry_class.size() && entry_class[entry] == object_entry;
     s.ref_object.push_back(object ? objects_seen++ : -1);
+    s.ref_entry.push_back(entry);
   }
   r.SkipTo(refs_at, refs_size);
   // objects
@@ -185,6 +191,8 @@ bool Parse(std::span<const uint8_t> data, Save& s) {
     r.SkipTo(at, size);
     if (r.ok) s.objects.emplace_back(cls, data.subspan(at + 8, size - 8));
   }
+  s.memory_at = objects_at + h[4];
+  s.memory_size = h[6];
   return r.ok && !s.objects.empty();
 }
 
@@ -218,6 +226,18 @@ std::optional<std::vector<uint32_t>> Fields(const Save& s, uint32_t cls, std::sp
   }
   if (at != raw.size()) return std::nullopt;
   return out;
+}
+
+uint32_t Be32(std::span<const uint8_t> d, size_t at) {
+  if (at > d.size() || d.size() - at < 4) return 0;
+  return uint32_t(d[at]) << 24 | uint32_t(d[at + 1]) << 16 | uint32_t(d[at + 2]) << 8 | d[at + 3];
+}
+
+int32_t ClassIndex(const Save& s, std::string_view name) {
+  for (size_t i = 0; i < s.meta_objects.size(); ++i) {
+    if (s.meta_objects[i].name == name) return int32_t(i);
+  }
+  return -1;
 }
 
 std::string LastPart(std::string_view path) {
@@ -257,6 +277,63 @@ std::vector<VvZone> ReadVvZones(std::span<const uint8_t> save) {
       zone.fields = *fields;
     }
     out.push_back(std::move(zone));
+  }
+  return out;
+}
+
+std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save) {
+  Save s;
+  if (!Parse(save, s)) return {};
+  // The memory blocks' places, per ref (only the memory refs get one).
+  std::vector<std::pair<size_t, size_t>> block(s.ref_entry.size(), {0, 0});
+  size_t at = s.memory_at;
+  for (size_t i = 0; i < s.ref_entry.size(); ++i) {
+    if (s.ref_object[i] >= 0) continue;
+    const uint16_t e = s.ref_entry[i];
+    if (e >= s.entries.size() || s.entries[e].size() < 20) return {};
+    const uint32_t count = Be32(s.entries[e], 4);
+    const uint32_t type = Be32(s.entries[e], 8);
+    const uint32_t each = (type == 0x1B || type == 0x36) ? 8 : Be32(s.entries[e], 16);
+    if (each == 0 || each > 16 || count > 0x100000) return {};
+    block[i] = {at, size_t(count) * each};
+    at += size_t(count) * each;
+  }
+  if (at > s.memory_at + s.memory_size || at > save.size()) return {};
+  const int32_t tracker_class = ClassIndex(s, "CCollectibleTrackerSystemSaveData");
+  const int32_t mask_class = ClassIndex(s, "igBitMask");
+  if (tracker_class < 0 || mask_class < 0) return {};
+  for (const auto& [cls, raw] : s.objects) {
+    if (int32_t(cls) != tracker_class) continue;
+    const auto fields = Fields(s, cls, raw);
+    if (!fields || fields->empty()) return {};
+    const uint32_t ref = (*fields)[0];
+    if (ref >= s.ref_object.size() || s.ref_object[ref] < 0) return {};
+    const auto& [m_cls, m_raw] = s.objects[size_t(s.ref_object[ref])];
+    if (int32_t(m_cls) != mask_class) return {};
+    const auto mask = Fields(s, m_cls, m_raw);  // word count, its copy, the memory ref, the bit count
+    if (!mask || mask->size() < 4) return {};
+    const uint32_t words = (*mask)[0];
+    const uint32_t mem = (*mask)[2];
+    if (mem >= block.size() || s.ref_object[mem] >= 0 || block[mem].second < size_t(words) * 4) return {};
+    std::vector<uint32_t> out;
+    for (uint32_t w = 0; w < words; ++w) {
+      const uint32_t v = Be32(save, block[mem].first + 4 * w);
+      for (uint32_t b = 0; b < 32; ++b) {
+        if (v >> b & 1) out.push_back(w * 32 + b);
+      }
+    }
+    return out;
+  }
+  return {};
+}
+
+std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::span<const uint8_t> after,
+                                      uint32_t first, uint32_t count) {
+  const std::vector<uint32_t> had = ReadVvTrackerBits(before);
+  const std::set<uint32_t> old(had.begin(), had.end());
+  std::vector<uint32_t> out;
+  for (const uint32_t bit : ReadVvTrackerBits(after)) {
+    if (bit >= first && bit - first < count && !old.contains(bit)) out.push_back(bit - first);
   }
   return out;
 }

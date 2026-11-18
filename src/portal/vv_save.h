@@ -43,6 +43,20 @@ std::vector<VvZone> ReadVvZones(std::span<const uint8_t> save);
 // The zones whose field `slot` holds a value (not 0xFFFFFFFF) in `after` and didn't in `before` (or
 // weren't there): finished for the first time, named by the last part of their path ("nat2",
 // "brn1", "level_508"), in the order of the save.
+// The collectible trackers' bits of a save (2026-11-18, the Soul Gem run): the first igBitMask its
+// CCollectibleTrackerSystemSaveData points to, as the set bit numbers; bit i is word[i / 32] >> (i % 32)
+// of the mask's big-endian words. The mask's words are a memory block: the blocks follow the last object,
+// in the refs' order, each its igMemoryDirEntry's element count times the element size (its word 4; 8 for a
+// handle block, type 0x1B in Swap Force, 0x36 in SuperChargers, whose word 4 says 4). In Swap Force's slot
+// it has 738 bits and Soul Gem k of data\collectibletrackers.igx's SoulGems list is bit 581 + k (two
+// scripted pickups, Wind-Up 612 and Grilla Drilla 587; the game saves the slot right after a pickup). Empty
+// for anything else.
+std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save);
+
+// The bits in [first, first + count) set in `after` and not in `before`, as places from `first`.
+std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::span<const uint8_t> after,
+                                      uint32_t first, uint32_t count);
+
 std::vector<std::string> VvZonesFinished(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                          size_t slot);
 
