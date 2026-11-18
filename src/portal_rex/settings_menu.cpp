@@ -1175,8 +1175,20 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       }
       const bool enabled = Enabled(s);
       const ImU32 greyed = Rgba(255, 255, 255, 90);
-      dl->AddRectFilled(r0, r1, active ? Rgba(255, 255, 255, 52) : Rgba(255, 255, 255, 14), S(14));
-      if (active) dl->AddRect(r0, r1, enabled ? kGold : greyed, S(14), 0, S(3));
+      // The row as a tile (the owner 2026-11-18 with the stone frame: the tiles and arrows a little nicer, not too
+      // much): lighter at the top with a fine highlight line; the chosen one in a soft gold glow under its gold rim.
+      GradientRect(dl, r0, r1, active ? Rgba(255, 255, 255, 64) : Rgba(255, 255, 255, 22),
+                   active ? Rgba(255, 255, 255, 30) : Rgba(255, 255, 255, 8), S(14), 0);
+      dl->AddLine({r0.x + S(14), r0.y + S(1.5f)}, {r1.x - S(14), r0.y + S(1.5f)},
+                  Rgba(255, 255, 255, active ? 70 : 26), S(1));
+      if (active) {
+        for (int g = 3; g >= 1; --g) {
+          const float o = S(2) * float(g);
+          dl->AddRect({r0.x - o, r0.y - o}, {r1.x + o, r1.y + o}, ((enabled ? kGold : greyed) & 0x00FFFFFFu) | (14u << 24),
+                      S(14) + o, 0, S(2));
+        }
+        dl->AddRect(r0, r1, enabled ? kGold : greyed, S(14), 0, S(3));
+      }
       const std::string& label = Tr(s.en, s.de);
       Label(dl, BoldFont(), S(23), {r0.x + S(22), r0.y + S(17)}, enabled ? kWhite : greyed, label);
       if (Pending(s)) {
@@ -1205,20 +1217,48 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
                       : CurrentValue(s);
       const float box_w = S(270);
       const ImVec2 v0{r1.x - S(18) - box_w, r0.y + S(12)}, v1{r1.x - S(18), r1.y - S(12)};
-      dl->AddRectFilled(v0, v1, active ? Rgba(16, 22, 60, 230) : Rgba(16, 22, 60, 150), S(20));
+      // The value's box: deep blue, lighter at the top, with a fine blue rim (the stone frame's colour).
+      GradientRect(dl, v0, v1, active ? Rgba(30, 44, 104, 240) : Rgba(22, 30, 76, 170),
+                   active ? Rgba(10, 14, 40, 240) : Rgba(10, 14, 40, 150), S(20), 0);
+      dl->AddRect(v0, v1, active ? Rgba(130, 165, 240, 120) : Rgba(130, 165, 240, 45), S(20), 0, S(1.5f));
+      // A short list shows where its value sits: a dot per choice under the value.
+      const bool dots = !s.key_bind && index >= 0 && options.size() >= 2 && options.size() <= 7;
+      const float lift = dots ? S(3) : 0.0f;
       // Long values get a smaller font so they stay between the arrows.
       float size = S(21);
       ImVec2 vs = TextSize(BoldFont(), size, value);
-      while (vs.x > box_w - S(80) && size > S(13)) {
+      while (vs.x > box_w - S(84) && size > S(13)) {
         size -= S(1);
         vs = TextSize(BoldFont(), size, value);
       }
-      Label(dl, BoldFont(), size, {(v0.x + v1.x - vs.x) / 2, (v0.y + v1.y - vs.y) / 2},
+      Label(dl, BoldFont(), size, {(v0.x + v1.x - vs.x) / 2, (v0.y + v1.y - vs.y) / 2 - lift},
             !enabled ? greyed : active ? kGold : kWhite, value);
+      if (dots && enabled) {
+        const float step = S(10), dy = v1.y - S(6);
+        const float x0 = (v0.x + v1.x) / 2 - step * float(options.size() - 1) / 2;
+        for (size_t d = 0; d < options.size(); ++d) {
+          const bool on = int(d) == index;
+          dl->AddCircleFilled({x0 + step * float(d), dy}, on ? S(2.6f) : S(2),
+                              on ? (active ? kGold : kWhite) : Rgba(255, 255, 255, 60));
+        }
+      }
       if (!enabled) continue;  // no arrows, no clicks
-      const ImU32 arrow = active ? kGold : Rgba(255, 255, 255, 90);
-      Label(dl, BoldFont(), S(24), {v0.x + S(12), v0.y + S(5)}, arrow, "<");
-      Label(dl, BoldFont(), S(24), {v1.x - S(26), v0.y + S(5)}, arrow, ">");
+      // The arrows as chevrons on small round buttons at the box's ends (were the letters < and >); the one under the
+      // mouse a little lighter.
+      const ImU32 arrow = active ? kGold : Rgba(255, 255, 255, 110);
+      const float br = S(13);
+      const float mid = (v0.y + v1.y) / 2;
+      for (int side = 0; side < 2; ++side) {
+        const float dir = side == 0 ? -1.0f : 1.0f;
+        const ImVec2 c{side == 0 ? v0.x + S(21) : v1.x - S(21), mid};
+        const bool hover = ImGui::IsMouseHoveringRect({c.x - br, c.y - br}, {c.x + br, c.y + br});
+        dl->AddCircleFilled(c, br, Rgba(255, 255, 255, hover ? 44 : active ? 26 : 12));
+        dl->AddCircle(c, br, Rgba(130, 165, 240, active ? 110 : 50), 0, S(1.2f));
+        const float w = S(4), h = S(6.5f);
+        const ImVec2 pts[3] = {{c.x - dir * w + dir * S(1), c.y - h}, {c.x + dir * w + dir * S(1), c.y},
+                               {c.x - dir * w + dir * S(1), c.y + h}};
+        dl->AddPolyline(pts, 3, arrow, 0, S(3));
+      }
       if (!confirm_ && !ask_ && listen_cvar_.empty() && ImGui::IsMouseHoveringRect(v0, v1) &&
           ImGui::IsMouseClicked(0)) {
         row_ = i;
