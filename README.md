@@ -64,6 +64,8 @@ picture never goes into a repository.
 - [Xenia Canary](https://github.com/xenia-canary/xenia-canary) for the XAM non-controller API.
 - [Skylanders Ultimate NFC Pack](https://skylandersnfc.github.io/Skylanders-Ultimate-NFC-Pack/)
   for the figure dumps behind the name/id catalog.
+- [morpheus284](https://github.com/morpheus284) for the menus' stone frame, cut from his Core of Light
+  artwork (CC BY 4.0; `assets/README.md`).
 - [SkyReader](https://github.com/reedstrm/SkyReader) and Marijn Kneppers'
   ["Reverse engineering Skylanders' Toys-to-life mechanics"](https://marijnkneppers.dev/posts/reverse-engineering-skylanders-toys-to-life-mechanics/)
   for figure save-data decoding.

@@ -197,4 +197,54 @@ bool ReadPng(const std::filesystem::path& path, int& width, int& height, std::ve
 #endif
 }
 
+bool DecodePng(const uint8_t* data, size_t size, int& width, int& height, std::vector<uint8_t>& rgba) {
+  width = height = 0;
+  rgba.clear();
+  if (!data || size == 0 || size > 64 * 1024 * 1024) return false;
+#ifdef _WIN32
+  // As ReadPng, from a WIC stream over the bytes instead of a file.
+  const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  bool ok = false;
+  IWICImagingFactory* factory = nullptr;
+  IWICStream* stream = nullptr;
+  IWICBitmapDecoder* decoder = nullptr;
+  IWICBitmapFrameDecode* frame = nullptr;
+  IWICFormatConverter* converter = nullptr;
+  UINT w = 0, h = 0;
+  if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) &&
+      SUCCEEDED(factory->CreateStream(&stream)) &&
+      SUCCEEDED(stream->InitializeFromMemory(const_cast<BYTE*>(data), DWORD(size))) &&
+      SUCCEEDED(factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &decoder)) &&
+      SUCCEEDED(decoder->GetFrame(0, &frame)) && SUCCEEDED(factory->CreateFormatConverter(&converter)) &&
+      SUCCEEDED(converter->Initialize(frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0,
+                                      WICBitmapPaletteTypeCustom)) &&
+      SUCCEEDED(converter->GetSize(&w, &h)) && w > 0 && h > 0 && w <= 4096 && h <= 4096) {
+    rgba.resize(size_t(w) * h * 4);
+    ok = SUCCEEDED(converter->CopyPixels(nullptr, w * 4, UINT(rgba.size()), rgba.data()));
+  }
+  if (converter) converter->Release();
+  if (frame) frame->Release();
+  if (decoder) decoder->Release();
+  if (stream) stream->Release();
+  if (factory) factory->Release();
+  if (SUCCEEDED(init)) CoUninitialize();
+  width = ok ? int(w) : 0;
+  height = ok ? int(h) : 0;
+  if (!ok) rgba.clear();
+  return ok;
+#else
+  int w = 0, h = 0, channels = 0;
+  stbi_uc* decoded = stbi_load_from_memory(data, int(size), &w, &h, &channels, 4);
+  if (!decoded) return false;
+  const bool ok = w > 0 && h > 0 && w <= kMaxPngDimension && h <= kMaxPngDimension;
+  if (ok) {
+    width = w;
+    height = h;
+    rgba.assign(decoded, decoded + size_t(w) * h * 4);
+  }
+  stbi_image_free(decoded);
+  return ok;
+#endif
+}
+
 }  // namespace skylanders

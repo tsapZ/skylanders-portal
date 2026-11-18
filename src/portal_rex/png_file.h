@@ -3,6 +3,7 @@
 // Writing and reading a picture as a PNG file (png_file.cpp, Windows' WIC), for the figure picture
 // cache.
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -16,5 +17,8 @@ bool WritePng(const std::filesystem::path& path, int width, int height, const ui
 // The picture in a PNG (or any image WIC reads) as `rgba`, width * height * 4 bytes, rows top to
 // bottom. False if it couldn't (or not on Windows).
 bool ReadPng(const std::filesystem::path& path, int& width, int& height, std::vector<uint8_t>& rgba);
+
+// The same for a PNG in memory (a picture built into the program, e.g. the menus' frame).
+bool DecodePng(const uint8_t* data, size_t size, int& width, int& height, std::vector<uint8_t>& rgba);
 
 }  // namespace skylanders

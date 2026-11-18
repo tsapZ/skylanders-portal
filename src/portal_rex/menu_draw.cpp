@@ -388,6 +388,29 @@ void DrawPanel(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
   dl->AddRect(p0, p1, kGold, r, 0, S(4));
   dl->AddRect({p0.x + S(9), p0.y + S(9)}, {p1.x - S(9), p1.y - S(9)}, kGoldDark, r - S(8), 0,
               S(1.5f));
+  // morpheus284's stone frame from the launcher over the gold rim (the owner 2026-11-18 on the sketch: yes, only the
+  // frame, on all menus of all six games). A 9-slice of the card's rim (assets/menu_frame.png, 491 x 959): its 64 px
+  // corners keep their shape, the edges stretch, the middle stays open; the rim (about 26 px of the picture) is drawn
+  // S(24) wide and a little outside the gold rim, so it covers it. Without the picture the gold rim stays alone.
+  ImVec2 size;
+  if (ImTextureID frame = MenuFrameTexture(size); frame && size.x > 128 && size.y > 128) {
+    const float k = S(24) / 26.0f;
+    const float pad = 14.0f * k;
+    const ImVec2 q0{p0.x - pad, p0.y - pad};
+    const ImVec2 q1{p1.x + pad, p1.y + pad};
+    constexpr float kCorner = 64.0f;
+    const float t = std::min({kCorner * k, (q1.x - q0.x) / 2, (q1.y - q0.y) / 2});
+    const float xs[4] = {q0.x, q0.x + t, q1.x - t, q1.x};
+    const float ys[4] = {q0.y, q0.y + t, q1.y - t, q1.y};
+    const float us[4] = {0.0f, kCorner / size.x, 1.0f - kCorner / size.x, 1.0f};
+    const float vs[4] = {0.0f, kCorner / size.y, 1.0f - kCorner / size.y, 1.0f};
+    for (int j = 0; j < 3; ++j) {
+      for (int i = 0; i < 3; ++i) {
+        if (i == 1 && j == 1) continue;
+        dl->AddImage(frame, {xs[i], ys[j]}, {xs[i + 1], ys[j + 1]}, {us[i], vs[j]}, {us[i + 1], vs[j + 1]});
+      }
+    }
+  }
 }
 
 float CapCentredY(float centre_y, float size) {

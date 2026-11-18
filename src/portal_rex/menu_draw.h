@@ -74,6 +74,11 @@ float HintWidth(std::string_view glyph, std::string_view label, bool round, std:
 // made; a null id while there is none (yet). Lives in portal_menu.cpp, which owns the textures.
 ImTextureID GameArtTexture(const std::string& key);
 
+// The menus' stone frame (morpheus284's card rim from Core of Light, CC BY 4.0, built into the program) as a texture,
+// with its size in pixels; a null id when it couldn't be made (DrawPanel then keeps the gold rim alone). Lives in
+// portal_menu.cpp, which owns the textures.
+ImTextureID MenuFrameTexture(ImVec2& size);
+
 // A list's first shown row. The mouse wheel (when `wheel_on`) moves it a row per notch and leaves
 // the chosen row where it is; it follows the chosen row only when that changes (the keys, the pad),
 // so the choice stays in view (SwapForceRecomp #65, as Core of Light's settings). `followed` is the

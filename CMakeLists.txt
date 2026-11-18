@@ -176,6 +176,16 @@ if(TARGET rex::runtime)
     )
     target_include_directories(skylanders_portal_rex PUBLIC src)
     target_include_directories(skylanders_portal_rex PRIVATE "${REXSDK_DIR}/thirdparty/imgui")
+    # The in-game menus' stone frame (morpheus284's art from Core of Light, CC BY 4.0; assets/README.md) built into
+    # the program as bytes (menu_frame_png.inc, included by portal_menu.cpp); rewritten only when the picture changes.
+    set(SKYLANDERS_FRAME_PNG "${CMAKE_CURRENT_SOURCE_DIR}/assets/menu_frame.png")
+    file(READ "${SKYLANDERS_FRAME_PNG}" _skylanders_frame_hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _skylanders_frame_bytes "${_skylanders_frame_hex}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/menu_frame_png.inc.new" "${_skylanders_frame_bytes}\n")
+    configure_file("${CMAKE_CURRENT_BINARY_DIR}/generated/menu_frame_png.inc.new"
+                   "${CMAKE_CURRENT_BINARY_DIR}/generated/menu_frame_png.inc" COPYONLY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SKYLANDERS_FRAME_PNG}")
+    target_include_directories(skylanders_portal_rex PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(skylanders_portal_rex PUBLIC skylanders_portal_core rex::runtime hidapi::hidapi SDL3::SDL3)
     # The SDK's FFmpeg decodes the title music from the disc (title_music.cpp).
     target_link_libraries(skylanders_portal_rex PRIVATE libavcodec libavutil)

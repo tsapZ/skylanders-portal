@@ -1914,6 +1914,14 @@ rex::ui::ImmediateDrawer* g_immediate_drawer = nullptr;
 std::unordered_map<uint32_t, std::unique_ptr<rex::ui::ImmediateTexture>> g_textures;
 // Uploaded art by key. UI thread only.
 std::unordered_map<std::string, std::unique_ptr<rex::ui::ImmediateTexture>> g_art_textures;
+// The menus' stone frame (MenuFrameTexture), made once from the picture built into the program. UI thread only.
+std::unique_ptr<rex::ui::ImmediateTexture> g_menu_frame;
+bool g_menu_frame_tried = false;
+ImVec2 g_menu_frame_size{};
+// assets/menu_frame.png as bytes (CMakeLists.txt makes the include from it).
+const uint8_t kMenuFramePng[] = {
+#include "menu_frame_png.inc"
+};
 
 // A picture not made yet costs a decode and an upload, on the UI thread. The menu's first open asks
 // for dozens at once (a page of figures with their element and stat pictures), and making them all
@@ -6287,6 +6295,25 @@ void NoteFigureSave(const std::filesystem::path& file, bool saved) {
 
 ImTextureID menu_draw::GameArtTexture(const std::string& key) { return ArtTexture(key); }
 
+ImTextureID menu_draw::MenuFrameTexture(ImVec2& size) {
+  size = {};
+  if (!g_immediate_drawer) return ImTextureID{};
+  if (!g_menu_frame && !g_menu_frame_tried) {
+    g_menu_frame_tried = true;
+    int w = 0, h = 0;
+    std::vector<uint8_t> rgba;
+    if (DecodePng(kMenuFramePng, sizeof(kMenuFramePng), w, h, rgba)) {
+      g_menu_frame = g_immediate_drawer->CreateTexture(uint32_t(w), uint32_t(h),
+                                                       rex::ui::ImmediateTextureFilter::kLinear, false, rgba.data());
+      g_menu_frame_size = {float(w), float(h)};
+    }
+    if (!g_menu_frame) REXLOG_WARN("Menus: the stone frame couldn't be made; the gold rim stays");
+  }
+  if (!g_menu_frame) return ImTextureID{};
+  size = g_menu_frame_size;
+  return reinterpret_cast<ImTextureID>(g_menu_frame.get());
+}
+
 namespace {
 
 // Whether the player has a Skylander on the emulated portal that isn't out of health (the same
@@ -6565,6 +6592,8 @@ void ShutdownPortalMenu() {
   g_toast.reset();
   g_textures.clear();
   g_art_textures.clear();
+  g_menu_frame.reset();
+  g_menu_frame_tried = false;
   g_immediate_drawer = nullptr;
 }
 
