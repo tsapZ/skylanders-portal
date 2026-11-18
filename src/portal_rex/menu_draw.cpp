@@ -374,27 +374,36 @@ void GradientRect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom, f
 }
 
 void DrawPanel(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
-  const float r = S(26);
+  // morpheus284's stone frame from the launcher around the panel (the owner 2026-11-18 on the sketch: yes, only the
+  // frame, on all menus of all six games), in place of the gold rim. A 9-slice of the card's rim (assets/menu_frame.png,
+  // 491 x 959): its 64 px corners keep their shape, the edges stretch, the middle stays open. Its rim (opaque from 7 to
+  // 24 px of the picture on the straight edges, the outer corner a curve of about 61.5 px round a centre 68.5 px in) is
+  // drawn S(24) wide per 26 px and 14 px of the picture outside the panel, so the panel's edge lies under the stone;
+  // the panel's corners are rounded round the same centre (68.5 - 14 px), or they peek out at the corners (code review
+  // 2026-11-18). Without the picture the gold rim stays.
+  ImVec2 frame_size;
+  const ImTextureID frame = MenuFrameTexture(frame_size);
+  const bool framed = frame && frame_size.x > 128 && frame_size.y > 128;
+  const float k = S(24) / 26.0f;
+  const float r = framed ? (68.5f - 14.0f) * k : S(26);
   dl->AddRectFilled({p0.x + S(8), p0.y + S(10)}, {p1.x + S(8), p1.y + S(10)}, Rgba(0, 0, 0, 80),
                     r);
   // Slightly see-through, with a magic glow from the top.
   dl->AddRectFilled(p0, p1, Rgba(16, 22, 60, 205), r);
   const ImVec2 glow{(p0.x + p1.x) / 2, p0.y + S(40)};
   for (int i = 6; i >= 1; --i) {
-    const float k = float(i) / 6.0f;
-    dl->AddEllipseFilled(glow, {(p1.x - p0.x) * 0.45f * k, S(220) * k},
-                         IM_COL32(90, 70, 200, int(16 * (1.0f - k) + 4)));
+    const float g = float(i) / 6.0f;
+    dl->AddEllipseFilled(glow, {(p1.x - p0.x) * 0.45f * g, S(220) * g},
+                         IM_COL32(90, 70, 200, int(16 * (1.0f - g) + 4)));
   }
-  dl->AddRect(p0, p1, kGold, r, 0, S(4));
-  dl->AddRect({p0.x + S(9), p0.y + S(9)}, {p1.x - S(9), p1.y - S(9)}, kGoldDark, r - S(8), 0,
-              S(1.5f));
-  // morpheus284's stone frame from the launcher over the gold rim (the owner 2026-11-18 on the sketch: yes, only the
-  // frame, on all menus of all six games). A 9-slice of the card's rim (assets/menu_frame.png, 491 x 959): its 64 px
-  // corners keep their shape, the edges stretch, the middle stays open; the rim (about 26 px of the picture) is drawn
-  // S(24) wide and a little outside the gold rim, so it covers it. Without the picture the gold rim stays alone.
-  ImVec2 size;
-  if (ImTextureID frame = MenuFrameTexture(size); frame && size.x > 128 && size.y > 128) {
-    const float k = S(24) / 26.0f;
+  if (!framed) {
+    dl->AddRect(p0, p1, kGold, r, 0, S(4));
+    dl->AddRect({p0.x + S(9), p0.y + S(9)}, {p1.x - S(9), p1.y - S(9)}, kGoldDark, r - S(8), 0,
+                S(1.5f));
+    return;
+  }
+  {
+    const ImVec2 size = frame_size;
     const float pad = 14.0f * k;
     const ImVec2 q0{p0.x - pad, p0.y - pad};
     const ImVec2 q1{p1.x + pad, p1.y + pad};

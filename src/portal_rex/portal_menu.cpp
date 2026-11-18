@@ -7072,6 +7072,10 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
   g_app_context = app_context;
   g_immediate_drawer = immediate_drawer;
   g_item_app_context = app_context;
+  // The menus' stone frame made now, at the start: decoding it on the first menu open was a first-open hitch (code
+  // review 2026-11-18), as the figure pictures were before their budget.
+  ImVec2 frame_size;
+  menu_draw::MenuFrameTexture(frame_size);
   RegisterDevOverlay(drawer);  // the dev_overlay line (off by default)
   menu_input::SetOpenHandler([](DeviceId device, uint32_t user) {
     if (!g_app_context) return;
