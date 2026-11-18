@@ -133,10 +133,11 @@ std::function<void(const std::string&)> FindCommand(const std::string& name) {
 }
 
 std::function<bool()> FindCondition(const std::string& name) {
-  // "level:<name>": until the level dev/where.h reports is that one (all six games; 2026-11-17: after the kit's
-  // level jump in Swap Force, "waitfor player" was met at once by the old level's player).
+  // "level:<name>": until the level dev/where.h reports is that one and has its player (all six games;
+  // 2026-11-17: after the kit's level jump in Swap Force, "waitfor player" was met at once by the old level's
+  // player; LevelReady, code review 2026-11-18, also waits out the old player in the archive-named games).
   if (name.rfind("level:", 0) == 0 && name.size() > 6) {
-    return [level = name.substr(6)] { return CurrentLevel() == level; };
+    return [level = name.substr(6)] { return LevelReady(level); };
   }
   Registry& r = GetRegistry();
   std::lock_guard lock(r.mutex);
@@ -574,8 +575,19 @@ void RunEvent(const Event& e, const std::function<uint64_t()>& guest_frame_count
                            access != rex::memory::PageAccess::kNoAccess &&
                            !(int(access) & int(rex::memory::PageAccess::kReadWrite) & ~1);
     if (read_only) {
-      rex::memory::Protect(host, 4, (int(access) & 4) ? rex::memory::PageAccess::kExecuteReadWrite
-                                                      : rex::memory::PageAccess::kReadWrite);
+      // Only the game image's pages (0x82000000.., .rdata): elsewhere a read-only page can be one the GPU's
+      // caches watch, and writing past the watch would leave stale data or an unwatched read-only page
+      // (code review 2026-11-18). One page only: the second page's protection may differ.
+      if (address < 0x82000000u || address >= 0x90000000u || (address & 0xFFFu) > 0xFFCu) {
+        REXLOG_WARN("Input script: poke {:08X} is on a read-only page outside the game image or across a "
+                    "page: left alone", address);
+        return;
+      }
+      if (!rex::memory::Protect(host, 4, (int(access) & 4) ? rex::memory::PageAccess::kExecuteReadWrite
+                                                           : rex::memory::PageAccess::kReadWrite)) {
+        REXLOG_WARN("Input script: poke {:08X}: the page can't be made writable", address);
+        return;
+      }
     }
     std::memcpy(host, &value, 4);
     if (read_only) rex::memory::Protect(host, 4, access);
