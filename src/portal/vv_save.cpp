@@ -281,7 +281,8 @@ std::vector<VvZone> ReadVvZones(std::span<const uint8_t> save) {
   return out;
 }
 
-std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save) {
+std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save, std::string_view tracker_class,
+                                       size_t field) {
   Save s;
   if (!Parse(save, s)) return {};
   // The memory blocks' places, per ref (only the memory refs get one).
@@ -299,14 +300,14 @@ std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save) {
     at += size_t(count) * each;
   }
   if (at > s.memory_at + s.memory_size || at > save.size()) return {};
-  const int32_t tracker_class = ClassIndex(s, "CCollectibleTrackerSystemSaveData");
+  const int32_t owner_class = ClassIndex(s, tracker_class);
   const int32_t mask_class = ClassIndex(s, "igBitMask");
-  if (tracker_class < 0 || mask_class < 0) return {};
+  if (owner_class < 0 || mask_class < 0) return {};
   for (const auto& [cls, raw] : s.objects) {
-    if (int32_t(cls) != tracker_class) continue;
+    if (int32_t(cls) != owner_class) continue;
     const auto fields = Fields(s, cls, raw);
-    if (!fields || fields->empty()) return {};
-    const uint32_t ref = (*fields)[0];
+    if (!fields || fields->size() <= field) return {};
+    const uint32_t ref = (*fields)[field];
     if (ref >= s.ref_object.size() || s.ref_object[ref] < 0) return {};
     const auto& [m_cls, m_raw] = s.objects[size_t(s.ref_object[ref])];
     if (int32_t(m_cls) != mask_class) return {};
@@ -328,11 +329,12 @@ std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save) {
 }
 
 std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::span<const uint8_t> after,
-                                      uint32_t first, uint32_t count) {
-  const std::vector<uint32_t> had = ReadVvTrackerBits(before);
+                                      uint32_t first, uint32_t count, std::string_view tracker_class,
+                                      size_t field) {
+  const std::vector<uint32_t> had = ReadVvTrackerBits(before, tracker_class, field);
   const std::set<uint32_t> old(had.begin(), had.end());
   std::vector<uint32_t> out;
-  for (const uint32_t bit : ReadVvTrackerBits(after)) {
+  for (const uint32_t bit : ReadVvTrackerBits(after, tracker_class, field)) {
     if (bit >= first && bit - first < count && !old.contains(bit)) out.push_back(bit - first);
   }
   return out;

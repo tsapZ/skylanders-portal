@@ -55,19 +55,21 @@ void MemoryEntry(std::vector<uint8_t>& e, uint32_t count, uint32_t type) {
 }
 
 // classes: 0 igObject, 1 igObjectDirEntry, 2 igMemoryDirEntry, 3 igBitMask, 4 CCollectibleTrackerSystemSaveData
-std::vector<uint8_t> Build(const std::set<uint32_t>& bits, bool tracker = true) {
+std::vector<uint8_t> Build(const std::set<uint32_t>& bits, bool tracker = true,
+                           const std::string& owner = "CCollectibleTrackerSystemSaveData", bool second = false) {
   const std::vector<Class> classes = {
       {"igObject", -1, {}},
       {"igObjectDirEntry", 0, {{kInt, 0}}},
       {"igMemoryDirEntry", 0, {{kInt, 0}}},
       {"igBitMask", 0, {{kInt, 0}, {kInt, 1}, {kMem, 2}, {kUInt, 3}}},
-      {tracker ? "CCollectibleTrackerSystemSaveData" : "CSomethingElse", 0, {{kRef, 0}, {kRef, 1}, {kBool, 2}}},
+      {tracker ? owner : std::string("CSomethingElse"), 0, {{kRef, 0}, {kRef, 1}, {kBool, 2}}},
   };
   // refs: 0 the handle block, 1 the mask's words, 2 the tracker data (object 0), 3 the mask (object 1)
   const std::vector<uint16_t> refs = {1, 2, 0, 0};
   std::vector<uint8_t> tracker_fields, mask_fields, objects_body;
-  Put32(tracker_fields, 3);           // the mask
-  Put32(tracker_fields, 0xFFFFFFFF);  // none
+  // the mask in field 0 (Swap Force) or 1 (Imaginators: field 0 is its treasure list)
+  Put32(tracker_fields, second ? 0xFFFFFFFF : 3);
+  Put32(tracker_fields, second ? 3 : 0xFFFFFFFF);
   Put32(tracker_fields, 0x01000010);  // a true bool with junk in its padding
   Put32(mask_fields, 24);
   Put32(mask_fields, 24);
@@ -183,6 +185,16 @@ int main() {
   const auto fresh = VvTrackerBitsNew({}, after, 581, 32);
   REQUIRE_OR_RETURN(fresh.size() == 2);
   CHECK(fresh[0] == 24 && fresh[1] == 31);
+
+  // Imaginators: the mask in field 1 of CCollectibleTrackerSystemSlotSaveData; CopyCat's gem is bit 12
+  const std::string im = "CCollectibleTrackerSystemSlotSaveData";
+  const auto im_before = Build({19, 37}, true, im, true);
+  const auto im_after = Build({12, 19, 37}, true, im, true);
+  const auto im_found = VvTrackerBitsNew(im_before, im_after, 0, 41, im, 1);
+  REQUIRE_OR_RETURN(im_found.size() == 1);
+  CHECK(im_found[0] == 12);
+  CHECK(ReadVvTrackerBits(im_after).empty());  // the Swap Force class isn't there
+  CHECK(ReadVvTrackerBits(im_after, im, 0).empty());  // field 0 isn't the mask
 
   // no tracker data, cut short anywhere, or junk: nothing
   CHECK(ReadVvTrackerBits(Build({612}, false)).empty());

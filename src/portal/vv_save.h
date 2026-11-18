@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <span>
+#include <string_view>
 #include <string>
 #include <vector>
 
@@ -50,12 +51,17 @@ std::vector<VvZone> ReadVvZones(std::span<const uint8_t> save);
 // handle block, type 0x1B in Swap Force, 0x36 in SuperChargers, whose word 4 says 4). In Swap Force's slot
 // it has 738 bits and Soul Gem k of data\collectibletrackers.igx's SoulGems list is bit 581 + k (two
 // scripted pickups, Wind-Up 612 and Grilla Drilla 587; the game saves the slot right after a pickup). Empty
-// for anything else.
-std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save);
+// for anything else. Imaginators keeps its own Soul Gems in field 1 of CCollectibleTrackerSystemSlotSaveData (41
+// bits: places 153-193 of its SoulGems list; CopyCat's gem set bit 12 = place 165): pass that class and field.
+std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save,
+                                       std::string_view tracker_class = "CCollectibleTrackerSystemSaveData",
+                                       size_t field = 0);
 
 // The bits in [first, first + count) set in `after` and not in `before`, as places from `first`.
 std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::span<const uint8_t> after,
-                                      uint32_t first, uint32_t count);
+                                      uint32_t first, uint32_t count,
+                                      std::string_view tracker_class = "CCollectibleTrackerSystemSaveData",
+                                      size_t field = 0);
 
 std::vector<std::string> VvZonesFinished(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                          size_t slot);
