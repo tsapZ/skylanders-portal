@@ -65,6 +65,12 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
 // "put a Skylander on" pause) and B puts it back. Set once, before the game runs.
 void KeepSkylanderOnWhileMenuOpen(bool keep);
 
+// With the Skylander kept on, the game plays on behind the menu. This makes the menu tap Start for the player
+// when they open it by button (not when the game opened it, asks for a trap or a vehicle, or for a quick swap),
+// so the game's own pause menu stands behind it, and tap B (that menu's back) when it leaves its UI: B, or a
+// pick, before the swap. Giants (2026-11-18). Set once, before the game runs.
+void PauseGameWhileMenuOpen(bool pause);
+
 // The settings file the menu writes its options to (ReXApp's config path). Without it the options
 // last for this session only.
 void SetPortalMenuConfigPath(std::filesystem::path config_path);

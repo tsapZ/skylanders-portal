@@ -2414,6 +2414,9 @@ std::optional<std::string> RealSkylanderOf(uint32_t user) {
 }
 
 std::atomic<bool> g_keep_on_open{false};  // KeepSkylanderOnWhileMenuOpen
+std::atomic<bool> g_pause_with_menu{false};  // PauseGameWhileMenuOpen
+constexpr uint16_t kStartButton = 0x0010;   // X_INPUT_GAMEPAD_START: opens Giants' pause menu
+constexpr uint16_t kBackButton = 0x2000;    // X_INPUT_GAMEPAD_B: closes it (Start doesn't, 2026-11-18 test)
 
 std::vector<LiftedFigure> LiftPlayer(uint32_t user) {
   std::vector<LiftedFigure> lifted;
@@ -2945,6 +2948,12 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     // Opened with a button, the figure was just lifted: the menu stays hidden while the game
     // reacts (the camera zooms out to the portal) and comes up with the game's own portal screen.
     // Without a lifted figure there is nothing to wait for.
+    // The game plays on behind a menu that kept the Skylander on: its own pause menu behind ours (#26).
+    if (software_ && stays_on_ && g_pause_with_menu.load() && !auto_opened_ && !quick_ && !companion_request_) {
+      menu_input::TapButton(user_, kStartButton);
+      paused_game_ = true;
+      REXLOG_INFO("Portal menu: the game paused behind the menu (Start)");
+    }
     revealed_ = auto_opened_ || !software_ || lifted_.empty();
     if (revealed_) reveal_time_ = Clock::now();
     REXLOG_INFO("Portal menu: opened for player {}{}", user_ + 1,
@@ -2956,6 +2965,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   ~PortalMenuDialog() override {
     if (state_ != State::kDone) menu_input::SetMenuOpen(false);
+    ResumeGame();
   }
 
   // Closes like the Back button: the lifted figure goes back on the portal.
@@ -4036,6 +4046,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     AddRecent(user_, paths);
     pending_paths_ = paths;
     restore_ = false;
+    ResumeGame();  // before the swap: the game takes it as usual
     // Opened while the game asked for a companion (or in a game that keeps it on), the Skylander is
     // still on: off now, and the new one follows after the usual wait.
     if (stays_on_ && lifted_.empty()) {
@@ -4047,12 +4058,22 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                 figures.empty() ? std::string("?") : ComboName(figures));
   }
 
+  // B for the pause the menu made (PauseGameWhileMenuOpen; the pause menu's own back), once.
+  void ResumeGame() {
+    if (!paused_game_) return;
+    paused_game_ = false;
+    menu_input::TapButton(user_, kBackButton);
+    REXLOG_INFO("Portal menu: the game goes on (B)");
+  }
+
   void StartCancel() {
+    ResumeGame();
     restore_ = true;
     state_ = State::kWaiting;
   }
 
   void Finish() {
+    ResumeGame();
     state_ = State::kDone;
     menu_input::SetMenuOpen(false);
     if (on_done_) on_done_();
@@ -5409,6 +5430,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   bool quick_ = false;  // a quick swap: never shown
   std::optional<Element> companion_request_;  // the game asked for a companion when it opened
   bool stays_on_ = false;  // the player's Skylander wasn't lifted on open (a companion request, KeepSkylanderOn...)
+  bool paused_game_ = false;  // the menu tapped Start on open (PauseGameWhileMenuOpen)
   bool choosing_companion_ = false;           // the version list is a companion's
   bool keyboard_controls_ = false;
   bool software_ = false;
@@ -6510,6 +6532,8 @@ static void RunSoulGemFound(const std::string& skylander) {
 }
 
 void KeepSkylanderOnWhileMenuOpen(bool keep) { g_keep_on_open.store(keep); }
+
+void PauseGameWhileMenuOpen(bool pause) { g_pause_with_menu.store(pause); }
 
 void SetPortalMenuConfigPath(std::filesystem::path config_path) {
   g_config_path = std::move(config_path);
