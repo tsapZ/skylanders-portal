@@ -1223,7 +1223,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       dl->AddRect(v0, v1, active ? Rgba(130, 165, 240, 120) : Rgba(130, 165, 240, 45), S(20), 0, S(1.5f));
       // A short list shows where its value sits: a dot per choice under the value.
       const bool dots = !s.key_bind && index >= 0 && options.size() >= 2 && options.size() <= 7;
-      const float lift = dots ? S(3) : 0.0f;
+      const float lift = dots ? S(4) : 0.0f;
       // Long values get a smaller font so they stay between the arrows.
       float size = S(21);
       ImVec2 vs = TextSize(BoldFont(), size, value);
@@ -1234,7 +1234,7 @@ class SettingsMenuDialog final : public rex::ui::ImGuiDialog {
       Label(dl, BoldFont(), size, {(v0.x + v1.x - vs.x) / 2, (v0.y + v1.y - vs.y) / 2 - lift},
             !enabled ? greyed : active ? kGold : kWhite, value);
       if (dots && enabled) {
-        const float step = S(10), dy = v1.y - S(6);
+        const float step = S(10), dy = v1.y - S(5);
         const float x0 = (v0.x + v1.x) / 2 - step * float(options.size() - 1) / 2;
         for (size_t d = 0; d < options.size(); ++d) {
           const bool on = int(d) == index;
