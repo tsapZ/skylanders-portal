@@ -47,6 +47,8 @@ struct RunFile {
   std::filesystem::file_time_type time{};
   Clock::time_point checked{};
   bool read = false;
+  bool readable = true;  // false: the file is there but couldn't be opened; `state` is the last one read
+  uint64_t generation = 0;  // goes up whenever `state` changes (the cards' cache)
 };
 RunFile g_file;
 
@@ -71,18 +73,35 @@ const logic::RunState& State() {
   g_file.checked = now;
   std::error_code ec;
   const auto time = path.empty() ? std::filesystem::file_time_type{} : std::filesystem::last_write_time(path, ec);
-  if (g_file.read && path == g_file.path && (ec ? std::filesystem::file_time_type{} : time) == g_file.time) {
+  if (g_file.read && g_file.readable && path == g_file.path &&
+      (ec ? std::filesystem::file_time_type{} : time) == g_file.time) {
     return g_file.state;
+  }
+  logic::RunState state;
+  if (!ec && !path.empty()) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+      // There but not readable right now (a virus scan, another program): keep the last state and try
+      // again in a second; an empty run here would be written back over the file at the next find.
+      if (g_file.readable) REXLOG_WARN("Run: the run file can't be read right now, trying again");
+      if (path != g_file.path) {  // another folder: nothing known of its run yet
+        g_file.state = {};
+        ++g_file.generation;
+      }
+      g_file.path = path;
+      g_file.read = true;  // the once-a-second check above applies
+      g_file.readable = false;
+      return g_file.state;
+    }
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    state = logic::ParseRunState(text);
   }
   g_file.path = path;
   g_file.time = ec ? std::filesystem::file_time_type{} : time;
   g_file.read = true;
-  g_file.state = {};
-  if (!ec && !path.empty()) {
-    std::ifstream in(path, std::ios::binary);
-    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    g_file.state = logic::ParseRunState(text);
-  }
+  g_file.readable = true;
+  g_file.state = std::move(state);
+  ++g_file.generation;
   return g_file.state;
 }
 
@@ -91,6 +110,8 @@ const logic::RunState& State() {
 void Write(const logic::RunState& state) {
   g_file.state = state;
   g_file.read = true;
+  g_file.readable = true;
+  ++g_file.generation;
   g_file.path = RunFilePath();
   if (g_file.path.empty()) return;
   std::error_code ec;
@@ -114,7 +135,8 @@ void Write(const logic::RunState& state) {
 // list or portal_menu_games changed.
 struct Cache {
   std::unordered_map<const portal::SkylanderInfo*, std::string> key_of;
-  std::string open, games;
+  uint64_t generation = 0;
+  std::string games;
   bool built = false;
   std::unordered_set<std::string> open_keys;
 };
@@ -129,13 +151,16 @@ const std::string& KeyOf(const portal::SkylanderInfo& sky) {
   return it->second;
 }
 
-void RefreshOpen(const std::string& open) {
+// g_mutex held.
+void RefreshOpen() {
+  const logic::RunState& state = State();
   std::string games = REXCVAR_GET(portal_menu_games);
-  if (g_cache.built && open == g_cache.open && games == g_cache.games) return;
+  if (g_cache.built && g_file.generation == g_cache.generation && games == g_cache.games) return;
+  const std::string& open = state.open;
   g_cache.open_keys.clear();
   for (const std::string_view name : logic::StartersOf(ThisGame())) g_cache.open_keys.insert(logic::NameKey(name));
   for (const std::string& name : logic::SplitList(open)) g_cache.open_keys.insert(logic::NameKey(name));
-  g_cache.open = open;
+  g_cache.generation = g_file.generation;
   g_cache.games = std::move(games);
   g_cache.built = true;
 }
@@ -151,12 +176,8 @@ bool Locked(const portal::SkylanderInfo& sky) {
   if (!REXCVAR_GET(run_soul_gems)) return false;
   const std::string& key = KeyOf(sky);
   if (key.empty()) return false;
-  std::string open;
-  {
-    std::lock_guard lock(g_mutex);
-    open = State().open;
-  }
-  RefreshOpen(open);
+  std::lock_guard lock(g_mutex);
+  RefreshOpen();
   return !g_cache.open_keys.contains(key);
 }
 
@@ -208,6 +229,10 @@ bool SoulGemFound(std::string_view skylander, bool from_save) {
   }
   std::lock_guard lock(g_mutex);
   logic::RunState state = State();
+  if (!g_file.readable) {
+    REXLOG_WARN("Run: {}'s Soul Gem not saved, the run file can't be read right now", skylander);
+    return false;
+  }
   if (logic::IsStarter(ThisGame(), skylander) || logic::ListHas(state.open, skylander)) return false;
   state.open = logic::ListAdd(state.open, skylander);
   Write(state);
@@ -221,6 +246,10 @@ std::vector<std::string> LevelFinished(std::string_view level) {
   const std::string game = ThisGame();
   std::lock_guard lock(g_mutex);
   logic::RunState state = State();
+  if (!g_file.readable) {
+    REXLOG_WARN("Run: {} finished, but the run file can't be read right now", level);
+    return freed;
+  }
   if (game.empty() || !logic::FirstFinish(game, level, state.done)) return freed;
   // The ones still locked, spread over the story levels not done yet (this one counted).
   const std::vector<std::string> candidates = logic::RewardCandidates(game);
@@ -228,6 +257,7 @@ std::vector<std::string> LevelFinished(std::string_view level) {
   for (const std::string& name : candidates) left += logic::ListHas(state.open, name) ? 0 : 1;
   size_t levels_left = 0;
   for (const std::string& story : g_story) {
+    if (logic::IsHubLevel(story)) continue;  // never finished
     levels_left += logic::ListHas(state.done, logic::LevelKey(game, story)) ? 0 : 1;
   }
   const size_t count = g_story.empty() ? std::min<size_t>(left, 1) : logic::RewardCount(left, std::max<size_t>(levels_left, 1));

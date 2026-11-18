@@ -124,6 +124,7 @@ bool Parse(std::span<const uint8_t> data, Save& s) {
   r.SkipTo(fields_at, h[8]);
   // meta objects
   const size_t objects_meta_at = r.at;
+  if (h[2] > data.size() || h[3] > h[2] / 24) return false;  // 6 words a record (a damaged header)
   std::vector<std::array<uint32_t, 6>> records(h[3]);
   for (auto& rec : records) {
     for (uint32_t& w : rec) w = r.U32();
@@ -228,6 +229,23 @@ std::optional<std::vector<uint32_t>> Fields(const Save& s, uint32_t cls, std::sp
   return out;
 }
 
+// The meta field type name of a class's field `index` in slot order (as Fields counts), "" when there is none.
+std::string_view SlotType(const Save& s, uint32_t cls, size_t index) {
+  std::map<uint16_t, uint16_t> slots;
+  std::vector<const MetaObject*> chain;
+  for (int32_t c = int32_t(cls); c >= 0 && c < int32_t(s.meta_objects.size()) && chain.size() < 32;
+       c = s.meta_objects[c].parent) {
+    chain.push_back(&s.meta_objects[c]);
+  }
+  for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+    for (const auto& [slot, type] : (*it)->fields) slots[slot] = type;
+  }
+  for (const auto& [slot, type] : slots) {
+    if (index-- == 0) return type < s.meta_fields.size() ? std::string_view(s.meta_fields[type]) : std::string_view();
+  }
+  return {};
+}
+
 uint32_t Be32(std::span<const uint8_t> d, size_t at) {
   if (at > d.size() || d.size() - at < 4) return 0;
   return uint32_t(d[at]) << 24 | uint32_t(d[at + 1]) << 16 | uint32_t(d[at + 2]) << 8 | d[at + 3];
@@ -262,7 +280,7 @@ std::vector<VvZone> ReadVvZones(std::span<const uint8_t> save) {
     if (!fields || fields->empty() || (*fields)[0] == 0 || (*fields)[0] > s.strings.size()) continue;
     VvZone zone;
     zone.path = s.strings[(*fields)[0] - 1];
-    if (fields->size() == 2) {
+    if (fields->size() == 2 && SlotType(s, cls, 1) == "igObjectRefMetaField") {
       // SuperChargers, Imaginators: the state is the object field 1 points to.
       const uint32_t ref = (*fields)[1];
       if (ref >= s.ref_object.size() || s.ref_object[ref] < 0 ||
@@ -281,41 +299,47 @@ std::vector<VvZone> ReadVvZones(std::span<const uint8_t> save) {
   return out;
 }
 
-std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save, std::string_view tracker_class,
-                                       size_t field) {
+namespace {
+
+// ReadVvTrackerBits, nullopt when the save can't be read (apart from a save without set bits).
+std::optional<std::vector<uint32_t>> TrackerBits(std::span<const uint8_t> save, std::string_view tracker_class,
+                                                 size_t field) {
   Save s;
-  if (!Parse(save, s)) return {};
+  if (!Parse(save, s)) return std::nullopt;
   // The memory blocks' places, per ref (only the memory refs get one).
   std::vector<std::pair<size_t, size_t>> block(s.ref_entry.size(), {0, 0});
   size_t at = s.memory_at;
   for (size_t i = 0; i < s.ref_entry.size(); ++i) {
     if (s.ref_object[i] >= 0) continue;
     const uint16_t e = s.ref_entry[i];
-    if (e >= s.entries.size() || s.entries[e].size() < 20) return {};
+    if (e >= s.entries.size() || s.entries[e].size() < 20) return std::nullopt;
     const uint32_t count = Be32(s.entries[e], 4);
     const uint32_t type = Be32(s.entries[e], 8);
     const uint32_t each = (type == 0x1B || type == 0x36) ? 8 : Be32(s.entries[e], 16);
-    if (each == 0 || each > 16 || count > 0x100000) return {};
+    if (each == 0 || each > 16 || count > 0x100000) return std::nullopt;
     block[i] = {at, size_t(count) * each};
     at += size_t(count) * each;
   }
-  if (at > s.memory_at + s.memory_size || at > save.size()) return {};
+  if (at > s.memory_at + s.memory_size || at > save.size()) return std::nullopt;
   const int32_t owner_class = ClassIndex(s, tracker_class);
   const int32_t mask_class = ClassIndex(s, "igBitMask");
-  if (owner_class < 0 || mask_class < 0) return {};
+  if (owner_class < 0 || mask_class < 0) return std::nullopt;
   for (const auto& [cls, raw] : s.objects) {
     if (int32_t(cls) != owner_class) continue;
     const auto fields = Fields(s, cls, raw);
-    if (!fields || fields->size() <= field) return {};
+    if (!fields || fields->size() <= field) return std::nullopt;
     const uint32_t ref = (*fields)[field];
-    if (ref >= s.ref_object.size() || s.ref_object[ref] < 0) return {};
+    if (ref >= s.ref_object.size() || s.ref_object[ref] < 0 ||
+        size_t(s.ref_object[ref]) >= s.objects.size()) {
+      return std::nullopt;
+    }
     const auto& [m_cls, m_raw] = s.objects[size_t(s.ref_object[ref])];
-    if (int32_t(m_cls) != mask_class) return {};
+    if (int32_t(m_cls) != mask_class) return std::nullopt;
     const auto mask = Fields(s, m_cls, m_raw);  // word count, its copy, the memory ref, the bit count
-    if (!mask || mask->size() < 4) return {};
+    if (!mask || mask->size() < 4) return std::nullopt;
     const uint32_t words = (*mask)[0];
     const uint32_t mem = (*mask)[2];
-    if (mem >= block.size() || s.ref_object[mem] >= 0 || block[mem].second < size_t(words) * 4) return {};
+    if (mem >= block.size() || s.ref_object[mem] >= 0 || block[mem].second < size_t(words) * 4) return std::nullopt;
     std::vector<uint32_t> out;
     for (uint32_t w = 0; w < words; ++w) {
       const uint32_t v = Be32(save, block[mem].first + 4 * w);
@@ -325,14 +349,24 @@ std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save, std::stri
     }
     return out;
   }
-  return {};
+  return std::vector<uint32_t>{};  // no tracker object: nothing set
+}
+
+}  // namespace
+
+std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save, std::string_view tracker_class,
+                                       size_t field) {
+  return TrackerBits(save, tracker_class, field).value_or(std::vector<uint32_t>{});
 }
 
 std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                       uint32_t first, uint32_t count, std::string_view tracker_class,
                                       size_t field) {
-  const std::vector<uint32_t> had = ReadVvTrackerBits(before, tracker_class, field);
-  const std::set<uint32_t> old(had.begin(), had.end());
+  // A `before` that can't be read (cut short, empty: a slot seen for the first time) gives nothing: taking
+  // it as "no bits" would count every gem of `after` as found now. `after` is the next baseline.
+  const auto had = TrackerBits(before, tracker_class, field);
+  if (!had) return {};
+  const std::set<uint32_t> old(had->begin(), had->end());
   std::vector<uint32_t> out;
   for (const uint32_t bit : ReadVvTrackerBits(after, tracker_class, field)) {
     if (bit >= first && bit - first < count && !old.contains(bit)) out.push_back(bit - first);
@@ -342,6 +376,10 @@ std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::spa
 
 std::vector<std::string> VvZonesFinished(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                          size_t slot) {
+  // As VvTrackerBitsNew: a `before` that isn't a readable save gives nothing (else every finished zone of
+  // `after` would count as a first finish).
+  Save check;
+  if (!Parse(before, check)) return {};
   std::set<std::string> done_before;
   for (const VvZone& z : ReadVvZones(before)) {
     if (slot < z.fields.size() && z.fields[slot] != 0xFFFFFFFF) done_before.insert(z.path);

@@ -41,9 +41,6 @@ struct VvZone {
 // The zones of a save; empty for anything else (cut short, another format).
 std::vector<VvZone> ReadVvZones(std::span<const uint8_t> save);
 
-// The zones whose field `slot` holds a value (not 0xFFFFFFFF) in `after` and didn't in `before` (or
-// weren't there): finished for the first time, named by the last part of their path ("nat2",
-// "brn1", "level_508"), in the order of the save.
 // The collectible trackers' bits of a save (2026-11-18, the Soul Gem run): the first igBitMask its
 // CCollectibleTrackerSystemSaveData points to, as the set bit numbers; bit i is word[i / 32] >> (i % 32)
 // of the mask's big-endian words. The mask's words are a memory block: the blocks follow the last object,
@@ -57,12 +54,16 @@ std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save,
                                        std::string_view tracker_class = "CCollectibleTrackerSystemSaveData",
                                        size_t field = 0);
 
-// The bits in [first, first + count) set in `after` and not in `before`, as places from `first`.
+// The bits in [first, first + count) set in `after` and not in `before`, as places from `first`; nothing when
+// `before` can't be read (a slot seen for the first time, a file cut short).
 std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                       uint32_t first, uint32_t count,
                                       std::string_view tracker_class = "CCollectibleTrackerSystemSaveData",
                                       size_t field = 0);
 
+// The zones whose field `slot` holds a value (not 0xFFFFFFFF) in `after` and didn't in `before` (or
+// weren't there): finished for the first time, named by the last part of their path ("nat2",
+// "brn1", "level_508"), in the order of the save. Nothing when `before` can't be read.
 std::vector<std::string> VvZonesFinished(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                          size_t slot);
 

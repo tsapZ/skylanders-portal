@@ -201,7 +201,8 @@ bool HasSoulGem(std::string_view game, std::string_view character) {
   if (rank < 0 || HomeRank(character) != rank) return false;
   if (rank == 0) {
     const std::string key = NameKey(character);
-    for (const std::string_view none : {"bash", "zap", "drobot", "boomer", "darkspyro"}) {
+    // Dark Spyro has none either; CharacterName names its figure Spyro, a starter.
+    for (const std::string_view none : {"bash", "zap", "drobot", "boomer"}) {
       if (key == none) return false;
     }
   }
