@@ -5,6 +5,8 @@
 #include <cmath>
 #include <string>
 
+#include <rex/cvar.h>
+
 #include "portal_rex/menu_draw.h"
 
 namespace skylanders::input_pictures {
@@ -118,6 +120,13 @@ PadKind PadKindOf(std::string_view device_name) {
 }
 
 const char* PadButtonName(PadKind kind, std::string_view button, bool german) {
+  // With pad_layout "nintendo" a Nintendo controller's face buttons go by their labels
+  // (portal_menu_input's NintendoLayout): the game's and the menus' A is the button labelled A, so it
+  // is named A, not by its place (code review 2026-11-18).
+  if (kind == PadKind::kNintendo && (button == "a" || button == "b" || button == "x" || button == "y") &&
+      rex::cvar::GetFlagByName("pad_layout") == "nintendo") {
+    return button == "a" ? "A" : button == "b" ? "B" : button == "x" ? "X" : "Y";
+  }
   struct Names {
     const char* button;
     const char* xbox;

@@ -670,6 +670,12 @@ class MenuInputDriver final : public InputDriver {
     for (DeviceId other : others) {
       X_INPUT_STATE state{};
       if (inner_->GetDeviceState(other, &state) == X_ERROR_SUCCESS) {
+        // As Poll and GetDeviceState see it: else a Nintendo pad's record gets the label-wise and the
+        // position-wise buttons in turn, and a held button makes new presses (code review 2026-11-18).
+        {
+          std::lock_guard lock(g_mutex);
+          NintendoLayout(g_devices[uint64_t(other)], state.gamepad);
+        }
         Observe(other, state.gamepad, nullptr, nullptr);
       }
     }
