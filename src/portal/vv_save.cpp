@@ -315,8 +315,9 @@ std::optional<std::vector<uint32_t>> TrackerBits(std::span<const uint8_t> save, 
     if (e >= s.entries.size() || s.entries[e].size() < 20) return std::nullopt;
     const uint32_t count = Be32(s.entries[e], 4);
     const uint32_t type = Be32(s.entries[e], 8);
-    const uint32_t each = (type == 0x1B || type == 0x36) ? 8 : Be32(s.entries[e], 16);
+    const uint32_t each = (type == 0x1B || type == 0x1C) ? 8 : Be32(s.entries[e], 16);
     if (each == 0 || each > 16 || count > 0x100000) return std::nullopt;
+    at = s.memory_at + ((at - s.memory_at + 3) & ~size_t(3));  // 4-aligned from the section start
     block[i] = {at, size_t(count) * each};
     at += size_t(count) * each;
   }

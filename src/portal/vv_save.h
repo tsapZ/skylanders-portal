@@ -44,8 +44,9 @@ std::vector<VvZone> ReadVvZones(std::span<const uint8_t> save);
 // The collectible trackers' bits of a save (2026-11-18, the Soul Gem run): the first igBitMask its
 // CCollectibleTrackerSystemSaveData points to, as the set bit numbers; bit i is word[i / 32] >> (i % 32)
 // of the mask's big-endian words. The mask's words are a memory block: the blocks follow the last object,
-// in the refs' order, each its igMemoryDirEntry's element count times the element size (its word 4; 8 for a
-// handle block, type 0x1B in Swap Force, 0x36 in SuperChargers, whose word 4 says 4). In Swap Force's slot
+// in the refs' order, each its igMemoryDirEntry's element count times the element size (its word 4; 8 for
+// types 0x1B and 0x1C, whose word 4 says 4), each starting 4-aligned from the section's start (SuperChargers'
+// options have byte blocks; with these rules every Swap Force, SuperChargers and Imaginators save adds up). In Swap Force's slot
 // it has 738 bits and Soul Gem k of data\collectibletrackers.igx's SoulGems list is bit 581 + k (two
 // scripted pickups, Wind-Up 612 and Grilla Drilla 587; the game saves the slot right after a pickup). Empty
 // for anything else. Imaginators keeps its own Soul Gems in field 1 of CCollectibleTrackerSystemSlotSaveData (41
