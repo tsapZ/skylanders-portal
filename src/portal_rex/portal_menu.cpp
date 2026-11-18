@@ -2415,6 +2415,7 @@ std::optional<std::string> RealSkylanderOf(uint32_t user) {
 
 std::atomic<bool> g_keep_on_open{false};  // KeepSkylanderOnWhileMenuOpen
 std::atomic<bool> g_pause_with_menu{false};  // PauseGameWhileMenuOpen
+std::atomic<int> g_menu_pauses{0};  // menus whose pause stands: the first one pauses, the last one resumes
 constexpr uint16_t kStartButton = 0x0010;   // X_INPUT_GAMEPAD_START: opens Giants' pause menu
 constexpr uint16_t kBackButton = 0x2000;    // X_INPUT_GAMEPAD_B: closes it (Start doesn't, 2026-11-18 test)
 
@@ -2950,7 +2951,8 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     // Without a lifted figure there is nothing to wait for.
     // The game plays on behind a menu that kept the Skylander on: its own pause menu behind ours (#26).
     if (software_ && stays_on_ && g_pause_with_menu.load() && !auto_opened_ && !quick_ && !companion_request_) {
-      menu_input::TapButton(user_, kStartButton);
+      // Through the menu: a plain tap reaches the game only once the menu is closed (code review 2026-11-18).
+      if (g_menu_pauses.fetch_add(1) == 0) menu_input::TapButtonThroughMenu(user_, kStartButton);
       paused_game_ = true;
       REXLOG_INFO("Portal menu: the game paused behind the menu (Start)");
     }
@@ -2984,6 +2986,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     pending_paths_.clear();
     restore_ = false;
     item_change_ = sidekick_change_ = false;
+    ResumeGame();
     state_ = State::kWaiting;
     REXLOG_INFO("Portal menu: player {} put a figure on the real portal", user_ + 1);
   }
@@ -3807,6 +3810,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                        (GameCompanionKind() == CompanionKind::kVehicle || g_sidekick_user == user_);
     sidekick_path_.reset();
     leave_ = true;
+    ResumeGame();  // before the leave: the game has to see the figure go and show its screen
     state_ = State::kWaiting;
     REXLOG_INFO("Portal menu: player {} leaves the game", user_ + 1);
   }
@@ -4062,7 +4066,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
   void ResumeGame() {
     if (!paused_game_) return;
     paused_game_ = false;
-    menu_input::TapButton(user_, kBackButton);
+    if (g_menu_pauses.fetch_sub(1) == 1) menu_input::TapButtonThroughMenu(user_, kBackButton);
     REXLOG_INFO("Portal menu: the game goes on (B)");
   }
 

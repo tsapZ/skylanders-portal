@@ -143,6 +143,8 @@ struct DeviceRecord {
   // A press the menu makes on the game's behalf (TapButton).
   uint16_t tap = 0;
   Clock::time_point tap_from{}, tap_until{};
+  uint16_t menu_tap = 0;  // TapButtonThroughMenu: reaches the game while a menu is open
+  Clock::time_point menu_tap_from{}, menu_tap_until{};
 };
 
 std::mutex g_mutex;
@@ -550,14 +552,21 @@ class MenuInputDriver final : public InputDriver {
     if (hide) {
       std::memset(&state.gamepad, 0, sizeof(state.gamepad));
     }
-    if (!g_menu_open.load()) {
+    {
       std::lock_guard lock(g_mutex);
       DeviceRecord& record = g_devices[uint64_t(id)];
       const auto now = Clock::now();
-      if (record.tap && now >= record.tap_until) {
-        record.tap = 0;
-      } else if (record.tap && now >= record.tap_from) {
-        state.gamepad.buttons = uint16_t(uint16_t(state.gamepad.buttons) | record.tap);
+      if (!g_menu_open.load()) {
+        if (record.tap && now >= record.tap_until) {
+          record.tap = 0;
+        } else if (record.tap && now >= record.tap_from) {
+          state.gamepad.buttons = uint16_t(uint16_t(state.gamepad.buttons) | record.tap);
+        }
+      }
+      if (record.menu_tap && now >= record.menu_tap_until) {
+        record.menu_tap = 0;
+      } else if (record.menu_tap && now >= record.menu_tap_from) {
+        state.gamepad.buttons = uint16_t(uint16_t(state.gamepad.buttons) | record.menu_tap);
       }
     }
     if (out_state) {
@@ -968,6 +977,20 @@ void TapButton(uint32_t user, uint16_t button) {
     it->second.tap = button;
     it->second.tap_from = now + std::chrono::milliseconds(100);
     it->second.tap_until = now + std::chrono::milliseconds(260);
+  }
+}
+
+void TapButtonThroughMenu(uint32_t user, uint16_t button) {
+  std::lock_guard lock(g_mutex);
+  const auto now = Clock::now();
+  for (DeviceId id : g_connected) {
+    auto it = g_devices.find(uint64_t(id));
+    if (it == g_devices.end() || UserOfLocked(it->second) != user) {
+      continue;
+    }
+    it->second.menu_tap = button;
+    it->second.menu_tap_from = now + std::chrono::milliseconds(100);
+    it->second.menu_tap_until = now + std::chrono::milliseconds(260);
   }
 }
 

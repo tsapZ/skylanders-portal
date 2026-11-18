@@ -116,6 +116,9 @@ void SetDevicePlayer(rex::input::DeviceId device, std::optional<uint32_t> user);
 // from now and even while the device is still hidden after a menu: the menu presses the game's own
 // buttons with it (B "leave the game" on the portal screen).
 void TapButton(uint32_t user, uint16_t button);
+// The same, but it reaches the game while a menu is open too (its own slot, so a TapButton doesn't replace it):
+// the portal menu's pause behind it (PauseGameWhileMenuOpen: Start on open, B before a swap).
+void TapButtonThroughMenu(uint32_t user, uint16_t button);
 
 // The X_INPUT_GAMEPAD_* bit of a button name as the *_buttons settings write it ("b", "rs",
 // "start", ...); 0 for an unknown name.
