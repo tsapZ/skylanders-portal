@@ -363,9 +363,11 @@ std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save, std::stri
 std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                       uint32_t first, uint32_t count, std::string_view tracker_class,
                                       size_t field) {
-  // A `before` that can't be read (cut short, empty: a slot seen for the first time) gives nothing: taking
+  // An empty `before` is a new slot (soul_gems.cpp: a slot that appears later is a new game): every gem in it
+  // counts. One that is there but can't be read (cut short at the start-up read, damaged) gives nothing: taking
   // it as "no bits" would count every gem of `after` as found now. `after` is the next baseline.
-  const auto had = TrackerBits(before, tracker_class, field);
+  const auto had = before.empty() ? std::optional<std::vector<uint32_t>>(std::vector<uint32_t>{})
+                                  : TrackerBits(before, tracker_class, field);
   if (!had) return {};
   const std::set<uint32_t> old(had->begin(), had->end());
   std::vector<uint32_t> out;
@@ -377,10 +379,9 @@ std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::spa
 
 std::vector<std::string> VvZonesFinished(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                          size_t slot) {
-  // As VvTrackerBitsNew: a `before` that isn't a readable save gives nothing (else every finished zone of
-  // `after` would count as a first finish).
-  Save check;
-  if (!Parse(before, check)) return {};
+  // As VvTrackerBitsNew: empty is a new slot (all of `after` counts); one that isn't a readable save gives
+  // nothing (else every finished zone of `after` would count as a first finish).
+  if (Save check; !before.empty() && !Parse(before, check)) return {};
   std::set<std::string> done_before;
   for (const VvZone& z : ReadVvZones(before)) {
     if (slot < z.fields.size() && z.fields[slot] != 0xFFFFFFFF) done_before.insert(z.path);

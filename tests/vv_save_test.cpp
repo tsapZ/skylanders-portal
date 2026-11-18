@@ -221,6 +221,9 @@ int main() {
     CHECK(VvZonesFinished(after, after, slot).empty());
     // a new slot: everything finished in it counts
     CHECK(VvZonesFinished({}, after, slot).size() == 2);
+    // a `before` cut short (read while the game wrote it): nothing, not everything
+    const std::vector<uint8_t> cut(before.begin(), before.begin() + before.size() / 2);
+    CHECK(VvZonesFinished(cut, after, slot).empty());
     // a slot field past the state's end: nothing
     CHECK(VvZonesFinished(before, after, 40).empty());
   }

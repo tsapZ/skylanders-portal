@@ -55,8 +55,8 @@ std::vector<uint32_t> ReadVvTrackerBits(std::span<const uint8_t> save,
                                        std::string_view tracker_class = "CCollectibleTrackerSystemSaveData",
                                        size_t field = 0);
 
-// The bits in [first, first + count) set in `after` and not in `before`, as places from `first`; nothing when
-// `before` can't be read (a slot seen for the first time, a file cut short).
+// The bits in [first, first + count) set in `after` and not in `before`, as places from `first`. An empty
+// `before` (a new slot) counts all of `after`; one that can't be read (cut short, damaged) gives nothing.
 std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                       uint32_t first, uint32_t count,
                                       std::string_view tracker_class = "CCollectibleTrackerSystemSaveData",
@@ -64,7 +64,7 @@ std::vector<uint32_t> VvTrackerBitsNew(std::span<const uint8_t> before, std::spa
 
 // The zones whose field `slot` holds a value (not 0xFFFFFFFF) in `after` and didn't in `before` (or
 // weren't there): finished for the first time, named by the last part of their path ("nat2",
-// "brn1", "level_508"), in the order of the save. Nothing when `before` can't be read.
+// "brn1", "level_508"), in the order of the save. Empty `before`: all of `after`; unreadable: nothing.
 std::vector<std::string> VvZonesFinished(std::span<const uint8_t> before, std::span<const uint8_t> after,
                                          size_t slot);
 

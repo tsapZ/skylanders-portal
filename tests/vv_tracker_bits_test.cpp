@@ -185,6 +185,9 @@ int main() {
   const auto fresh = VvTrackerBitsNew({}, after, 581, 32);
   REQUIRE_OR_RETURN(fresh.size() == 2);
   CHECK(fresh[0] == 24 && fresh[1] == 31);
+  // a `before` cut short (read while the game wrote it): nothing, not every gem
+  const std::vector<uint8_t> cut(before.begin(), before.begin() + before.size() / 2);
+  CHECK(VvTrackerBitsNew(cut, after, 581, 32).empty());
 
   // Imaginators: the mask in field 1 of CCollectibleTrackerSystemSlotSaveData; CopyCat's gem is bit 12
   const std::string im = "CCollectibleTrackerSystemSlotSaveData";
