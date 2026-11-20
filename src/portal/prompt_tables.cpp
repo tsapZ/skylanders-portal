@@ -8,11 +8,18 @@ using B = PromptButton;
 // Spyro's Adventure (dumps of the title, the hub and the pause menu's pages): 128x128 DXT5 each, upright. The game
 // shows no X / Y / Back prompt on those screens. The yellow Y over NPCs, cannons and levers (Core of Light #95) loads
 // only when it first shows: found 2026-11-18 by a dump standing by Flynn's balloon in the Ruins.
+// X, Back and the key gate's / bomb throw's RS (Core of Light #112) never showed in a dump: they come from the game's
+// UI image archive instead (rom\uigameimage.str: x_mark, back_mark, 360_rsmark, each 128x128 DXT5 like the others),
+// untiled and hashed the way the texture cache does; the same steps give the four dumped ones' hashes exactly
+// (2026-11-20, the dev kit's ssa_apkf_image.py).
 constexpr PromptTexture kSpyrosAdventure[] = {
     {0xB9E607D0F791F494, 128, 128, B::kA, false},
     {0x6537E008ADF32F89, 128, 128, B::kB, false},
     {0x9D6716CD0FDB72B0, 128, 128, B::kStart, false},
     {0xA27F2E649A36DB00, 128, 128, B::kY, false},
+    {0x4BEE10F15E765E7A, 128, 128, B::kX, false},
+    {0xCA2D1C0F77CE15FB, 128, 128, B::kBack, false},
+    {0x35F1D95E93500F01, 128, 128, B::kRS, false},
 };
 
 // The 256x168 atlas Swap Force and SuperChargers share (the same texels): A B Y X across the top, LT RT between LB

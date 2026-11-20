@@ -204,7 +204,14 @@ int main() {
 
   // The tables: the games with prompts we know, every cell inside its atlas, no two cells overlapping.
   {
-    CHECK(PromptTexturesOf("Spyro's Adventure").size() == 4);  // A, B, Start and the Y over NPCs (Core of Light #95)
+    // A, B, Start, the Y over NPCs (Core of Light #95), and from the image archive X, Back and the key gate's RS (#112).
+    {
+      const auto ssa = PromptTexturesOf("Spyro's Adventure");
+      CHECK(ssa.size() == 7);
+      for (size_t i = 0; i < ssa.size(); ++i) {
+        for (size_t j = i + 1; j < ssa.size(); ++j) CHECK(ssa[i].hash != ssa[j].hash && ssa[i].button != ssa[j].button);
+      }
+    }
     for (const char* game : {"Swap Force", "SuperChargers", "Imaginators"}) {
       const auto atlases = PromptAtlasesOf(game);
       CHECK(atlases.size() == 2);
