@@ -242,5 +242,54 @@ int main() {
     CHECK(DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kA, s, false) == a_by_position);
   }
 
+  // A picture in place of an icon (Core of Light #112): stretched into the round base's square with its shape kept,
+  // upside down when asked, in an atlas cell too; only that style and button; taken out again, our icon is back.
+  {
+    const int s = 64;
+    const auto ours = DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kA, s, false);
+    const auto ours_b = DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kB, s, false);
+    const auto nintendo_a = DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kA, s, false);
+    // 4 x 2: a red top row over a blue bottom row, opaque.
+    std::vector<uint8_t> art(4 * 2 * 4, 255);
+    for (int x = 0; x < 4; ++x) {
+      uint8_t* top = &art[size_t(x) * 4];
+      uint8_t* bottom = &art[size_t(4 + x) * 4];
+      top[0] = 255, top[1] = 0, top[2] = 0;
+      bottom[0] = 0, bottom[1] = 0, bottom[2] = 255;
+    }
+    SetPromptArt(PromptStyle::kPlayStation, PromptButton::kA, art, 4, 2);
+    const auto icon = DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kA, s, false);
+    REQUIRE_OR_RETURN(icon.size() == size_t(s) * s * 4);
+    // 0.92 x 64 = 58.9 wide, half of that high: rows 17 to 46 at x 2.5 to 61.4.
+    CHECK(Near(Pixel(icon, s, s / 2, 20), 255, 0, 0));
+    CHECK(Near(Pixel(icon, s, s / 2, 43), 0, 0, 255));
+    CHECK(Near(Pixel(icon, s, 4, 20), 255, 0, 0));
+    CHECK(Pixel(icon, s, s / 2, 10)[3] == 0);  // above it: see-through, the shape kept
+    CHECK(Pixel(icon, s, s / 2, 53)[3] == 0);
+    CHECK(Pixel(icon, s, 0, 32)[3] == 0);
+    const auto flipped = DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kA, s, true);
+    CHECK(Near(Pixel(flipped, s, s / 2, 20), 0, 0, 255));
+    CHECK(Near(Pixel(flipped, s, s / 2, 43), 255, 0, 0));
+    CHECK(DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kB, s, false) == ours_b);
+    CHECK(DrawPromptIcon(PromptStyle::kNintendo, PromptButton::kA, s, false) == nintendo_a);
+    // In an atlas: a 32 x 16 cell of an empty 64 x 32 atlas at 2x.
+    {
+      const int w = 64, h = 32, scale = 2;
+      const std::vector<uint8_t> atlas(size_t(w) * h * 4, 0);
+      const AtlasCell cells[] = {{PromptButton::kA, 16, 8, 32, 16}};
+      const auto dds = PatchButtonAtlas(atlas.data(), w, h, cells, PromptStyle::kPlayStation, scale);
+      REQUIRE_OR_RETURN(dds.size() > 128 + size_t(w * scale) * h * scale * 4);
+      // The cell is 64 x 32 at 2x: the art's square box is 0.92 x 32 = 29.4, centred at (64, 32): rows 25 to 39.
+      const auto texel = [&](int x, int y) { return &dds[128 + (size_t(y) * w * scale + x) * 4]; };  // B, G, R, A
+      CHECK(texel(64, 27)[2] > 240 && texel(64, 27)[0] < 15 && texel(64, 27)[3] == 255);
+      CHECK(texel(64, 37)[0] > 240 && texel(64, 37)[2] < 15 && texel(64, 37)[3] == 255);
+      CHECK(texel(64, 20)[3] == 0);
+    }
+    SetPromptArt(PromptStyle::kPlayStation, PromptButton::kA, {}, 0, 0);
+    CHECK(DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kA, s, false) == ours);
+    SetPromptArt(PromptStyle::kPlayStation, PromptButton::kA, std::vector<uint8_t>(7, 255), 4, 2);  // a wrong size
+    CHECK(DrawPromptIcon(PromptStyle::kPlayStation, PromptButton::kA, s, false) == ours);
+  }
+
   return Finish("prompt_icons");
 }

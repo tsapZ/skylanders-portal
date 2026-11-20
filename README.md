@@ -66,6 +66,8 @@ picture never goes into a repository.
   for the figure dumps behind the name/id catalog.
 - [morpheus284](https://github.com/morpheus284) for the menus' stone frame, cut from his Core of Light
   artwork (CC BY 4.0; `assets/README.md`).
+- [Laytonator2](https://github.com/Laytonator2) for the PlayStation button prompts, drawn in the PS3's
+  style (CC BY 4.0; `assets/README.md`).
 - [SkyReader](https://github.com/reedstrm/SkyReader) and Marijn Kneppers'
   ["Reverse engineering Skylanders' Toys-to-life mechanics"](https://marijnkneppers.dev/posts/reverse-engineering-skylanders-toys-to-life-mechanics/)
   for figure save-data decoding.

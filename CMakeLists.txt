@@ -185,6 +185,19 @@ if(TARGET rex::runtime)
     configure_file("${CMAKE_CURRENT_BINARY_DIR}/generated/menu_frame_png.inc.new"
                    "${CMAKE_CURRENT_BINARY_DIR}/generated/menu_frame_png.inc" COPYONLY)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SKYLANDERS_FRAME_PNG}")
+    # The PlayStation button prompts by Laytonator2 (Core of Light #112, CC BY 4.0; assets/README.md), built in the
+    # same way: one array per picture, named after its file (prompt_art_png.inc, included by button_prompts.cpp).
+    set(_skylanders_art "")
+    foreach(_name cross circle square triangle start select l1 r1 l2 r2 l3 r3)
+        set(_png "${CMAKE_CURRENT_SOURCE_DIR}/assets/prompts_playstation/${_name}.png")
+        file(READ "${_png}" _hex HEX)
+        string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _bytes "${_hex}")
+        string(APPEND _skylanders_art "const uint8_t kArt_${_name}[] = {${_bytes}};\n")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_png}")
+    endforeach()
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/prompt_art_png.inc.new" "${_skylanders_art}")
+    configure_file("${CMAKE_CURRENT_BINARY_DIR}/generated/prompt_art_png.inc.new"
+                   "${CMAKE_CURRENT_BINARY_DIR}/generated/prompt_art_png.inc" COPYONLY)
     target_include_directories(skylanders_portal_rex PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(skylanders_portal_rex PUBLIC skylanders_portal_core rex::runtime hidapi::hidapi SDL3::SDL3)
     # The SDK's FFmpeg decodes the title music from the disc (title_music.cpp).

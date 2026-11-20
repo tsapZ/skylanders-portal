@@ -17,6 +17,7 @@
 #include "portal/prompt_icons.h"
 #include "portal/prompt_tables.h"
 #include "portal_rex/input_pictures.h"
+#include "portal_rex/png_file.h"
 #include "portal_rex/portal_menu_input.h"
 
 REXCVAR_DEFINE_STRING(button_prompts, "auto", "Input",
@@ -38,6 +39,46 @@ constexpr int kAtlasScale = 4;
 
 std::atomic<bool> g_auto{false};
 std::atomic<PromptStyle> g_style{PromptStyle::kPlayStation};
+
+// assets/prompts_playstation/*.png as bytes (CMakeLists.txt makes the include from them): kArt_cross, kArt_circle, ...
+#include "prompt_art_png.inc"
+
+// The PlayStation buttons drawn by Laytonator2 (Core of Light #112, CC BY 4.0; assets/README.md) in place of the ones
+// prompt_icons draws, before the first prompt loads; the d-pad stays ours (the set has none). A picture that doesn't
+// decode keeps ours.
+void UsePlayStationArt() {
+  struct Art {
+    portal::PromptButton button;
+    const uint8_t* png;
+    size_t size;
+  };
+  using portal::PromptButton;
+  const Art arts[] = {
+      {PromptButton::kA, kArt_cross, sizeof(kArt_cross)},
+      {PromptButton::kB, kArt_circle, sizeof(kArt_circle)},
+      {PromptButton::kX, kArt_square, sizeof(kArt_square)},
+      {PromptButton::kY, kArt_triangle, sizeof(kArt_triangle)},
+      {PromptButton::kStart, kArt_start, sizeof(kArt_start)},
+      {PromptButton::kBack, kArt_select, sizeof(kArt_select)},
+      {PromptButton::kLB, kArt_l1, sizeof(kArt_l1)},
+      {PromptButton::kRB, kArt_r1, sizeof(kArt_r1)},
+      {PromptButton::kLT, kArt_l2, sizeof(kArt_l2)},
+      {PromptButton::kRT, kArt_r2, sizeof(kArt_r2)},
+      {PromptButton::kLS, kArt_l3, sizeof(kArt_l3)},
+      {PromptButton::kRS, kArt_r3, sizeof(kArt_r3)},
+  };
+  int used = 0;
+  for (const Art& art : arts) {
+    int width = 0, height = 0;
+    std::vector<uint8_t> rgba;
+    if (!DecodePng(art.png, art.size, width, height, rgba)) continue;
+    portal::SetPromptArt(PromptStyle::kPlayStation, art.button, std::move(rgba), width, height);
+    ++used;
+  }
+  if (used != int(std::size(arts))) {
+    REXLOG_WARN("Button prompts: {} of {} PlayStation pictures decoded", used, std::size(arts));
+  }
+}
 
 // The style to draw: the setting's, or with auto the one of the controller that came first, chosen once, when the
 // first prompt loads (the controllers are known by then; one plugged in later changes nothing until the next start).
@@ -130,6 +171,7 @@ void UseButtonPrompts(std::string_view game) {
     REXLOG_INFO("Button prompts: the Vulkan renderer can't replace textures, the game's own stay");
     return;
   }
+  if (g_auto.load() || g_style.load() == PromptStyle::kPlayStation) UsePlayStationArt();
   const std::span<const PromptTexture> textures = portal::PromptTexturesOf(game);
   for (const PromptTexture& t : textures) {
     rex::graphics::RegisterTexturePatch(t.hash, t.width, t.height, &PatchTexture, const_cast<PromptTexture*>(&t));
@@ -148,11 +190,13 @@ void AddButtonPromptsSetting(SettingsPage& page, std::string_view game) {
   Setting s{"button_prompts", "Button prompts", "Tastensymbole",
             "Which buttons the game's prompts show. Automatic: those of the controller connected when the game "
             "starts (a PlayStation or Nintendo one; others, and pads through Steam Input, show Xbox). Nintendo's "
-            "go by position: the bottom button is B. The icons are this project's own. Takes effect when the game "
+            "go by position: the bottom button is B. The PlayStation icons are by Laytonator2, the others this "
+            "project's own. Takes effect when the game "
             "starts again; with the Vulkan renderer the game keeps its own.",
             "Welche Tasten die Hinweise des Spiels zeigen. Automatisch: die des Controllers, der beim Spielstart "
             "angeschlossen ist (PlayStation oder Nintendo; andere und Controller \xC3\xBC" "ber Steam Input zeigen "
-            "Xbox). Nintendo nach Lage: die untere Taste ist B. Die Symbole sind eigene dieses Projekts. Wirkt beim "
+            "Xbox). Nintendo nach Lage: die untere Taste ist B. Die PlayStation-Symbole sind von Laytonator2, die "
+            "anderen eigene dieses Projekts. Wirkt beim "
             "n\xC3\xA4" "chsten Spielstart; mit dem Vulkan-Renderer bleiben die des Spiels.",
             {{"auto", "Automatic", "Automatisch"},
              {"xbox", "Xbox", "Xbox"},

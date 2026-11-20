@@ -22,6 +22,12 @@ enum class PromptButton { kA, kB, kX, kY, kStart, kBack, kLB, kRB, kLT, kRT, kLS
 // `flip` (some games keep their prompt textures that way and turn them when drawing). Empty for a size below 4.
 std::vector<uint8_t> DrawPromptIcon(PromptStyle style, PromptButton button, int size, bool flip);
 
+// A picture in place of our drawn icon of `button` in `style` (Core of Light #112: Laytonator2's PlayStation buttons):
+// `rgba` (`width` x `height`, rows top first, cropped to what it shows) scaled into the place our icon takes, its shape
+// kept; in atlases too. Set before the first icon (the texture workers read it unguarded); an empty `rgba` takes it
+// out again.
+void SetPromptArt(PromptStyle style, PromptButton button, std::vector<uint8_t> rgba, int width, int height);
+
 // Nintendo's letters by label instead of by position: with the Nintendo layout (pad_layout) the game's A is the
 // right button, labelled A, so its prompt shows A (and B, X, Y likewise). Off by default. Set before the first icon.
 void SetNintendoLettersByLabel(bool by_label);

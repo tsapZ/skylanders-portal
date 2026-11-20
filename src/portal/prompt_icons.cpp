@@ -5,6 +5,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <string_view>
+#include <utility>
 
 namespace skylanders::portal {
 namespace {
@@ -118,6 +119,56 @@ class Canvas {
         };
         px_[size_t(y) * width_ + x] = Color{mix(c00.r, c10.r, c01.r, c11.r), mix(c00.g, c10.g, c01.g, c11.g),
                                             mix(c00.b, c10.b, c01.b, c11.b), mix(c00.a, c10.a, c01.a, c11.a)};
+      }
+    }
+  }
+
+  // The R, G, B, A picture `rgba` (w x h, rows top first) over what is there, stretched onto `to`: per pixel the
+  // mean of n x n bilinear taps (n from how many texels fall on one pixel), on premultiplied colours.
+  void Blit(const uint8_t* rgba, int w, int h, const Box& to) {
+    if (w < 1 || h < 1 || to.w <= 0.0f || to.h <= 0.0f) return;
+    const auto texel = [&](int x, int y) {
+      x = std::clamp(x, 0, w - 1);
+      y = std::clamp(y, 0, h - 1);
+      const uint8_t* t = rgba + (size_t(y) * w + x) * 4;
+      const float a = t[3] / 255.0f;
+      return Color{t[0] / 255.0f * a, t[1] / 255.0f * a, t[2] / 255.0f * a, a};
+    };
+    const float kx = w / to.w, ky = h / to.h;
+    const int n = std::clamp(int(std::ceil(std::max(kx, ky))), 1, 8);
+    const int x0 = std::max(0, int(std::floor(to.x))), x1 = std::min(width_, int(std::ceil(to.x + to.w)));
+    const int y0 = std::max(0, int(std::floor(to.y))), y1 = std::min(height_, int(std::ceil(to.y + to.h)));
+    for (int row = y0; row < y1; ++row) {
+      const int y = flip_ ? height_ - 1 - row : row;
+      for (int x = x0; x < x1; ++x) {
+        Color sum{0, 0, 0, 0};
+        for (int j = 0; j < n; ++j) {
+          for (int i = 0; i < n; ++i) {
+            // The tap's place in the picture; outside `to` (its edge pixels) it adds nothing.
+            const float px = x + (i + 0.5f) / n - to.x, py = row + (j + 0.5f) / n - to.y;
+            if (px < 0.0f || py < 0.0f || px >= to.w || py >= to.h) continue;
+            const float u = px * kx - 0.5f, v = py * ky - 0.5f;
+            const int tx = int(std::floor(u)), ty = int(std::floor(v));
+            const float fx = u - tx, fy = v - ty;
+            const Color c00 = texel(tx, ty), c10 = texel(tx + 1, ty), c01 = texel(tx, ty + 1),
+                        c11 = texel(tx + 1, ty + 1);
+            const auto mix = [&](float a, float b, float c, float d) {
+              return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+            };
+            sum.r += mix(c00.r, c10.r, c01.r, c11.r);
+            sum.g += mix(c00.g, c10.g, c01.g, c11.g);
+            sum.b += mix(c00.b, c10.b, c01.b, c11.b);
+            sum.a += mix(c00.a, c10.a, c01.a, c11.a);
+          }
+        }
+        const float taps = float(n * n);
+        const Color c{sum.r / taps, sum.g / taps, sum.b / taps, sum.a / taps};
+        if (c.a <= 0.0f) continue;
+        Color& o = px_[size_t(y) * width_ + x];
+        o.r = c.r + o.r * (1.0f - c.a);
+        o.g = c.g + o.g * (1.0f - c.a);
+        o.b = c.b + o.b * (1.0f - c.a);
+        o.a = c.a + o.a * (1.0f - c.a);
       }
     }
   }
@@ -417,7 +468,49 @@ void Dpad(Canvas& cv, PromptStyle style, const Box& b) {
   cv.Fill(pal.face, b, [&](Vec p) { return Len(p - c) - 0.045f * s; });
 }
 
+// SetPromptArt's pictures, by style and button.
+struct Art {
+  std::vector<uint8_t> rgba;
+  int w = 0, h = 0;
+};
+Art g_art[2][int(PromptButton::kDpad) + 1];
+
+// The place our own icon of `button` takes in `b`, for a picture in its stead: the round base's square, the pill
+// (shoulders, Start / Back) or the trigger's box, as Shoulder and StartBack size them.
+Box ArtPlace(PromptButton button, const Box& b) {
+  Vec half;
+  switch (button) {
+    case PromptButton::kLT:
+    case PromptButton::kRT:
+      half = b.w >= 1.2f * b.h ? PillHalf(b) : Vec{b.w / 2 * 0.9f, b.h / 2 * 0.92f};
+      break;
+    case PromptButton::kLB:
+    case PromptButton::kRB:
+    case PromptButton::kStart:
+    case PromptButton::kBack:
+      half = PillHalf(b);
+      break;
+    default:
+      half = {0.46f * b.s(), 0.46f * b.s()};
+      break;
+  }
+  const Vec c = b.c();
+  return {c.x - half.x, c.y - half.y, 2 * half.x, 2 * half.y};
+}
+
+// The picture as large as fits in `place`, its shape kept, centred.
+void DrawArt(Canvas& cv, const Art& art, const Box& place) {
+  const float k = std::min(place.w / art.w, place.h / art.h);
+  const float w = art.w * k, h = art.h * k;
+  const Vec c = place.c();
+  cv.Blit(art.rgba.data(), art.w, art.h, Box{c.x - w / 2, c.y - h / 2, w, h});
+}
+
 void DrawButton(Canvas& cv, PromptStyle style, PromptButton button, const Box& b) {
+  if (const Art& art = g_art[int(style)][int(button)]; !art.rgba.empty()) {
+    DrawArt(cv, art, ArtPlace(button, b));
+    return;
+  }
   switch (button) {
     case PromptButton::kA:
     case PromptButton::kB:
@@ -663,5 +756,15 @@ std::vector<uint8_t> PatchButtonAtlas(const uint8_t* bgra, int width, int height
 }
 
 void SetNintendoLettersByLabel(bool by_label) { g_nintendo_by_label = by_label; }
+
+void SetPromptArt(PromptStyle style, PromptButton button, std::vector<uint8_t> rgba, int width, int height) {
+  Art& art = g_art[int(style)][int(button)];
+  if (rgba.empty() || width < 1 || height < 1 || width > 4096 || height > 4096 ||
+      rgba.size() != size_t(width) * height * 4) {
+    art = Art{};
+    return;
+  }
+  art = Art{std::move(rgba), width, height};
+}
 
 }  // namespace skylanders::portal
