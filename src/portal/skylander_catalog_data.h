@@ -75,6 +75,9 @@ inline constexpr std::array<SkylanderInfo, 648> kSkylanderCatalog = {{
     {106, 4096, "Chill", "Giants", "Cores"},
     {30, 6145, "Chop Chop (Series 2)", "Giants", "Cores"},
     {32, 6145, "Cynder (Series 2)", "Giants", "Cores"},
+    // 18 / 6145 (0x1801) is the Series 2 toy, as for the other Series 2 cores above; the import named it "Double
+    // Trouble 1.5" among the chase variants, where nobody looked for it (Core of Light #117, 2026-11-20).
+    {18, 6145, "Double Trouble (Series 2)", "Giants", "Cores"},
     {21, 6145, "Drill Sergeant (Series 2)", "Giants", "Cores"},
     {20, 6145, "Drobot (Series 2)", "Giants", "Cores"},
     {9, 6145, "Eruptor (Series 2)", "Giants", "Cores"},
@@ -133,7 +136,6 @@ inline constexpr std::array<SkylanderInfo, 648> kSkylanderCatalog = {{
     {18, 7170, "Royal Double Trouble", "Giants", "Variants"},
     {109, 5634, "Scarlet Ninjini", "Giants", "Variants"},
     {105, 4117, "Bronze Hot Dog", "Giants", "Chase Variants"},
-    {18, 6145, "Double Trouble 1.5", "Giants", "Chase Variants"},
     {32, 6161, "Glow-in-the-Dark Cynder", "Giants", "Chase Variants"},
     {115, 4113, "Glow-in-the-Dark Fright Rider", "Giants", "Chase Variants"},
     {1, 6161, "Glow-in-the-Dark Sonic Boom", "Giants", "Chase Variants"},
