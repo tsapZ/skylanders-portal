@@ -37,6 +37,10 @@ void WatchSoulGemSaves(std::vector<std::filesystem::path> (*slots)(),
                        std::vector<std::string> (*finds)(std::span<const uint8_t> before,
                                                          std::span<const uint8_t> after));
 
+// A Soul Gem the game's own scripts just handed out (Giants and Trap Team: their pickup script, the game's
+// soul_gem_hook.cpp, naming the Skylander), the same way as a save's: a log line "Soul Gem script: <name>",
+// SoulGemsSeen, OnSoulGem as a real pickup. Any thread.
+void SoulGemFromScript(const std::string& skylander);
 // Called with each Skylander's name right after its line (the portal menu: a Soul Gem run's
 // find), on the thread that opened the movie or read the save; `from_save` for a find from a save
 // (only a real pickup sets it, also in a hub; a movie can be watched again there). Set once, before

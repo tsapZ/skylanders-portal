@@ -36,7 +36,8 @@ void Found(const std::string& name, std::string_view source) {
     }
   }
   if (first) REXLOG_INFO("Soul Gem {}: {}", source, name);
-  if (const auto found = g_found.load(std::memory_order_acquire)) found(name, source == "save");
+  // A save or a script names a real pickup (also in a hub); a movie can be watched again.
+  if (const auto found = g_found.load(std::memory_order_acquire)) found(name, source == "save" || source == "script");
 }
 
 void OnOpened(std::string_view path) {
@@ -112,6 +113,10 @@ void WatchSoulGemSaves(std::vector<std::filesystem::path> (*slots)(),
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
   }).detach();
+}
+
+void SoulGemFromScript(const std::string& skylander) {
+  if (!skylander.empty()) Found(skylander, "script");
 }
 
 void OnSoulGem(void (*found)(const std::string& skylander, bool from_save)) {
