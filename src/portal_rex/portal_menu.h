@@ -249,6 +249,10 @@ bool PutBackWantedSkylander();
 // that then has to leave the shop another way. Any thread.
 uint32_t WantedBackCount();
 
+// The game says a level was finished (its own signal, the level as dev/where.h names it): in a
+// Soul Gem run its first finish frees Skylanders (run_rules.h), and the player sees who. Any thread.
+void LevelFinished(std::string_view level);
+
 // For the settings menu's Problem melden (problem_note.h), UI thread: the game's picture as it is
 // now (the guest output, without the menus over it) as RGBA, false without one; the figures on the
 // emulated portal ("Chop Chop (player 1), ..."); and a short message at the top of the screen.

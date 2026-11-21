@@ -3,6 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iterator>
+#include <utility>
+
+#include "portal/figure_catalog.h"
+#include "portal/figure_info.h"
 
 namespace skylanders::portal::run {
 namespace {
@@ -85,6 +90,143 @@ std::string ListAdd(std::string_view list, std::string_view name) {
   std::string out(list);
   if (!out.empty()) out += ';';
   out += name;
+  return out;
+}
+
+bool FirstFinish(std::string_view game, std::string_view level, std::string_view done) {
+  return !IsHubLevel(level) && !ListHas(done, LevelKey(game, level));
+}
+
+std::string PickReward(const std::vector<std::string>& candidates, std::string_view open, uint32_t random) {
+  std::vector<const std::string*> left;
+  for (const std::string& name : candidates) {
+    if (NameKey(name).empty() || ListHas(open, name)) continue;
+    // Each character once, also when the list has it twice (two spellings of one name).
+    if (std::any_of(left.begin(), left.end(), [&](const std::string* n) { return NameKey(*n) == NameKey(name); })) {
+      continue;
+    }
+    left.push_back(&name);
+  }
+  return left.empty() ? std::string() : *left[random % left.size()];
+}
+
+size_t RewardCount(size_t left, size_t levels_left) {
+  if (levels_left == 0) return left;
+  return (left + levels_left - 1) / levels_left;
+}
+
+RunState ParseRunState(std::string_view text) {
+  RunState state;
+  size_t start = 0;
+  while (start < text.size()) {
+    size_t end = text.find('\n', start);
+    if (end == std::string_view::npos) end = text.size();
+    std::string_view line = text.substr(start, end - start);
+    if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+    if (line.starts_with("open=")) state.open = std::string(line.substr(5));
+    if (line.starts_with("done=")) state.done = std::string(line.substr(5));
+    start = end + 1;
+  }
+  return state;
+}
+
+std::string FormatRunState(const RunState& state) {
+  return "open=" + state.open + "\ndone=" + state.done + "\n";
+}
+
+std::string LevelKey(std::string_view game, std::string_view level) {
+  return std::string(game) + "/" + std::string(level);
+}
+
+namespace {
+
+constexpr std::string_view kGameOrder[] = {"Spyro's Adventure", "Giants",        "Swap Force",
+                                           "Trap Team",         "SuperChargers", "Imaginators"};
+
+int GameRank(std::string_view game) {
+  for (size_t i = 0; i < std::size(kGameOrder); ++i) {
+    if (kGameOrder[i] == game) return int(i);
+  }
+  return -1;
+}
+
+// The catalog's kinds that are the run's Skylanders: the characters and their other versions.
+bool IsRunCategory(std::string_view category) {
+  for (const std::string_view c : {"Cores", "Giants", "Swappers", "Trap Masters", "SuperChargers", "Senseis",
+                                   "Villain Senseis", "LightCores", "Eon's Elite", "Variants", "Chase Variants",
+                                   "Sensei Variants", "Villain Variants"}) {
+    if (c == category) return true;
+  }
+  return false;
+}
+
+// Each run character's first game (its earliest entry's), by NameKey; built once. Left out: the
+// sidekicks, Minis and vehicles (some come back as a later game's variants: Gnarly Barkley, a gold
+// Tomb Buggy), and the two Nintendo-only SuperChargers, which the Xbox 360 games don't take.
+const std::vector<std::pair<std::string, int>>& HomeGames() {
+  static const std::vector<std::pair<std::string, int>> homes = [] {
+    std::vector<std::string> not_run = {NameKey("Hammer Slam Bowser"), NameKey("Turbo Charge Donkey Kong")};
+    for (const SkylanderInfo& sky : AllSkylanders()) {
+      for (const std::string_view kind : {"Sidekicks", "Minis", "Vehicles", "Vehicle Variants"}) {
+        if (sky.category == kind) not_run.push_back(NameKey(CharacterName(sky)));
+      }
+    }
+    std::vector<std::pair<std::string, int>> out;
+    for (const SkylanderInfo& sky : AllSkylanders()) {
+      if (!IsRunCategory(sky.category)) continue;
+      const std::string key = NameKey(CharacterName(sky));
+      const int rank = GameRank(sky.game);
+      if (key.empty() || rank < 0 || std::find(not_run.begin(), not_run.end(), key) != not_run.end()) continue;
+      auto it = std::find_if(out.begin(), out.end(), [&](const auto& h) { return h.first == key; });
+      if (it == out.end()) out.emplace_back(key, rank);
+      else it->second = std::min(it->second, rank);
+    }
+    return out;
+  }();
+  return homes;
+}
+
+int HomeRank(std::string_view character) {
+  const std::string key = NameKey(character);
+  for (const auto& [k, rank] : HomeGames()) {
+    if (k == key) return rank;
+  }
+  return -1;
+}
+
+}  // namespace
+
+bool HasSoulGem(std::string_view game, std::string_view character) {
+  const int rank = GameRank(game);
+  if (rank < 0 || HomeRank(character) != rank) return false;
+  if (rank == 0) {
+    const std::string key = NameKey(character);
+    // Dark Spyro has none either; CharacterName names its figure Spyro, a starter.
+    for (const std::string_view none : {"bash", "zap", "drobot", "boomer"}) {
+      if (key == none) return false;
+    }
+  }
+  return true;
+}
+
+bool IsRunCharacter(const SkylanderInfo& sky) {
+  return IsRunCategory(sky.category) && HomeRank(CharacterName(sky)) >= 0;
+}
+
+std::vector<std::string> RewardCandidates(std::string_view game) {
+  std::vector<std::string> out;
+  const int rank = GameRank(game);
+  if (rank < 0) return out;
+  for (const SkylanderInfo& sky : AllSkylanders()) {
+    if (!IsRunCategory(sky.category)) continue;
+    const std::string_view name = CharacterName(sky);
+    const int home = HomeRank(name);
+    if (name.empty() || home < 0 || home > rank || HasSoulGem(game, name) || IsStarter(game, name)) continue;
+    const std::string key = NameKey(name);
+    if (std::none_of(out.begin(), out.end(), [&](const std::string& n) { return NameKey(n) == key; })) {
+      out.emplace_back(name);
+    }
+  }
   return out;
 }
 
