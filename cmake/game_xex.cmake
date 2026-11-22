@@ -65,10 +65,18 @@ function(skylanders_game_xex)
         if(Python3_Interpreter_FOUND)
             set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${own_xex}")
             execute_process(COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/xex_pin.py" "${own_xex}"
-                            OUTPUT_VARIABLE own_pin OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+                            OUTPUT_VARIABLE own_pin OUTPUT_STRIP_TRAILING_WHITESPACE
+                            ERROR_VARIABLE own_pin_error RESULT_VARIABLE own_pin_result)
             if(own_pin MATCHES "^[0-9A-F]+:[0-9a-f]+$")
                 message(STATUS "${ARG_PREFIX}: runs discs with the code of rom/default.xex, ${own_pin}")
                 string(APPEND hashes ",code=${own_pin}")
+            elseif(NOT own_pin_result EQUAL 0)
+                # (said out loud: without it a listed disc with other code passes the check again)
+                message(WARNING "${ARG_PREFIX}: cmake/xex_pin.py failed (${own_pin_result}) on rom/default.xex: "
+                                "${own_pin_error}; the disc check takes every listed disc")
+            else()
+                message(WARNING "${ARG_PREFIX}: rom/default.xex gives no code pin (not an XEX2 with code pages?); "
+                                "the disc check takes every listed disc")
             endif()
         endif()
     endif()

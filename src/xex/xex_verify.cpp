@@ -158,7 +158,9 @@ XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expe
   }
   // A listed disc whose code isn't the code this build was recompiled from can't run here (Core of Light #135:
   // SuperChargers' French / Dutch disc, listed for builds made from it, crashed the download built from En/De).
-  if (!own_code.empty() && result.status != XexCheck::Mismatch && result.code_pin != own_code) {
+  // (Only with a pin to compare: a listed file whose header can't be read keeps its Match.)
+  if (!own_code.empty() && !result.code_pin.empty() && result.status != XexCheck::Mismatch &&
+      result.code_pin != own_code) {
     result.status = XexCheck::Mismatch;
     result.other_build = true;
   }

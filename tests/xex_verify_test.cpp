@@ -215,6 +215,9 @@ int main() {
     const std::string built_from_c = hash_a + "," + *pin + "," + pin_c + ", code=" + pin_c;
     CHECK(VerifyXex(fc, built_from_c).status == XexCheck::SameCode);
     CHECK(VerifyXex(fa, built_from_c).other_build);
+    // a listed file without a readable header (no pin to compare) keeps its Match
+    CHECK(VerifyXex(abc, std::string(kAbc) + ",code=" + *pin).status == XexCheck::Match);
+    CHECK(!VerifyXex(abc, std::string(kAbc) + ",code=" + *pin).other_build);
     // an unlisted disc with other code stays a plain mismatch; a malformed code entry spoils the list
     CHECK(!VerifyXex(fc, hash_a + ",code=" + *pin).other_build);
     CHECK(VerifyXex(fc, hash_a + ",code=" + *pin).status == XexCheck::Mismatch);
