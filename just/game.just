@@ -29,10 +29,11 @@ export PATH := if os() == "windows" {
 # The game's executable, without the .exe suffix.
 exe := game + "iled"
 
-# Preset/output-directory triple for the host OS -- matches the *-amd64-* preset names in
-# CMakePresets.json (win-amd64, linux-amd64, mac-amd64). Not parameterized for arm64: neither was
-# the original Windows-only version of this file.
-triple := if os() == "windows" { "win-amd64" } else if os() == "macos" { "mac-amd64" } else { "linux-amd64" }
+# Preset/output-directory triple for the host OS -- matches the win-*, linux-* and mac-* preset
+# names in CMakePresets.json. Linux uses the machine's own architecture (arm64 on ARM64, amd64
+# otherwise); the Windows and macOS recipes stay amd64 for now.
+linux_arch := if arch() == "aarch64" { "arm64" } else if arch() == "arm64" { "arm64" } else { "amd64" }
+triple := if os() == "windows" { "win-amd64" } else if os() == "macos" { "mac-amd64" } else { "linux-" + linux_arch }
 
 # Host executable suffix: ".exe" on Windows, empty everywhere else.
 exe_suffix := if os() == "windows" { ".exe" } else { "" }
