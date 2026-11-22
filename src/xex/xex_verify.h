@@ -25,6 +25,9 @@ struct XexCheckResult {
   std::string actual_sha256;  // empty unless the file was readable
   std::string header;         // DescribeXexHeader of the file, empty when it has no XEX2 header
   std::string code_pin;       // its code pin, empty without a header or code pages
+  // Mismatch only: the disc is listed (hash or pin), but its code isn't the "code=" entry's, the code this
+  // build is recompiled from (another build of the game: the port built from source with that disc runs it).
+  bool other_build = false;
 };
 
 // Lowercase hex SHA-256 of the file at `path`, or nullopt if it cannot be read completely.
@@ -33,7 +36,8 @@ std::optional<std::string> Sha256File(const std::filesystem::path& path);
 // Compares the file's SHA-256 with `expected_sha256`: one or more entries, comma separated (any
 // case, surrounding whitespace ignored), each a 64-hex-character SHA-256 or a code pin
 // ("82450000:" and 64 hex characters). A hash matching is a Match, else a code pin matching is
-// SameCode.
+// SameCode. One more entry, "code=<pin>" (cmake/game_xex.cmake adds the pin of the game's own
+// rom/default.xex), makes any file with another code a Mismatch with other_build set.
 XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expected_sha256);
 
 // The code pin of the XEX2 file at `path` (xex_header.h), or nullopt when it has none.

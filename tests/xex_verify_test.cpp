@@ -197,6 +197,28 @@ int main() {
     CHECK(VerifyXex(fb, hash_a).status == XexCheck::Mismatch);
     CHECK(VerifyXex(fb, hash_a + ",82010000:abc").status == XexCheck::BadExpected);
     CHECK(VerifyXex(fb, hash_a + ",8201000:" + std::string(64, 'a')).status == XexCheck::BadExpected);
+
+    // "code=<pin>", the code the build is recompiled from (Core of Light #135): listed discs with that
+    // code still run; a listed disc with other code (its hash or pin in the list) is another build.
+    const std::string pin_c = *skylanders::xex::XexCodePin(fc);
+    const std::string hash_c = *skylanders::xex::Sha256File(fc);
+    const std::string built_from_a = hash_a + "," + hash_c + "," + *pin + "," + pin_c + ",code=" + *pin;
+    CHECK(VerifyXex(fa, built_from_a).status == XexCheck::Match);
+    CHECK(VerifyXex(fb, built_from_a).status == XexCheck::SameCode);
+    const auto other_build = VerifyXex(fc, built_from_a);
+    CHECK(other_build.status == XexCheck::Mismatch);
+    CHECK(other_build.other_build);
+    const std::string other_msg = skylanders::xex::DescribeXexProblem(fc, other_build, built_from_a, "Skylanders: Test");
+    CHECK(other_msg.find("another build") != std::string::npos);
+    CHECK(other_msg.find("title 41560911") != std::string::npos);
+    // built from c: a and b (listed, same code as each other) are the other build now
+    const std::string built_from_c = hash_a + "," + *pin + "," + pin_c + ", code=" + pin_c;
+    CHECK(VerifyXex(fc, built_from_c).status == XexCheck::SameCode);
+    CHECK(VerifyXex(fa, built_from_c).other_build);
+    // an unlisted disc with other code stays a plain mismatch; a malformed code entry spoils the list
+    CHECK(!VerifyXex(fc, hash_a + ",code=" + *pin).other_build);
+    CHECK(VerifyXex(fc, hash_a + ",code=" + *pin).status == XexCheck::Mismatch);
+    CHECK(VerifyXex(fa, hash_a + ",code=82010000:abc").status == XexCheck::BadExpected);
   }
 
   // Files every copy of the disc has: a "*" part is any one folder (CoL #64, an extract tool that
