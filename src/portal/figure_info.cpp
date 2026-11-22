@@ -26,8 +26,10 @@ struct CharacterElement {
 // earlier games' characters already here: all 196 that Trap Team's scenes have, and 118 of the 119
 // in SuperChargers' toy data, agree; the other was Crypt Crusher, which matched Crusher (Earth)
 // and is Undead in the game's data, so it is listed now. The Nintendo characters and their
-// vehicles are not on the Xbox 360 discs; theirs are the figures' (Hammer Slam Bowser and the Clown
-// Cruiser Fire, Turbo Charge Donkey Kong and the Barrel Blaster Life). Kaos (Imaginators) has an
+// vehicles are not on the Xbox 360 discs. The drivers' are the figures' (Hammer Slam Bowser Fire,
+// Turbo Charge Donkey Kong Life); their vehicles have elements of their own, unlike every other
+// SuperChargers pair: the Clown Cruiser Air, the Barrel Blaster Tech (CoL #56, a player's note,
+// matching DarkSpyro's SuperChargers lists). Kaos (Imaginators) has an
 // element of his own the menu doesn't list.
 constexpr CharacterElement kCharacters[] = {
     // Spyro's Adventure
@@ -114,8 +116,8 @@ constexpr CharacterElement kCharacters[] = {
     {"Splat", Element::kMagic},           {"Stormblade", Element::kAir},
     {"Thrillipede", Element::kLife},      {"Turbo Charge Donkey Kong", Element::kLife},
     // SuperChargers vehicles
-    {"Barrel Blaster", Element::kLife},   {"Burn-Cycle", Element::kFire},
-    {"Buzz Wing", Element::kLife},        {"Clown Cruiser", Element::kFire},
+    {"Barrel Blaster", Element::kTech},   {"Burn-Cycle", Element::kFire},
+    {"Buzz Wing", Element::kLife},        {"Clown Cruiser", Element::kAir}, 
     {"Crypt Crusher", Element::kUndead},  {"Dive Bomber", Element::kWater},
     {"Gold Rusher", Element::kTech},      {"Hot Streak", Element::kFire},
     {"Jet Stream", Element::kAir},        {"Reef Ripper", Element::kWater},

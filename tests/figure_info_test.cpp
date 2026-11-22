@@ -33,6 +33,12 @@ int main() {
   CHECK(ElementOf("Metallic Purple Eye-Brawl") == Element::kUndead);
   CHECK(ElementOf("Legendary LightCore Chill") == Element::kWater);
   CHECK(ElementOf("Green Flame Frito-Lay Fire Bone Hot Dog") == Element::kFire);
+  // The Nintendo vehicles' elements aren't their drivers' (CoL #56), the dark ones' the same.
+  CHECK(ElementOf("Turbo Charge Donkey Kong") == Element::kLife);
+  CHECK(ElementOf("Barrel Blaster") == Element::kTech);
+  CHECK(ElementOf("Dark Barrel Blaster") == Element::kTech);
+  CHECK(ElementOf("Clown Cruiser") == Element::kAir);
+  CHECK(ElementOf("Dark Clown Cruiser") == Element::kAir);
   // Swappers, both halves.
   CHECK(ElementOf("Freeze Blade Top") == Element::kWater);
   CHECK(ElementOf("Nitro Freeze Blade Bottom") == Element::kWater);
