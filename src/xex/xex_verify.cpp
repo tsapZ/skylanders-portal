@@ -124,14 +124,17 @@ XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expe
   // One hash per supported disc (docs/game/discs.md) and the code pins, comma separated.
   std::vector<std::string> expected;
   std::vector<std::string> pins;
+  std::string own_code;  // "code=<pin>": the code this build is recompiled from (cmake/game_xex.cmake)
   for (size_t start = 0;;) {
     const size_t comma = expected_list.find(',', start);
-    const auto entry =
-        expected_list.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+    auto entry = expected_list.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+    while (!entry.empty() && std::isspace(static_cast<unsigned char>(entry.front()))) entry.remove_prefix(1);
     if (const auto hash = NormalizeHash(entry)) {
       expected.push_back(*hash);
     } else if (const auto pin = NormalizePin(entry)) {
       pins.push_back(*pin);
+    } else if (entry.starts_with("code=") && NormalizePin(entry.substr(5))) {
+      own_code = *NormalizePin(entry.substr(5));
     } else {
       return {XexCheck::BadExpected, {}};
     }
@@ -152,6 +155,12 @@ XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expe
     for (const auto& pin : pins) {
       if (result.code_pin == pin) result.status = XexCheck::SameCode;
     }
+  }
+  // A listed disc whose code isn't the code this build was recompiled from can't run here (Core of Light #135:
+  // SuperChargers' French / Dutch disc, listed for builds made from it, crashed the download built from En/De).
+  if (!own_code.empty() && result.status != XexCheck::Mismatch && result.code_pin != own_code) {
+    result.status = XexCheck::Mismatch;
+    result.other_build = true;
   }
   return result;
 }
@@ -175,6 +184,11 @@ std::string DescribeXexProblem(const std::filesystem::path& xex, const XexCheckR
              " disc belongs in the rom folder in the game's folder, with default.xex directly in it."
              "\nRun the setup again and pick your disc, or set the game up in Core of Light.";
     case XexCheck::Mismatch: {
+      if (result.other_build) {
+        return "This " + std::string(game) + " disc is another build of the game (" + result.header +
+               "): its code isn't the code this download was made from, so it can't run it.\n"
+               "The port built from source with this disc runs it (docs/development.md).";
+      }
       size_t count = 0;
       const std::string hashes = ExpectedHashes(expected_sha256, count);
       std::string text = "default.xex is not a supported build.\nExpected SHA-256" +

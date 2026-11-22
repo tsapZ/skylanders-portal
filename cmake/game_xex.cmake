@@ -54,6 +54,24 @@ function(skylanders_game_xex)
             string(APPEND hashes ",${pin}")
         endforeach()
     endif()
+    # The code this build is recompiled from: the pin of the game's own rom/default.xex (cmake/xex_pin.py), as
+    # "code=<pin>" in the list. A disc with other code is refused at start even when its hash or pin is listed (Core
+    # of Light #118, #135, 2026-11-22: the SuperChargers downloads are built from the En/De disc's code; the French /
+    # Dutch and Scandinavian discs, listed for source builds from them, have their own and crashed in the CRT start-up).
+    # Without Python or a rom/default.xex (a check-only build), nothing is added and the list alone decides.
+    set(own_xex "${CMAKE_CURRENT_SOURCE_DIR}/rom/default.xex")
+    if(EXISTS "${own_xex}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${own_xex}")
+            execute_process(COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/xex_pin.py" "${own_xex}"
+                            OUTPUT_VARIABLE own_pin OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+            if(own_pin MATCHES "^[0-9A-F]+:[0-9a-f]+$")
+                message(STATUS "${ARG_PREFIX}: runs discs with the code of rom/default.xex, ${own_pin}")
+                string(APPEND hashes ",code=${own_pin}")
+            endif()
+        endif()
+    endif()
 
     # This file's folder: the function runs in the game's scope, where the library's variables
     # aren't set.
