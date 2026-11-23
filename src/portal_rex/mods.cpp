@@ -124,6 +124,9 @@ SettingsPage ModsPage(std::string_view game) {
     }
     s.options = {{"off", "Off", "Aus"}, {"on", "On", "An"}};
     s.restart = true;
+    // Started by the launcher, the menu drops start-up settings (the launcher has them on its card);
+    // it has no card for mods, so these rows stay.
+    s.keep_when_launched = true;
     const std::string id = m.id;
     // The menu applies a change to the setting at once (saved with Y, put back if not), so the
     // list read here has the other rows' changes.
