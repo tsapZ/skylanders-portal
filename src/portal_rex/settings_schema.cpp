@@ -119,7 +119,7 @@ void ApplyGraphicsDefaults() {
   // in the settings file) counted as unset and became 16x again (a colleague's report and fix,
   // Core of Light #21).
   if (rex::cvar::GetFlagSource("anisotropic_override") == rex::cvar::Source::kDefault &&
-      !rex::cvar::SetFlagByName("anisotropic_override", "5")) {
+      !rex::cvar::SetFlagAsProgramDefault("anisotropic_override", "5")) {
     REXLOG_WARN("Could not set anisotropic_override to 16x");
   }
   // Texture fetch offsets in the console's texels at every resolution scale (the SDK, like Xenia,
@@ -129,7 +129,7 @@ void ApplyGraphicsDefaults() {
   // (ImaginatorsRecomp #12; the same blur in Trap Team, SuperChargers and Swap Force). Compared
   // at scale 2 in each game, on and off. Scale 1 is the same either way. Only when nothing set it.
   if (rex::cvar::GetFlagSource("draw_resolution_scaled_texture_offsets") == rex::cvar::Source::kDefault &&
-      !rex::cvar::SetFlagByName("draw_resolution_scaled_texture_offsets", "false")) {
+      !rex::cvar::SetFlagAsProgramDefault("draw_resolution_scaled_texture_offsets", "false")) {
     REXLOG_WARN("Could not set draw_resolution_scaled_texture_offsets to false");
   }
   // The water ripple simulation (the discs' shaders/WaterRipple.igz: its Ripple, Blur and Normals
@@ -140,7 +140,7 @@ void ApplyGraphicsDefaults() {
   // The hashes are the SDK's of each shader's microcode (Swap Force's seen in a shader dump, the
   // other two computed from their discs' files). Only when nothing set it.
   if (rex::cvar::GetFlagSource("draw_resolution_guest_grid_shaders") == rex::cvar::Source::kDefault &&
-      !rex::cvar::SetFlagByName("draw_resolution_guest_grid_shaders",
+      !rex::cvar::SetFlagAsProgramDefault("draw_resolution_guest_grid_shaders",
                                 "8866B05163554699,2DF71E8FBF9ACA5C,E92701C0A83CB5DC,"    // SF
                                 "BC6A70F217359FB0,DED34DC51E632121,9CCDC876248D6FC0,"    // SC
                                 "12288C4056FDEAD8,3561F4FF40DF3C8A,0B730E004D3A390F")) {  // IM
@@ -160,7 +160,7 @@ static void UseHdPack(const std::filesystem::path& user_data_root, std::string_v
     REXLOG_INFO("HD textures off (hd_textures = false): the game's own, not {}", std::string(u8.begin(), u8.end()));
     return;
   }
-  if (rex::cvar::SetFlagByName("texture_replace_dir", std::string(u8.begin(), u8.end()))) {
+  if (rex::cvar::SetFlagAsProgramDefault("texture_replace_dir", std::string(u8.begin(), u8.end()))) {
     REXLOG_INFO("HD textures from {}", std::string(u8.begin(), u8.end()));
   }
 }
