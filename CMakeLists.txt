@@ -199,7 +199,18 @@ if(TARGET rex::runtime)
     configure_file("${CMAKE_CURRENT_BINARY_DIR}/generated/prompt_art_png.inc.new"
                    "${CMAKE_CURRENT_BINARY_DIR}/generated/prompt_art_png.inc" COPYONLY)
     target_include_directories(skylanders_portal_rex PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-    target_link_libraries(skylanders_portal_rex PUBLIC skylanders_portal_core rex::runtime hidapi::hidapi SDL3::SDL3)
+    # On Linux the libusb backend, not hidraw (hidapi::hidapi there): the portal takes commands only as a SET_REPORT on
+    # the control channel (usb_portal.cpp SendRaw), and hidraw sends an output report over the interrupt OUT endpoint
+    # whenever the device has one (drivers/hid/hidraw.c hidraw_send_report, unless the kernel quirk
+    # NO_OUTPUT_REPORTS_ON_INTR_EP is set), which the portal ignores: on Linux the game sent R and only ever got status
+    # reports back (Core of Light #128). hidapi's libusb backend makes hid_send_output_report a control SET_REPORT,
+    # as on Windows. installer/70-portal-of-power.rules already opens the USB device to the logged-in user.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET hidapi::libusb)
+        set(_skylanders_hidapi hidapi::libusb)
+    else()
+        set(_skylanders_hidapi hidapi::hidapi)
+    endif()
+    target_link_libraries(skylanders_portal_rex PUBLIC skylanders_portal_core rex::runtime ${_skylanders_hidapi} SDL3::SDL3)
     # The SDK's FFmpeg decodes the title music from the disc (title_music.cpp).
     target_link_libraries(skylanders_portal_rex PRIVATE libavcodec libavutil)
     if(WIN32)

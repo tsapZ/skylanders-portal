@@ -190,27 +190,17 @@ void RealPortalBridge::Handle(const Report& report) {
       last_alive_ = Clock::now();
       if (!pending_ || pending_->cmd != 'M') break;
       pending_.reset();
-      const bool audio_version =
-          report[2] == kAudioCapableVersion[0] && report[3] == kAudioCapableVersion[1];
-      // An Xbox 360 Traptanium portal has a speaker but answers without the audio version
-      // (4D 01 00 00 switched on, 4D 00 00 00 off), so any answer from it means one (TrapTeamRecomp #22).
+      // Any answer to the speaker switch means a portal with a speaker. kAudioCapableVersion (01 19) is what the
+      // emulated portal answers; real Trap Team portals answer without it: the Xbox 360 one 4D 01 00 00 switched on
+      // and 4D 00 00 00 off (TrapTeamRecomp #22, 2026-11-14), a Wii/PS3 Trap Team portal 4D 01 00 00 too (Core of
+      // Light #137, 2026-11-23: its sound went to the PC in Automatic). Portals from before Trap Team don't know the
+      // command and don't answer it (the timeout above: "didn't answer the speaker switch"). SuperChargers and
+      // Imaginators portals (no speaker) haven't been seen answering it yet: the bytes stay in the log for that case.
       const bool xbox = real_->IsXbox360Portal();
-      const bool speaker = audio_version || xbox;
-      char answer[64];
-      if (xbox) {
-        std::snprintf(answer, sizeof(answer),
-                      "has a speaker (an Xbox 360 portal, answered %02X %02X %02X %02X)", report[0],
-                      report[1], report[2], report[3]);
-        NoteSpeaker(speaker, answer);
-      } else if (speaker) {
-        NoteSpeaker(speaker, "has a speaker");
-      } else {
-        // The answer's bytes in the log: that is how the Xbox 360 portal's answer above was found
-        // (TrapTeamRecomp #22, a player's report 2026-11-14), and how the next odd one will be.
-        std::snprintf(answer, sizeof(answer), "has no speaker (answered %02X %02X %02X %02X)", report[0],
-                      report[1], report[2], report[3]);
-        NoteSpeaker(speaker, answer);
-      }
+      char answer[80];
+      std::snprintf(answer, sizeof(answer), "has a speaker (%sanswered %02X %02X %02X %02X)",
+                    xbox ? "an Xbox 360 portal, " : "", report[0], report[1], report[2], report[3]);
+      NoteSpeaker(true, answer);
       break;
     }
     case 0x53:
