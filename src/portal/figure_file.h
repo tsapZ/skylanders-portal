@@ -22,9 +22,10 @@ std::optional<FigureData> LoadFigureFile(const std::filesystem::path& path);
 bool SaveFigureFileAtomic(const std::filesystem::path& path, const FigureData& data);
 
 // Whether a file's name makes it a figure file, any case: ".dump" (ours), ".sky" (RPCS3's, Dolphin's
-// and Cemu's virtual figures, the same 1 KB of toy data; Core of Light #88) or ".bin" (a raw NFC
-// dump). Core of Light counts the same files (IsFigureFile in its profiles.cpp). The size is checked
-// where the file is read (LoadFigureFile).
+// and Cemu's virtual figures, the same 1 KB of toy data; Core of Light #88), ".bin" (a raw NFC
+// dump) or ".dmp" (dump tools' other name for the raw 1 KB; Core of Light Discussions #79). Core of
+// Light counts the same files through this function. The size is checked where the file is read
+// (LoadFigureFile): a .dmp of any other size (a crash dump) is no figure.
 bool IsFigureFileName(const std::filesystem::path& path);
 
 // Backups of figure files, so a bad write or a mistake doesn't cost a figure's progress (level,

@@ -93,7 +93,8 @@ int main() {
   bool bin_listed = false;
   for (const auto& e : entries4) bin_listed = bin_listed || e.name == "Hoot Loop";
   CHECK(bin_listed);
-  CHECK(IsFigureFileName(L"a.Dump") && IsFigureFileName(L"b.sky") && IsFigureFileName(L"c.BIN"));
+  CHECK(IsFigureFileName(L"a.Dump") && IsFigureFileName(L"b.sky") && IsFigureFileName(L"c.BIN") &&
+        IsFigureFileName(L"d.DMP"));
   CHECK(!IsFigureFileName(L"old.sky.bak") && !IsFigureFileName(L"readme.txt") && !IsFigureFileName(L"dump"));
 
   fs::remove_all(root);
