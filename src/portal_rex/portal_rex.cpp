@@ -903,10 +903,15 @@ void UseSharedDataFolder(std::filesystem::path& user_data_root, std::filesystem:
     g_shared_user_data_root = user_data_root;
     return;
   }
-  // The launcher asking for the settings pages needs no user data: nothing is copied then.
-  if (SettingsSchemaRequested()) return;
   const fs::path old_dir = user_data_root;
   const fs::path target = DataFolder() / fs::path(std::u8string(game.begin(), game.end()));
+  // The launcher asking for the settings pages needs no user data: nothing is copied or created
+  // then. It still says where the data folder is, so the schema lists the mods in its mods folder
+  // (F4 > Mods rows; without it the launcher's card for the game had none).
+  if (SettingsSchemaRequested()) {
+    g_shared_user_data_root = target;
+    return;
+  }
   // Portable data (data_folder.h): a PC the stick visits keeps its own old folder.
   const bool portable = !PortableFolder().empty();
   std::error_code ec;

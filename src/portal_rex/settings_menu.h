@@ -12,7 +12,8 @@
 // Started by the Core of Light launcher (--started_by_launcher, which it passes), the menu leaves
 // out the Graphics page and every setting that only applies at start-up: the launcher sets those
 // on the game's card before starting (owner's wish, Core of Light #10), and changing them in the
-// middle of a game does nothing until the next start. Started on its own, the game keeps them all.
+// middle of a game does nothing until the next start (except rows with keep_when_launched, such as
+// the mods). Started on its own, the game keeps them all.
 
 #include <filesystem>
 #include <functional>
@@ -70,6 +71,9 @@ struct Setting {
   // Started from Core of Light: a start-up setting the launcher changes, shown greyed with a note
   // saying so (the portal mode, Core of Light #58).
   bool launcher_only = false;
+  // A start-up setting the launcher doesn't have on the game's card, so it stays in this menu even
+  // when the launcher started the game (the mods on F4 > Mods: no other place switches them).
+  bool keep_when_launched = false;
 };
 
 struct SettingsPage {
