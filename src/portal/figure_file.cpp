@@ -72,7 +72,7 @@ std::string LowerExtension(const std::filesystem::path& path) {
 
 bool IsFigureFileName(const std::filesystem::path& path) {
   const std::string ext = LowerExtension(path);
-  return ext == "dump" || ext == "sky" || ext == "bin";
+  return ext == "dump" || ext == "sky" || ext == "bin" || ext == "dmp";
 }
 
 std::filesystem::path FigureBackupDir(const std::filesystem::path& file, const std::filesystem::path& figures_dir) {
