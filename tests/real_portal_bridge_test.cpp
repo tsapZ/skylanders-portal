@@ -484,8 +484,8 @@ int main() {
     CHECK(FirstFigure(emulated) == kMaxFigures - 1);
   }
 
-  // The game's speaker switch reaches the real portal; a portal with a speaker (a SoftwarePortal with
-  // an audio sink answers 4D xx 01 19, as a Trap Team portal does) is told apart from one without.
+  // The game's speaker switch reaches the real portal; a portal that answers it has a speaker (a
+  // SoftwarePortal with an audio sink answers 4D xx 01 19), one that doesn't answer has none (below).
   {
     struct NullSink final : PortalAudioSink {
       void Submit(std::span<const int16_t>) override {}
@@ -510,13 +510,14 @@ int main() {
     CHECK(bridge.RealHasSpeaker());
     CHECK(std::count_if(real.sent.begin(), real.sent.end(), [](const Report& r) { return r[0] == 'M'; }) == 2);
   }
+  // Any answer counts, whatever its last two bytes (Core of Light #137): no audio sink answers 4D xx 00 19.
   {
-    SoftwarePortal real, emulated;  // no audio sink: 4D xx 00 19
+    SoftwarePortal real, emulated;
     RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
     bridge.OnSpeakerSwitch(Cmd({'M', 0x01}));
     real.PlaceFigure(0, chop);
     Run(bridge, &real);
-    CHECK(!bridge.RealHasSpeaker());
+    CHECK(bridge.RealHasSpeaker());
     CHECK(FirstFigure(emulated) == kMaxFigures - 1);  // figures still come through
   }
   // A portal that doesn't answer M at all (one from before Trap Team): no speaker after the wait, and
@@ -575,12 +576,17 @@ int main() {
       }));
     }
     {
-      SoftwarePortal inner, emulated;  // the same answer, but not an Xbox 360 portal: no speaker
+      // The same answer from a Wii/PS3 Trap Team portal (Core of Light #137, 4D 01 00 00): a speaker too.
+      SoftwarePortal inner, emulated;
       Xbox360Speaker real(&inner, false);
-      RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+      std::vector<std::string> lines;
+      RealPortalBridge bridge(&emulated, {dir, [&](const std::string& l) { lines.push_back(l); }, nullptr});
       bridge.OnSpeakerSwitch(Cmd({'M', 0x01}));
       Run(bridge, &real);
-      CHECK(!bridge.RealHasSpeaker());
+      CHECK(bridge.RealHasSpeaker());
+      CHECK(std::any_of(lines.begin(), lines.end(), [](const std::string& l) {
+        return l.find("has a speaker (answered 4D 01 00 00)") != std::string::npos;
+      }));
     }
   }
 
