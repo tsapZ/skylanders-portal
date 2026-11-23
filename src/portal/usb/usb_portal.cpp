@@ -529,6 +529,14 @@ void UsbPortal::WriteAudio(std::span<const int16_t> pcm) {
 // fails anyway, the writes stay on device_ under io_mutex_ as before.
 void UsbPortal::OpenAudioHandle() {
   if (winusb_ || device_ == nullptr) return;
+#ifndef _WIN32
+  // Only on Windows, where the HID driver made it necessary. On Linux hidapi's libusb backend (CMakeLists.txt) gives
+  // every open handle its own read thread on the interrupt IN endpoint, so a second handle would take part of the
+  // portal's replies away from device_ (found in a review of Core of Light #128's fix, 2026-11-23; usbfs should refuse
+  // the second claim of the same interface anyway, this doesn't depend on it). The writes share device_ under io_mutex_.
+  REXLOG_INFO("Portal (usb): speaker sound shares the commands' handle");
+  return;
+#endif
   std::string path;
   {
     std::lock_guard<std::mutex> lock(io_mutex_);  // every hidapi call on device_ stays serialized
