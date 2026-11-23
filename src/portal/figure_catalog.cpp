@@ -125,10 +125,12 @@ std::vector<FigureCatalogEntry> ScanFigureCatalog(const std::filesystem::path& r
     // Japanese letters; Core of Light #60, TheBiemGamer) and took the whole list down.
     // .sky and .bin too (IsFigureFileName): RPCS3's, Dolphin's and Cemu's virtual figures and raw
     // NFC dumps hold the same 1 KB of toy data as a .dump, so they play as they are (Core of Light
-    // #88). A .bin of another size is something else and stays out.
+    // #88). A .bin or .dmp (another dump tool's name; Discussions #79) of another size is something
+    // else (a crash dump) and stays out.
     if (!IsFigureFileName(path)) continue;
     std::error_code size_ec;
-    if (Lower(Utf8Path(path.extension())) == ".bin" && it->file_size(size_ec) != kFigureSize) continue;
+    const std::string ext = Lower(Utf8Path(path.extension()));
+    if ((ext == ".bin" || ext == ".dmp") && it->file_size(size_ec) != kFigureSize) continue;
     const std::string name = Utf8Path(path.stem());
     entries.push_back({name, ResolveDisplayName(path, name), TopLevelFolder(root, path), path});
   }

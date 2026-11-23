@@ -95,6 +95,21 @@ int main() {
   CHECK(bin_listed);
   CHECK(IsFigureFileName(L"a.Dump") && IsFigureFileName(L"b.sky") && IsFigureFileName(L"c.BIN") &&
         IsFigureFileName(L"d.DMP"));
+
+  // Some dump tools name the raw dump .dmp (Discussions #79): the same rule as .bin, so a crash dump
+  // (.dmp of another size) stays out.
+  {
+    std::ofstream(root / L"3. Swap Force" / L"Freeze Blade.dmp", std::ios::binary) << std::string(kFigureSize, 'x');
+    std::ofstream(root / L"3. Swap Force" / L"crash.DMP", std::ios::binary) << std::string(4096, 'x');
+  }
+  auto entries5 = ScanFigureCatalog(root);
+  CHECK(entries5.size() == 10);
+  bool dmp_listed = false, crash_listed = false;
+  for (const auto& e : entries5) {
+    dmp_listed = dmp_listed || e.name == "Freeze Blade";
+    crash_listed = crash_listed || e.name == "crash";
+  }
+  CHECK(dmp_listed && !crash_listed);
   CHECK(!IsFigureFileName(L"old.sky.bak") && !IsFigureFileName(L"readme.txt") && !IsFigureFileName(L"dump"));
 
   fs::remove_all(root);
