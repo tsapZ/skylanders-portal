@@ -1647,7 +1647,9 @@ void RegisterSettingsMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppCont
       for (Setting& s : page.settings) {
         if (s.cvar == "portal_mode") s.launcher_only = true;
       }
-      std::erase_if(page.settings, [](const Setting& s) { return ApplyLater(s) && !s.launcher_only; });
+      std::erase_if(page.settings, [](const Setting& s) {
+        return ApplyLater(s) && !s.launcher_only && !s.keep_when_launched;
+      });
       if (!page.settings.empty()) kept.push_back(std::move(page));
     }
     g_state.trimmed = true;
