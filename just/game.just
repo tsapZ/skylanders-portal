@@ -30,9 +30,23 @@ export PATH := if os() == "windows" {
 exe := game + "iled"
 
 # Preset/output-directory triple for the host OS -- matches the win-*, linux-* and mac-* preset
-# names in CMakePresets.json. Linux uses the machine's own architecture (arm64 on ARM64, amd64
-# otherwise); the Windows and macOS recipes stay amd64 for now.
-linux_arch := if arch() == "aarch64" { "arm64" } else if arch() == "arm64" { "arm64" } else { "amd64" }
+# names in CMakePresets.json. Linux uses the machine's own architecture (arm64 on ARM64, amd64 on
+# x86-64) and rejects anything else instead of guessing amd64 and packaging a binary that cannot
+# run; the Windows and macOS recipes stay amd64 for now. `host_arch` is a variable so a test can
+# `just --set host_arch <arch>` an unsupported machine. just evaluates this eagerly, so the
+# rejection only applies on Linux and never breaks the other platforms' recipes.
+host_arch := arch()
+linux_arch := if os() != "linux" {
+    "amd64"
+} else if host_arch == "aarch64" {
+    "arm64"
+} else if host_arch == "arm64" {
+    "arm64"
+} else if host_arch == "x86_64" {
+    "amd64"
+} else {
+    error("unsupported Linux architecture '" + host_arch + "': only amd64 and arm64 are packaged")
+}
 triple := if os() == "windows" { "win-amd64" } else if os() == "macos" { "mac-amd64" } else { "linux-" + linux_arch }
 
 # Host executable suffix: ".exe" on Windows, empty everywhere else.
@@ -124,11 +138,18 @@ package-release: build-release
     if [ "{{ os() }}" != "windows" ]; then \
         for lib in {{ sdk_lib_dir }}/librexruntime.so {{ sdk_lib_dir }}/libamd_fidelityfx_vk.so; do if [ -e "$lib" ] && [ ! -e "$dist/$(basename "$lib")" ]; then cp "$lib" "$dist/"; fi; done; \
     fi && \
-    cp {{ game }}.toml.example "$dist/{{ game }}.toml" && \
+    if [ "{{ os() }}" != "linux" ]; then cp {{ game }}.toml.example "$dist/{{ game }}.toml"; fi && \
     if [ -d fonts ]; then cp -r fonts "$dist/"; fi && \
     if [ "{{ os() }}" = "linux" ]; then \
         if [ -e thirdparty/skylanders-portal/installer/70-portal-of-power.rules ]; then cp thirdparty/skylanders-portal/installer/70-portal-of-power.rules "$dist/"; fi && \
-        if [ -e installer/settings_template.toml ]; then cp installer/settings_template.toml "$dist/"; fi && \
+        template=""; \
+        if [ -e installer/settings_template.toml ]; then template=installer/settings_template.toml; elif [ -e thirdparty/skylanders-portal/installer/settings_template.toml ]; then template=thirdparty/skylanders-portal/installer/settings_template.toml; fi; \
+        if [ -n "$template" ]; then \
+            cp "$template" "$dist/settings_template.toml" && \
+            sed -e 's/__PORTAL_MODE__/hybrid/g' -e 's/__RESOLUTION__/1920x1080/g' -e 's/__RESOLUTION_SCALE__/1/g' -e 's/__LANGUAGE__/auto/g' "$template" > "$dist/{{ game }}.toml"; \
+        else \
+            cp {{ game }}.toml.example "$dist/{{ game }}.toml"; \
+        fi && \
         if [ -e installer/linux-setup.sh ]; then \
             cp installer/linux-setup.sh "$dist/" && chmod +x "$dist/linux-setup.sh"; \
         elif [ -e thirdparty/skylanders-portal/installer/linux-setup.sh ]; then \
