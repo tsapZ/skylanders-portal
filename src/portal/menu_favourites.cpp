@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <fstream>
 
+#include "portal/figure_catalog.h"
+#include "portal/figure_info.h"
+
 namespace skylanders::portal {
 
 std::vector<std::string> LoadFavourites(const std::filesystem::path& file) {
@@ -42,6 +45,13 @@ std::vector<size_t> FavouriteCharacters(const std::vector<std::string>& characte
     if (HasFavourite(favourites, characters[i])) indices.push_back(i);
   }
   return indices;
+}
+
+std::string FavouriteName(const SkylanderInfo& sky) {
+  if (sky.category == "Items") return {};
+  std::string name(CharacterName(sky));
+  if (name.empty()) name = DisplayName(SwapperBaseName(sky));
+  return name;
 }
 
 }  // namespace skylanders::portal

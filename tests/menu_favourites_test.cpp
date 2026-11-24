@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "portal/figure_catalog.h"
+#include "portal/figure_info.h"
 #include "portal/menu_favourites.h"
 #include "test_util.h"
 
@@ -53,6 +55,21 @@ int main() {
   const std::vector<size_t> picked = FavouriteCharacters(characters, favourites);
   CHECK(picked.size() == 2);
   CHECK(picked.size() == 2 && picked[0] == 1 && picked[1] == 3);
+
+  // The name a figure's favourite is kept under: its character's for every version, the
+  // swapper's for both halves, none for a magic item.
+  const SkylanderInfo* legendary = nullptr;
+  const SkylanderInfo* bottom = nullptr;
+  const SkylanderInfo* item = nullptr;
+  for (const SkylanderInfo& sky : AllSkylanders()) {
+    if (!legendary && sky.name == "Legendary Chop Chop") legendary = &sky;
+    if (!bottom && GetSwapperHalf(sky) == SwapperHalf::kBottom && SwapperPartner(sky)) bottom = &sky;
+    if (!item && sky.category == "Items") item = &sky;
+  }
+  CHECK(legendary && FavouriteName(*legendary) == "Chop Chop");
+  CHECK(bottom && !FavouriteName(*bottom).empty());
+  CHECK(bottom && FavouriteName(*bottom) == FavouriteName(*SwapperPartner(*bottom)));
+  CHECK(item && FavouriteName(*item).empty());
 
   fs::remove_all(dir, ec);
   return Finish("menu_favourites");
