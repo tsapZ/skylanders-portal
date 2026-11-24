@@ -1,5 +1,8 @@
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <vector>
 
 #include "portal_rex/png_file.h"
@@ -30,6 +33,33 @@ int main() {
   CHECK(out_w == w);
   CHECK(out_h == h);
   CHECK(decoded == rgba);
+
+  // The write leaves no temporary sibling behind.
+  bool leftover = false;
+  for (const auto& entry : fs::directory_iterator(dir, ec)) {
+    const std::string name = entry.path().filename().string();
+    if (name.rfind("png-", 0) == 0 && entry.path().extension() == ".tmp") leftover = true;
+  }
+  CHECK(!leftover);
+
+#ifndef _WIN32
+  // A symlink planted at the old predictable temporary name must not be followed or overwritten.
+  const fs::path victim = dir / "victim.txt";
+  {
+    std::ofstream out(victim);
+    out << "keep";
+  }
+  const fs::path old_part = fs::path(png.string() + ".part");
+  std::error_code link_ec;
+  fs::create_symlink(victim, old_part, link_ec);
+  if (!link_ec) {
+    CHECK(skylanders::WritePng(png, w, h, rgba.data()));
+    std::ifstream in(victim);
+    const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(content == "keep");
+    CHECK(fs::is_regular_file(png, ec));
+  }
+#endif
 
   // Invalid inputs fail cleanly without leaving stray state.
   CHECK(!skylanders::WritePng(dir / "bad.png", 0, 2, rgba.data()));
