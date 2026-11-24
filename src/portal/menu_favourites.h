@@ -13,6 +13,8 @@
 
 namespace skylanders::portal {
 
+struct SkylanderInfo;
+
 // The names in `file`, one per line, blank lines skipped and a trailing CR dropped. A file that
 // isn't there has none.
 std::vector<std::string> LoadFavourites(const std::filesystem::path& file);
@@ -30,5 +32,11 @@ bool ToggleFavourite(std::vector<std::string>& names, std::string_view name);
 // `characters`, each once.
 std::vector<size_t> FavouriteCharacters(const std::vector<std::string>& characters,
                                         const std::vector<std::string>& favourites);
+
+// The name a figure's favourite is kept under: its character's, as the portal menu's game tabs
+// group the versions ("Chop Chop" for "Legendary Chop Chop"; a swapper's halves under the
+// swapper's name). Empty for a magic item, which has no favourite. Core of Light's figure
+// library uses it too, so a mark made in one shows in the other.
+std::string FavouriteName(const SkylanderInfo& sky);
 
 }  // namespace skylanders::portal

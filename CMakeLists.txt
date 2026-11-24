@@ -49,6 +49,7 @@ set(SKYLANDERS_PORTAL_FIGURE_SOURCES
     src/portal/figure_file.cpp
     src/portal/figure_info.cpp
     src/portal/figure_stats.cpp
+    src/portal/menu_favourites.cpp
     src/portal/trap_villain.cpp
 )
 if(NOT REXSDK_DIR)

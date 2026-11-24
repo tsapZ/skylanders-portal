@@ -1459,17 +1459,14 @@ class Library {
       }
       if (portal::GetSwapperHalf(sky) == SwapperHalf::kBottom) {
         // Bottoms belong to their swapper's character; only listed through it.
-        if (game_allowed) {
-          std::string name(portal::CharacterName(sky));
-          if (name.empty()) name = portal::DisplayName(portal::SwapperBaseName(sky));
-          known_ids_.emplace(sky.id, name);
-        }
+        if (game_allowed) known_ids_.emplace(sky.id, portal::FavouriteName(sky));
         continue;
       }
+      // The character's name (menu_favourites.h: the favourites file keeps it, and Core of Light's
+      // figure library takes the same).
       std::string name;
       if (game_allowed) {
-        name = portal::CharacterName(sky);
-        if (name.empty()) name = portal::DisplayName(portal::SwapperBaseName(sky));
+        name = portal::FavouriteName(sky);
         known_ids_.emplace(sky.id, name);
       } else if (auto known = known_ids_.find(sky.id); known != known_ids_.end()) {
         name = known->second;  // a later game's version of a character this game knows
