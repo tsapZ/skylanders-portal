@@ -132,6 +132,27 @@ int main() {
   CHECK(PartText(report, "testgame/notes/problem-work-old.txt").find("NOTE work old") !=
         std::string::npos);
 
+  // Linux: the home folder, user and host name, the longest match first (CoL #135).
+  {
+    const auto words = PosixPrivateWords("/home/tuxplayer/", "tuxplayer", "tuxbox.lan");
+    const fs::path linux_exe = root / L"linux_exe";
+    fs::create_directories(linux_exe / L"logs", ec);
+    WriteFile(linux_exe / L"testgame.toml",
+              "dir = \"/home/tuxplayer/Documents/Skylanders\"\nuser = tuxplayer\nhost = tuxbox\n"
+              "fqdn = tuxbox.lan\n");
+    const std::string linux_report = BuildGameReport(linux_exe, linux_exe, "testgame", words);
+    const std::string linux_settings = PartText(linux_report, "testgame/testgame.toml");
+    CHECK(linux_settings.find("\"$HOME/Documents/Skylanders\"") != std::string::npos);
+    CHECK(linux_settings.find("user = $USER") != std::string::npos);
+    CHECK(linux_settings.find("host = $HOSTNAME\n") != std::string::npos);
+    CHECK(linux_settings.find("fqdn = $HOSTNAME\n") != std::string::npos);
+    CHECK(linux_settings.find("tux") == std::string::npos);
+  }
+  // A home of "/" and names under 3 characters stay, as on Windows.
+  CHECK(PosixPrivateWords("/", "ab", "pc").empty());
+  CHECK(PosixPrivateWords("", "", "").empty());
+  CHECK(PosixPrivateWords("/home/deck", "deck", "steamdeck").size() == 3);
+
   fs::remove_all(root, ec);
   return Finish("problem_report");
 }

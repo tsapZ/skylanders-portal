@@ -189,4 +189,19 @@ std::string BuildGameReport(const fs::path& work_dir, const fs::path& exe_dir,
   return report;
 }
 
+std::vector<std::pair<std::string, std::string>> PosixPrivateWords(std::string home,
+                                                                   const std::string& user,
+                                                                   const std::string& host) {
+  std::vector<std::pair<std::string, std::string>> words;
+  while (home.size() > 1 && home.back() == '/') home.pop_back();
+  if (home.size() >= 3) words.emplace_back(home, "$HOME");
+  if (user.size() >= 3) words.emplace_back(user, "$USER");
+  if (host.size() >= 3) {
+    words.emplace_back(host, "$HOSTNAME");
+    const std::string label = host.substr(0, host.find('.'));
+    if (label != host && label.size() >= 3) words.emplace_back(label, "$HOSTNAME");
+  }
+  return words;
+}
+
 }  // namespace skylanders

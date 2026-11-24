@@ -12,6 +12,8 @@
 #endif
 #include <shlobj.h>
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #include "portal/data_folder.h"
@@ -110,6 +112,15 @@ std::vector<std::pair<std::string, std::string>> PrivateWords() {
   if (user.size() >= 3) words.emplace_back(user, "%USERNAME%");
   const std::string computer = ComputerName();
   if (computer.size() >= 3) words.emplace_back(computer, "%COMPUTERNAME%");
+#else
+  // Linux (CoL #135: a report from Linux kept /home/<name>): the same three words, from HOME,
+  // USER or LOGNAME and the host name.
+  const char* home = std::getenv("HOME");
+  const char* user = std::getenv("USER");
+  if (user == nullptr || *user == '\0') user = std::getenv("LOGNAME");
+  char host[256] = {};
+  if (gethostname(host, sizeof(host) - 1) != 0) host[0] = '\0';
+  words = PosixPrivateWords(home ? home : "", user ? user : "", host);
 #endif
   return words;
 }
