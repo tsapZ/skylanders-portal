@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <initializer_list>
 #include <string>
 #include <unordered_map>
@@ -14,6 +14,7 @@
 
 #include <imgui_internal.h>
 
+#include "portal_rex/font_file.h"
 #include "portal_rex/game_font.h"
 #include "portal_rex/input_pictures.h"
 #include "portal_rex/portal_menu_input.h"
@@ -202,27 +203,6 @@ const ImFontLoader* BitmapLoader() {
 const ImWchar kWindowsRanges[] = {0x0020, 0x00FF, 0x0100, 0x017F, 0x2000, 0x206F,
                                   0x2190, 0x21FF, 0x25A0, 0x25FF, 0};
 
-// Picks the first existing fallback TTF from `candidates`, probing exe-adjacent relative paths first.
-std::string FindFallbackFontPath(std::initializer_list<const char*> candidates) {
-  std::filesystem::path exe_dir;
-#if defined(__linux__)
-  std::error_code sym_ec;
-  const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", sym_ec);
-  if (!sym_ec && !exe.empty()) exe_dir = exe.parent_path();
-#endif
-  std::error_code ec;
-  for (const char* candidate : candidates) {
-    if (!candidate || !candidate[0]) continue;
-    const std::filesystem::path p(candidate);
-    if (p.is_relative() && !exe_dir.empty()) {
-      const std::filesystem::path next_to_exe = exe_dir / p;
-      if (std::filesystem::is_regular_file(next_to_exe, ec)) return next_to_exe.string();
-    }
-    if (std::filesystem::is_regular_file(p, ec)) return p.string();
-  }
-  return {};
-}
-
 // The game's font with a system/bundled TTF merged in for glyphs it lacks, or the fallback TTF alone.
 ImFont* AddFont(ImFontAtlas* atlas, const std::shared_ptr<const GameFont>& game, const char* name,
                 std::initializer_list<const char*> fallback_ttfs, float size) {
@@ -243,14 +223,20 @@ ImFont* AddFont(ImFontAtlas* atlas, const std::shared_ptr<const GameFont>& game,
     cfg.SizePixels = size;
     font = atlas->AddFont(&cfg);
   }
-  const std::string fallback = FindFallbackFontPath(fallback_ttfs);
-  if (!fallback.empty()) {
+  // Try each existing candidate in turn: one may exist but fail to load (unreadable by the time it
+  // is opened), and the next is still usable. IsLoadableFontFile already skipped missing, short and
+  // non-font files; NoLoadError keeps ImGui from asserting if the file disappears before the load.
+  ImFontConfig retry;
+  retry.Flags |= ImFontFlags_NoLoadError;
+  for (const std::string& fallback : FindFallbackFontPaths(fallback_ttfs)) {
     if (font) {
       ImFontConfig merge;
       merge.MergeMode = true;
-      atlas->AddFontFromFileTTF(fallback.c_str(), size, &merge, kWindowsRanges);
+      merge.Flags |= ImFontFlags_NoLoadError;
+      if (atlas->AddFontFromFileTTF(fallback.c_str(), size, &merge, kWindowsRanges)) break;
     } else {
-      font = atlas->AddFontFromFileTTF(fallback.c_str(), size, nullptr, kWindowsRanges);
+      font = atlas->AddFontFromFileTTF(fallback.c_str(), size, &retry, kWindowsRanges);
+      if (font) break;
     }
   }
   return font;
@@ -291,13 +277,13 @@ void AddFonts(ImFontAtlas* atlas) {
 #endif
 }
 
-std::string FindDefaultUiFontPath(bool bold) {
+std::vector<std::string> FindDefaultUiFontPaths(bool bold) {
 #ifdef _WIN32
-  return FindFallbackFontPath(
+  return FindFallbackFontPaths(
       {bold ? "C:\\Windows\\Fonts\\segoeuib.ttf" : "C:\\Windows\\Fonts\\segoeui.ttf"});
 #else
   if (bold) {
-    return FindFallbackFontPath(
+    return FindFallbackFontPaths(
         {"fonts/NotoSans-Bold.ttf",
          "/usr/share/fonts/noto/NotoSans-Bold.ttf",
          "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
@@ -308,7 +294,7 @@ std::string FindDefaultUiFontPath(bool bold) {
          "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
          "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"});
   }
-  return FindFallbackFontPath(
+  return FindFallbackFontPaths(
       {"fonts/NotoSans-Regular.ttf",
        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
@@ -320,6 +306,11 @@ std::string FindDefaultUiFontPath(bool bold) {
        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
        "/usr/share/fonts/TTF/OpenSans-Regular.ttf"});
 #endif
+}
+
+std::string FindDefaultUiFontPath(bool bold) {
+  const std::vector<std::string> paths = FindDefaultUiFontPaths(bold);
+  return paths.empty() ? std::string() : paths.front();
 }
 
 ImFont* TitleFont() { return g_font_title ? g_font_title : ImGui::GetFont(); }
