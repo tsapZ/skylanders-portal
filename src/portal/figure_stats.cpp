@@ -48,18 +48,24 @@ bool RawBlockEmpty(const FigureData& data, uint8_t block) {
 }
 
 // The bytes of an area from its first block on (16 bytes per block, 0x70 in all), decrypted.
-std::array<uint8_t, 0x70> ReadArea(const FigureData& data, uint8_t start) {
+std::optional<std::array<uint8_t, 0x70>> ReadArea(const FigureData& data, uint8_t start) {
   std::array<uint8_t, 0x70> area{};
   for (uint8_t i = 0; i < 7; ++i) {
-    const Block block = DecryptFigureBlock(data, uint8_t(start + i));
-    std::memcpy(area.data() + i * kBlockSize, block.data(), kBlockSize);
+    const auto block = DecryptFigureBlock(data, uint8_t(start + i));
+    if (!block) return std::nullopt;
+    std::memcpy(area.data() + i * kBlockSize, block->data(), kBlockSize);
   }
   return area;
 }
 
-bool HeaderValid(const FigureData& data, uint8_t start) {
+// nullopt when the crypto provider fails and the header cannot be checked, otherwise whether it
+// checks out. Keeping the two apart lets the writers refuse the whole figure on provider failure
+// instead of mistaking it for an area that simply has no save data.
+std::optional<bool> HeaderValid(const FigureData& data, uint8_t start) {
   if (RawBlockEmpty(data, start)) return false;
-  Block header = DecryptFigureBlock(data, start);
+  const auto decrypted = DecryptFigureBlock(data, start);
+  if (!decrypted) return std::nullopt;
+  Block header = *decrypted;
   const uint16_t stored = ReadU16LE(&header[0x0E]);
   header[0x0E] = 0x05;
   header[0x0F] = 0x00;
@@ -115,15 +121,20 @@ int UpgradePath(const FigureStats& stats) {
 }
 
 std::optional<FigureStats> ParseFigureStats(const FigureData& data) {
-  const bool valid0 = HeaderValid(data, kAreas[0]);
-  const bool valid1 = HeaderValid(data, kAreas[1]);
-  if (!valid0 && !valid1) return std::nullopt;
-  int which = valid0 ? 0 : 1;
-  if (valid0 && valid1) {
-    which = Newer(DecryptFigureBlock(data, kAreas[0])[0x09],
-                  DecryptFigureBlock(data, kAreas[1])[0x09]);
+  const auto valid0 = HeaderValid(data, kAreas[0]);
+  const auto valid1 = HeaderValid(data, kAreas[1]);
+  if (!valid0 || !valid1) return std::nullopt;  // provider failure
+  if (!*valid0 && !*valid1) return std::nullopt;
+  int which = *valid0 ? 0 : 1;
+  if (*valid0 && *valid1) {
+    const auto header0 = DecryptFigureBlock(data, kAreas[0]);
+    const auto header1 = DecryptFigureBlock(data, kAreas[1]);
+    if (!header0 || !header1) return std::nullopt;
+    which = Newer((*header0)[0x09], (*header1)[0x09]);
   }
-  const auto area = ReadArea(data, kAreas[which]);
+  const auto area_bytes = ReadArea(data, kAreas[which]);
+  if (!area_bytes) return std::nullopt;
+  const auto& area = *area_bytes;
 
   FigureStats stats{};
   stats.gold = ReadU16LE(&area[0x03]);
@@ -160,11 +171,14 @@ std::optional<FigureStats> ParseFigureStats(const FigureData& data) {
   const bool extra0 = !RawBlockEmpty(data, kExtraAreas[0]);
   const bool extra1 = !RawBlockEmpty(data, kExtraAreas[1]);
   if (extra0 || extra1) {
-    const Block e0 = DecryptFigureBlock(data, kExtraAreas[0]);
-    const Block e1 = DecryptFigureBlock(data, kExtraAreas[1]);
-    const bool newer1 = !extra0 || (extra1 && Newer(e0[0x02], e1[0x02]));
-    const Block& extra = newer1 ? e1 : e0;
-    stats.creation_class = ReadArea(data, kExtraAreas[newer1 ? 1 : 0])[0x56];
+    const auto e0 = DecryptFigureBlock(data, kExtraAreas[0]);
+    const auto e1 = DecryptFigureBlock(data, kExtraAreas[1]);
+    if (!e0 || !e1) return std::nullopt;
+    const bool newer1 = !extra0 || (extra1 && Newer((*e0)[0x02], (*e1)[0x02]));
+    const Block& extra = newer1 ? *e1 : *e0;
+    const auto extra_area = ReadArea(data, kExtraAreas[newer1 ? 1 : 0]);
+    if (!extra_area) return std::nullopt;
+    stats.creation_class = (*extra_area)[0x56];
     if (area[0x16] & 1) xp += ReadU16LE(&extra[0x03]) + ReadU32LE(&extra[0x08]);
     // The newest game's hat slot that is set wins.
     if (crystal) {
@@ -188,10 +202,19 @@ std::optional<FigureStats> ParseFigureStats(const FigureData& data) {
 }
 
 bool SetFigureGold(FigureData& data, uint16_t gold) {
-  bool changed = false;
+  struct PendingWrite {
+    uint8_t start;
+    Block encrypted;
+  };
+  std::array<PendingWrite, 2> pending{};
+  size_t pending_count = 0;
   for (const uint8_t start : kAreas) {
-    if (!HeaderValid(data, start)) continue;
-    Block header = DecryptFigureBlock(data, start);
+    const auto valid = HeaderValid(data, start);
+    if (!valid) return false;  // provider failure: leave the figure as it is
+    if (!*valid) continue;
+    const auto decrypted = DecryptFigureBlock(data, start);
+    if (!decrypted) return false;
+    Block header = *decrypted;
     header[0x03] = uint8_t(gold);
     header[0x04] = uint8_t(gold >> 8);
     header[0x0E] = 0x05;
@@ -199,11 +222,16 @@ bool SetFigureGold(FigureData& data, uint16_t gold) {
     const uint16_t crc = FigureCrc16(header.data(), header.size());
     header[0x0E] = uint8_t(crc);
     header[0x0F] = uint8_t(crc >> 8);
-    const Block encrypted = EncryptFigureBlock(data, start, header);
-    std::memcpy(data.data() + size_t(start) * kBlockSize, encrypted.data(), kBlockSize);
-    changed = true;
+    const auto encrypted = EncryptFigureBlock(data, start, header);
+    if (!encrypted) return false;
+    pending[pending_count++] = {start, *encrypted};
   }
-  return changed;
+  if (pending_count == 0) return false;
+  // Encrypt every area before touching the figure, so a failure cannot leave a half-written one.
+  for (size_t i = 0; i < pending_count; ++i) {
+    std::memcpy(data.data() + size_t(pending[i].start) * kBlockSize, pending[i].encrypted.data(), kBlockSize);
+  }
+  return true;
 }
 
 }  // namespace skylanders::portal

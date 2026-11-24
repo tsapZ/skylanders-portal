@@ -34,14 +34,18 @@ void WriteArea(FigureData& d, uint8_t start, Area area) {
     if ((block + 1) % 4 == 0) continue;
     FigureBlock plain{};
     std::memcpy(plain.data(), area.data() + i * kBlockSize, kBlockSize);
-    const FigureBlock enc = EncryptFigureBlock(d, block, plain);
-    std::memcpy(d.data() + size_t(block) * kBlockSize, enc.data(), kBlockSize);
+    const auto enc = EncryptFigureBlock(d, block, plain);
+    CHECK(enc.has_value());
+    if (!enc) return;
+    std::memcpy(d.data() + size_t(block) * kBlockSize, enc->data(), kBlockSize);
   }
 }
 
 void WriteBlock(FigureData& d, uint8_t block, const FigureBlock& plain) {
-  const FigureBlock enc = EncryptFigureBlock(d, block, plain);
-  std::memcpy(d.data() + size_t(block) * kBlockSize, enc.data(), kBlockSize);
+  const auto enc = EncryptFigureBlock(d, block, plain);
+  CHECK(enc.has_value());
+  if (!enc) return;
+  std::memcpy(d.data() + size_t(block) * kBlockSize, enc->data(), kBlockSize);
 }
 
 Area MakeArea(uint32_t xp, uint16_t gold, uint32_t play, uint8_t sequence) {

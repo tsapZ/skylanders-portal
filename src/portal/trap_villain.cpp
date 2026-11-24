@@ -101,12 +101,13 @@ std::array<uint8_t, kAreaBlocks> AreaBlockIndices(int area) {
   return out;
 }
 
-Area DecryptArea(const FigureData& data, int area) {
+std::optional<Area> DecryptArea(const FigureData& data, int area) {
   Area out{};
   const auto blocks = AreaBlockIndices(area);
   for (size_t i = 0; i < kAreaBlocks; ++i) {
-    const FigureBlock b = DecryptFigureBlock(data, blocks[i]);
-    std::memcpy(out.data() + i * kBlockSize, b.data(), kBlockSize);
+    const auto b = DecryptFigureBlock(data, blocks[i]);
+    if (!b) return std::nullopt;
+    std::memcpy(out.data() + i * kBlockSize, b->data(), kBlockSize);
   }
   return out;
 }
@@ -155,14 +156,15 @@ std::optional<TrapContents> ReadTrapVillain(const FigureData& data) {
   if (!IsTrap(ReadFigureId(data))) return std::nullopt;
   if (AreaIsBlank(data, 0) && AreaIsBlank(data, 1)) return TrapContents{0, false, false};
 
-  const Area a = DecryptArea(data, 0);
-  const Area b = DecryptArea(data, 1);
-  const bool good_a = AreaValid(a);
-  const bool good_b = AreaValid(b);
+  const auto a = DecryptArea(data, 0);
+  const auto b = DecryptArea(data, 1);
+  if (!a || !b) return std::nullopt;  // provider failure: no usable save data
+  const bool good_a = AreaValid(*a);
+  const bool good_b = AreaValid(*b);
   if (!good_a && !good_b) return std::nullopt;
   // Area b is current when it's the only valid one, or its sequence number follows a's.
-  const bool use_b = good_b && (!good_a || uint8_t(a[9] + 1) == b[9]);
-  const Area& area = use_b ? b : a;
+  const bool use_b = good_b && (!good_a || uint8_t((*a)[9] + 1) == (*b)[9]);
+  const Area& area = use_b ? *b : *a;
 
   TrapContents c{};
   c.villain_id = area[16];
@@ -192,8 +194,9 @@ std::optional<FigureData> CreateTrapWithVillain(uint16_t trap_id, uint16_t trap_
   for (size_t i = 0; i < kAreaBlocks; ++i) {
     FigureBlock plain{};
     std::memcpy(plain.data(), area.data() + i * kBlockSize, kBlockSize);
-    const FigureBlock enc = EncryptFigureBlock(data, blocks[i], plain);
-    std::memcpy(data.data() + blocks[i] * kBlockSize, enc.data(), kBlockSize);
+    const auto enc = EncryptFigureBlock(data, blocks[i], plain);
+    if (!enc) return std::nullopt;  // provider failure: no half-filled trap
+    std::memcpy(data.data() + blocks[i] * kBlockSize, enc->data(), kBlockSize);
   }
   return data;
 }
