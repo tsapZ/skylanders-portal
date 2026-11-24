@@ -64,6 +64,10 @@ REXCVAR_DEFINE_INT32(portal_speaker_pacing, 0, "Portal",
                      "with N x 4 ms sent at once, then paces it at 4 ms a packet (try it if the portal's "
                      "speaker stutters)")
     .range(0, 16);
+REXCVAR_DEFINE_BOOL(portal_speaker_hid_split, false, "Portal",
+                    "Real portal's speaker on Windows' HID driver: send each 64-byte sound packet as two "
+                    "32-byte reports (a test for a choppy Traptanium speaker, Core of Light #154; no effect "
+                    "on WinUSB)");
 REXCVAR_DEFINE_BOOL(portal_speaker_report, false, "Portal",
                     "Log the game's portal speaker stream every 5 seconds: frames, sizes, samples a "
                     "second (8000 is real time) and how evenly the frames come (for speaker problems)");
@@ -392,6 +396,7 @@ skylanders::portal::UsbPortal* SetUpUsbPortal() {
   auto* usb = new skylanders::portal::UsbPortal();  // never freed if published, see below
   if (usb->IsOpen()) {
     usb->SetAudioPacing(REXCVAR_GET(portal_speaker_pacing));
+    usb->SetAudioHidSplit(REXCVAR_GET(portal_speaker_hid_split));
     return usb;
   }
   delete usb;  // never published anywhere, so nothing else could have seen this one -- safe to free

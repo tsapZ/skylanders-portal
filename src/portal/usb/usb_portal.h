@@ -66,6 +66,11 @@ class UsbPortal final : public PortalDevice {
   // N > 0 starts a sound with N packets (N x 4 ms) sent at once, then one packet every 4 ms, so the
   // game's uneven frames (up to ~12 ms apart instead of 7.5) don't leave the portal's buffer empty.
   void SetAudioPacing(int lead_packets) { audio_pacing_lead_.store(lead_packets < 0 ? 0 : lead_packets); }
+  // portal_speaker_hid_split: on the HID driver each 64-byte sound packet goes out as two 32-byte reports,
+  // the size the portal's HID description gives its output reports, instead of one 64-byte write. A test
+  // for Core of Light #153/#154: a Traptanium speaker sounded choppy on HID and clean on WinUSB, whose
+  // interrupt writes take the 64 bytes as they are. No effect on WinUSB.
+  void SetAudioHidSplit(bool split) { audio_hid_split_.store(split); }
 
   // The speaker took no sound; callers send it to the PC instead.
   bool SpeakerGaveUp() const { return speaker_health_.GaveUp(); }
@@ -120,6 +125,8 @@ class UsbPortal final : public PortalDevice {
   std::once_flag audio_thread_started_;
   std::atomic<bool> audio_stopping_{false};
   std::atomic<int> audio_pacing_lead_{0};  // SetAudioPacing
+  std::atomic<bool> audio_hid_split_{false};  // SetAudioHidSplit
+  bool audio_first_write_logged_ = false;     // writer thread only
   void WriteAudioPacket(const AudioPacket& packet);  // io_mutex_ only when audio_device_ didn't open
   void OpenAudioHandle();                             // writer thread, once
   SpeakerWriteHealth speaker_health_;
