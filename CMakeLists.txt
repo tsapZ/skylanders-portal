@@ -124,6 +124,12 @@ if(SKYLANDERS_PORTAL_TESTS)
         target_link_libraries(skylanders_${t} PRIVATE skylanders_portal_core)
         add_test(NAME skylanders_${t} COMMAND skylanders_${t})
     endforeach()
+    # Every case of the bridge test sits in main() with its own bridge and portal (16 figures of 1 KB and more each);
+    # without optimization MSVC gives each scope its own stack space, more than Windows' default 1 MB together, and
+    # the README's plain build stopped with a stack overflow. 8 MB, as Linux gives a main thread anyway.
+    if(MSVC)
+        target_link_options(skylanders_real_portal_bridge_test PRIVATE /STACK:8388608)
+    endif()
 endif()
 
 # skylanders_portal_rex: ReXGlue glue (settings, XAM handler, F6 overlay, USB portal, audio).
