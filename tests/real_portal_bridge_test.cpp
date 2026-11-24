@@ -213,6 +213,29 @@ int main() {
     CHECK(bridge.RealUids().size() == 2);
   }
 
+  // Two figures put on together (a swapper's halves): the second reaches the game after the first's
+  // early blocks, not once the first is read whole (SwapForceRecomp #42: ~9 s per half before).
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    size_t reads_of_first_at_second = 0;
+    int arrivals = 0;
+    RealPortalBridge bridge(&emulated, {dir, nullptr, [&](int) {
+      if (++arrivals == 2) {
+        reads_of_first_at_second = size_t(std::count_if(real.sent.begin(), real.sent.end(), [](const Report& r) {
+          return r[0] == 'Q' && (r[1] & 0x0F) == 0;
+        }));
+      }
+    }});
+    inner.PlaceFigure(0, chop);
+    inner.PlaceFigure(1, CreateBlankFigure(14, 0, {0x05, 0x06, 0x07, 0x08}));
+    Run(bridge, &real);
+    CHECK(arrivals == 2);
+    CHECK(reads_of_first_at_second > 0 && reads_of_first_at_second < size_t(kBlockCount));
+    // Both are still read whole in the end.
+    CHECK(emulated.Figure(kMaxFigures - 1) == chop || emulated.Figure(kMaxFigures - 2) == chop);
+  }
+
   // The game's light command goes on to the real portal (SoftwarePortal ignores it; this only
   // checks nothing breaks and the figures stay).
   {

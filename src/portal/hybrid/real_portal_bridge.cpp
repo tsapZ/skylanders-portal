@@ -325,15 +325,18 @@ void RealPortalBridge::SendNext() {
     real_->Write(*write);
     return;
   }
-  for (int slot = 0; slot < kMaxFigures; ++slot) {
-    const RealSlot& s = slots_[slot];
-    if ((s.phase != RealSlot::Phase::kReading && s.phase != RealSlot::Phase::kLoading) || now < s.retry_at) {
-      continue;
+  // A figure just put on gets its first blocks before the rest of the ones the game already has:
+  // a swapper's second half (or a second figure) reaches the game after its kEarlyBlocks, not once
+  // the first figure is whole (SwapForceRecomp #42: about 9 s per half with a Trap Team portal).
+  for (const RealSlot::Phase phase : {RealSlot::Phase::kReading, RealSlot::Phase::kLoading}) {
+    for (int slot = 0; slot < kMaxFigures; ++slot) {
+      const RealSlot& s = slots_[slot];
+      if (s.phase != phase || now < s.retry_at) continue;
+      const int block = NextBlock(slot);
+      if (block < 0) continue;
+      read(slot, block);
+      return;
     }
-    const int block = NextBlock(slot);
-    if (block < 0) continue;
-    read(slot, block);
-    return;
   }
   // The game's speaker switch, answered with whether the portal has a speaker.
   std::optional<Report> speaker;
