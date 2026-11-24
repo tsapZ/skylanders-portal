@@ -6253,6 +6253,21 @@ std::string PortalFiguresText() {
 
 void ShowPortalToast(std::string text) { ShowToast(std::move(text)); }
 
+bool NotePortalDriverUnusable(const char* driver) {
+  if (!g_app_context || driver == nullptr) return false;
+  const std::string name = driver;
+  g_app_context->CallInUIThreadDeferred([name] {
+    ShowToast(menu_draw::GermanText()
+                  ? "Das Portal hat den Treiber \xE2\x80\x9E" + name +
+                        "\xE2\x80\x9C, den das Spiel nicht nutzen kann. In Zadig f\xC3\xBCr das Portal "
+                        "WinUSB w\xC3\xA4hlen."
+                  : "The portal has the " + name +
+                        " driver, which the game can't use. In Zadig, choose WinUSB for the portal.",
+              10.0f);
+  });
+  return true;
+}
+
 void NoteRealToyLeftOut(const std::string& name) {
   if (!g_app_context) return;
   g_app_context->CallInUIThreadDeferred([name] {
