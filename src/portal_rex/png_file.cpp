@@ -1,7 +1,10 @@
 #include "portal_rex/png_file.h"
 
+#include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <random>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -25,6 +28,22 @@
 #endif
 
 namespace skylanders {
+
+namespace {
+
+// A random, unpredictable sibling name next to `path` for the temporary file: an attacker cannot
+// seed a symlink at the name for the write to follow.
+std::filesystem::path PngTempPath(const std::filesystem::path& path) {
+  std::random_device rd;
+  std::seed_seq seed{rd(), rd(), rd(), rd()};
+  std::mt19937_64 rng(seed);
+  char name[48];
+  std::snprintf(name, sizeof(name), "png-%016llx%016llx.tmp",
+                static_cast<unsigned long long>(rng()), static_cast<unsigned long long>(rng()));
+  return path.parent_path() / std::filesystem::path(name);
+}
+
+}  // namespace
 
 #ifndef _WIN32
 namespace {
@@ -57,10 +76,15 @@ bool WritePngChunk(std::ofstream& out, const char tag[4], const uint8_t* data, s
 bool WritePng(const std::filesystem::path& path, int width, int height, const uint8_t* rgba) {
 #ifdef _WIN32
   if (width <= 0 || height <= 0 || !rgba) return false;
+  const std::filesystem::path temp = PngTempPath(path);
+  // Create the unpredictable sibling exclusively so a planted symlink at the name cannot be
+  // followed; WIC then writes this file.
+  const HANDLE reserved =
+      CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (reserved == INVALID_HANDLE_VALUE) return false;
+  CloseHandle(reserved);
   const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   bool ok = false;
-  std::filesystem::path temp = path;
-  temp += L".part";
   IWICImagingFactory* factory = nullptr;
   IWICStream* stream = nullptr;
   IWICBitmapEncoder* encoder = nullptr;
@@ -109,11 +133,10 @@ bool WritePng(const std::filesystem::path& path, int width, int height, const ui
     return false;
   }
 
-  std::filesystem::path temp = path;
-  temp += ".part";
+  const std::filesystem::path temp = PngTempPath(path);
   bool ok = false;
   {
-    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+    std::ofstream out(temp, std::ios::binary | std::ios::noreplace);
     if (out) {
       static constexpr uint8_t kSignature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
       out.write(reinterpret_cast<const char*>(kSignature), sizeof(kSignature));

@@ -228,6 +228,23 @@ class DiscordPipe {
         addr.sun_family = AF_UNIX;
         std::memcpy(addr.sun_path, path.data(), path.size() + 1);
         if (::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0) {
+          // A socket in a shared temporary directory could belong to another user. Discord runs
+          // as the player, so the peer must be this user's process; ignoring the others keeps the
+          // legitimate XDG_RUNTIME_DIR, Flatpak and Snap sockets working.
+#if defined(__linux__) && defined(SO_PEERCRED)
+          // The kernel's struct ucred layout, declared here so it does not need _GNU_SOURCE.
+          struct PeerCred {
+            pid_t pid;
+            uid_t uid;
+            gid_t gid;
+          } cred {};
+          socklen_t cred_len = sizeof(cred);
+          if (::getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) != 0 ||
+              cred.uid != ::geteuid()) {
+            ::close(fd);
+            continue;
+          }
+#endif
           fd_ = fd;
         } else {
           ::close(fd);
