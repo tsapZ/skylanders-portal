@@ -37,91 +37,134 @@ std::array<uint8_t, 0x20 + 1 + kKeyConstant.size()> BlockKeyMaterial(const Figur
   return key_material;
 }
 
+// Test seam: only the fault-injection test build (tests/figure_crypto_failure_test.cpp) defines
+// SKYLANDERS_PORTAL_FIGURE_CRYPTO_TESTING; the library itself never does. It makes the provider
+// report an error so the test can verify that failures propagate instead of becoming zero blocks.
+#if defined(SKYLANDERS_PORTAL_FIGURE_CRYPTO_TESTING)
+bool g_crypto_provider_failed = false;
+#endif
+
+#if defined(SKYLANDERS_PORTAL_CRYPTO_CNG) || defined(SKYLANDERS_PORTAL_CRYPTO_OPENSSL)
+// The bundled tiny-AES/MD5 path cannot fail, so only the provider backends consult this.
+bool CryptoProviderFailed() {
+#if defined(SKYLANDERS_PORTAL_FIGURE_CRYPTO_TESTING)
+  return g_crypto_provider_failed;
+#else
+  return false;
+#endif
+}
+#endif
+
 #if defined(SKYLANDERS_PORTAL_CRYPTO_CNG)
 
 // The block's key: MD5 of the tag's first 0x20 bytes, the block index and the constant.
-std::array<uint8_t, 16> BlockKey(const FigureData& data, uint8_t block_index) {
+std::optional<std::array<uint8_t, 16>> BlockKey(const FigureData& data, uint8_t block_index) {
+  if (CryptoProviderFailed()) return std::nullopt;
   const auto key_material = BlockKeyMaterial(data, block_index);
   std::array<uint8_t, 16> key{};
   BCRYPT_ALG_HANDLE alg = nullptr;
-  if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_MD5_ALGORITHM, nullptr, 0) == 0) {
-    BCryptHash(alg, nullptr, 0, const_cast<PUCHAR>(key_material.data()), ULONG(key_material.size()), key.data(),
-               ULONG(key.size()));
-    BCryptCloseAlgorithmProvider(alg, 0);
-  }
+  if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_MD5_ALGORITHM, nullptr, 0) != 0) return std::nullopt;
+  const NTSTATUS status = BCryptHash(alg, nullptr, 0, const_cast<PUCHAR>(key_material.data()),
+                                     ULONG(key_material.size()), key.data(), ULONG(key.size()));
+  BCryptCloseAlgorithmProvider(alg, 0);
+  if (!BCRYPT_SUCCESS(status)) return std::nullopt;
   return key;
 }
 
 // One 16-byte block through AES-128-ECB with `key`.
-FigureBlock Aes(const std::array<uint8_t, 16>& key, const uint8_t* in, bool encrypt) {
+std::optional<FigureBlock> Aes(const std::array<uint8_t, 16>& key, const uint8_t* in, bool encrypt) {
+  if (CryptoProviderFailed()) return std::nullopt;
   FigureBlock out{};
   BCRYPT_ALG_HANDLE alg = nullptr;
-  if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM, nullptr, 0) != 0) return out;
-  BCryptSetProperty(alg, BCRYPT_CHAINING_MODE, reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_ECB)),
-                    sizeof(BCRYPT_CHAIN_MODE_ECB), 0);
-  BCRYPT_KEY_HANDLE handle = nullptr;
-  if (BCryptGenerateSymmetricKey(alg, &handle, nullptr, 0, const_cast<PUCHAR>(key.data()), ULONG(key.size()), 0) ==
-      0) {
-    ULONG n = 0;
-    uint8_t block[kBlockSize];
-    std::memcpy(block, in, kBlockSize);
-    if (encrypt) {
-      BCryptEncrypt(handle, block, kBlockSize, nullptr, nullptr, 0, out.data(), kBlockSize, &n, 0);
-    } else {
-      BCryptDecrypt(handle, block, kBlockSize, nullptr, nullptr, 0, out.data(), kBlockSize, &n, 0);
-    }
-    BCryptDestroyKey(handle);
+  if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM, nullptr, 0) != 0) return std::nullopt;
+  if (BCryptSetProperty(alg, BCRYPT_CHAINING_MODE,
+                        reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_ECB)),
+                        sizeof(BCRYPT_CHAIN_MODE_ECB), 0) != 0) {
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return std::nullopt;
   }
+  BCRYPT_KEY_HANDLE handle = nullptr;
+  if (BCryptGenerateSymmetricKey(alg, &handle, nullptr, 0, const_cast<PUCHAR>(key.data()), ULONG(key.size()), 0) !=
+      0) {
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return std::nullopt;
+  }
+  ULONG n = 0;
+  uint8_t block[kBlockSize];
+  std::memcpy(block, in, kBlockSize);
+  NTSTATUS status;
+  if (encrypt) {
+    status = BCryptEncrypt(handle, block, kBlockSize, nullptr, nullptr, 0, out.data(), kBlockSize, &n, 0);
+  } else {
+    status = BCryptDecrypt(handle, block, kBlockSize, nullptr, nullptr, 0, out.data(), kBlockSize, &n, 0);
+  }
+  BCryptDestroyKey(handle);
   BCryptCloseAlgorithmProvider(alg, 0);
+  if (!BCRYPT_SUCCESS(status) || n != kBlockSize) return std::nullopt;
   return out;
 }
 
 }  // namespace
 
-FigureBlock DecryptFigureBlock(const FigureData& data, uint8_t block_index) {
-  return Aes(BlockKey(data, block_index), data.data() + block_index * kBlockSize, false);
+std::optional<FigureBlock> DecryptFigureBlock(const FigureData& data, uint8_t block_index) {
+  const auto key = BlockKey(data, block_index);
+  if (!key) return std::nullopt;
+  return Aes(*key, data.data() + block_index * kBlockSize, false);
 }
 
-FigureBlock EncryptFigureBlock(const FigureData& data, uint8_t block_index, const FigureBlock& plain) {
-  return Aes(BlockKey(data, block_index), plain.data(), true);
+std::optional<FigureBlock> EncryptFigureBlock(const FigureData& data, uint8_t block_index,
+                                              const FigureBlock& plain) {
+  const auto key = BlockKey(data, block_index);
+  if (!key) return std::nullopt;
+  return Aes(*key, plain.data(), true);
 }
 
 #elif defined(SKYLANDERS_PORTAL_CRYPTO_OPENSSL)
 
-std::array<uint8_t, 16> BlockKey(const FigureData& data, uint8_t block_index) {
+std::optional<std::array<uint8_t, 16>> BlockKey(const FigureData& data, uint8_t block_index) {
+  if (CryptoProviderFailed()) return std::nullopt;
   const auto key_material = BlockKeyMaterial(data, block_index);
   std::array<uint8_t, 16> key{};
   std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> md(EVP_MD_CTX_new(), EVP_MD_CTX_free);
   unsigned int md_len = 0;
-  if (md && EVP_DigestInit_ex(md.get(), EVP_md5(), nullptr) == 1 &&
-      EVP_DigestUpdate(md.get(), key_material.data(), key_material.size()) == 1) {
-    EVP_DigestFinal_ex(md.get(), key.data(), &md_len);
-  }
+  if (!md) return std::nullopt;
+  if (EVP_DigestInit_ex(md.get(), EVP_md5(), nullptr) != 1) return std::nullopt;
+  if (EVP_DigestUpdate(md.get(), key_material.data(), key_material.size()) != 1) return std::nullopt;
+  if (EVP_DigestFinal_ex(md.get(), key.data(), &md_len) != 1) return std::nullopt;
+  if (md_len != key.size()) return std::nullopt;
   return key;
 }
 
-FigureBlock Aes(const std::array<uint8_t, 16>& key, const uint8_t* in, bool encrypt) {
+std::optional<FigureBlock> Aes(const std::array<uint8_t, 16>& key, const uint8_t* in, bool encrypt) {
+  if (CryptoProviderFailed()) return std::nullopt;
   FigureBlock out{};
   std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)> ctx(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
-  if (!ctx) return out;
+  if (!ctx) return std::nullopt;
   int len = 0;
   int final_len = 0;
-  if (EVP_CipherInit_ex(ctx.get(), EVP_aes_128_ecb(), nullptr, key.data(), nullptr, encrypt ? 1 : 0) == 1 &&
-      EVP_CIPHER_CTX_set_padding(ctx.get(), 0) == 1 &&
-      EVP_CipherUpdate(ctx.get(), out.data(), &len, in, int(kBlockSize)) == 1) {
-    EVP_CipherFinal_ex(ctx.get(), out.data() + len, &final_len);
+  if (EVP_CipherInit_ex(ctx.get(), EVP_aes_128_ecb(), nullptr, key.data(), nullptr, encrypt ? 1 : 0) != 1) {
+    return std::nullopt;
   }
+  if (EVP_CIPHER_CTX_set_padding(ctx.get(), 0) != 1) return std::nullopt;
+  if (EVP_CipherUpdate(ctx.get(), out.data(), &len, in, int(kBlockSize)) != 1) return std::nullopt;
+  if (EVP_CipherFinal_ex(ctx.get(), out.data() + len, &final_len) != 1) return std::nullopt;
+  if (len + final_len != int(kBlockSize)) return std::nullopt;
   return out;
 }
 
 }  // namespace
 
-FigureBlock DecryptFigureBlock(const FigureData& data, uint8_t block_index) {
-  return Aes(BlockKey(data, block_index), data.data() + block_index * kBlockSize, false);
+std::optional<FigureBlock> DecryptFigureBlock(const FigureData& data, uint8_t block_index) {
+  const auto key = BlockKey(data, block_index);
+  if (!key) return std::nullopt;
+  return Aes(*key, data.data() + block_index * kBlockSize, false);
 }
 
-FigureBlock EncryptFigureBlock(const FigureData& data, uint8_t block_index, const FigureBlock& plain) {
-  return Aes(BlockKey(data, block_index), plain.data(), true);
+std::optional<FigureBlock> EncryptFigureBlock(const FigureData& data, uint8_t block_index,
+                                              const FigureBlock& plain) {
+  const auto key = BlockKey(data, block_index);
+  if (!key) return std::nullopt;
+  return Aes(*key, plain.data(), true);
 }
 
 #else
@@ -139,20 +182,26 @@ std::array<uint8_t, AES_ROUND_KEY_SIZE> RoundKeys(const FigureData& data, uint8_
 
 }  // namespace
 
-FigureBlock DecryptFigureBlock(const FigureData& data, uint8_t block_index) {
+std::optional<FigureBlock> DecryptFigureBlock(const FigureData& data, uint8_t block_index) {
   const auto round_keys = RoundKeys(data, block_index);
   FigureBlock out{};
   aes_decrypt_128(round_keys.data(), data.data() + block_index * kBlockSize, out.data());
   return out;
 }
 
-FigureBlock EncryptFigureBlock(const FigureData& data, uint8_t block_index, const FigureBlock& plain) {
+std::optional<FigureBlock> EncryptFigureBlock(const FigureData& data, uint8_t block_index,
+                                              const FigureBlock& plain) {
   const auto round_keys = RoundKeys(data, block_index);
   FigureBlock out{};
   aes_encrypt_128(round_keys.data(), plain.data(), out.data());
   return out;
 }
 
+#endif
+
+#if defined(SKYLANDERS_PORTAL_FIGURE_CRYPTO_TESTING)
+// Fault-injection test build only (see the seam above).
+void SetFigureCryptoProviderFailureForTesting(bool failed) { g_crypto_provider_failed = failed; }
 #endif
 
 uint16_t FigureCrc16(const uint8_t* data, size_t size) {

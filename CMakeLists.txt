@@ -7,6 +7,10 @@
 cmake_minimum_required(VERSION 3.25)
 project(skylanders_portal LANGUAGES CXX C)
 
+# Both the SDK and the standalone figure-files path below build tests from this, so it has to be
+# defined before the standalone path returns.
+option(SKYLANDERS_PORTAL_TESTS "Build skylanders-portal unit tests" ON)
+
 # skylanders_game_icon(): the game's logo from its disc as the exe's icon (cmake/game_icon.cmake).
 include(cmake/game_icon.cmake)
 # skylanders_game_xex(): a game's disc check, its installer CLI and tests (cmake/game_xex.cmake).
@@ -69,6 +73,26 @@ if(NOT REXSDK_DIR)
         target_include_directories(skylanders_figure_crypto_test PRIVATE tests)
         target_link_libraries(skylanders_figure_crypto_test PRIVATE skylanders_portal_figures)
         add_test(NAME skylanders_figure_crypto_test COMMAND skylanders_figure_crypto_test)
+
+        # A provider-failure test needs the crypto code built with its fault-injection seam, which
+        # the library (deliberately) does not have: compile that one source again for the test. The
+        # seam object satisfies the crypto symbols, so the linker never pulls the library's copy.
+        add_executable(skylanders_figure_crypto_failure_test
+            tests/figure_crypto_failure_test.cpp src/portal/figure_crypto.cpp)
+        target_include_directories(skylanders_figure_crypto_failure_test PRIVATE src tests)
+        target_compile_features(skylanders_figure_crypto_failure_test PRIVATE cxx_std_23)
+        if(WIN32)
+            target_compile_definitions(skylanders_figure_crypto_failure_test PRIVATE
+                SKYLANDERS_PORTAL_CRYPTO_CNG SKYLANDERS_PORTAL_FIGURE_CRYPTO_TESTING)
+            target_link_libraries(skylanders_figure_crypto_failure_test PRIVATE
+                skylanders_portal_figures bcrypt)
+        else()
+            target_compile_definitions(skylanders_figure_crypto_failure_test PRIVATE
+                SKYLANDERS_PORTAL_CRYPTO_OPENSSL SKYLANDERS_PORTAL_FIGURE_CRYPTO_TESTING)
+            target_link_libraries(skylanders_figure_crypto_failure_test PRIVATE
+                skylanders_portal_figures OpenSSL::Crypto)
+        endif()
+        add_test(NAME skylanders_figure_crypto_failure_test COMMAND skylanders_figure_crypto_failure_test)
     endif()
     return()
 endif()
@@ -111,7 +135,6 @@ if(WIN32)
     target_link_libraries(skylanders_portal_core PUBLIC shell32 ole32)
 endif()
 
-option(SKYLANDERS_PORTAL_TESTS "Build skylanders-portal unit tests" ON)
 if(SKYLANDERS_PORTAL_TESTS)
     enable_testing()
     foreach(t portal_framing_test portal_mode_test software_portal_test figure_file_test

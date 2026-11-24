@@ -65,7 +65,8 @@ inline constexpr uint16_t kMaxFigureGold = 65000;
 // Puts `gold` into each save area whose header checks out (ParseFigureStats' rule) and fixes that
 // header's CRC, so whichever copy the game takes holds it. Only the header block changes: the
 // area's other checksums cover the blocks after it. Returns false, `data` unchanged, when no area
-// checks out (a figure never played has no gold to set yet).
+// checks out (a figure never played has no gold to set yet) or when the crypto provider fails; all
+// areas are encrypted before any is written, so a failure cannot leave a half-written figure.
 bool SetFigureGold(FigureData& data, uint16_t gold);
 
 }  // namespace skylanders::portal
