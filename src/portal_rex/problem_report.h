@@ -30,8 +30,8 @@ std::vector<std::pair<std::string, std::string>> PosixPrivateWords(std::string h
                                                                    const std::string& user,
                                                                    const std::string& host);
 
-// Writes BuildGameReport to the desktop as Skylanders-problem-report-<date>.txt; an empty path
-// with `error` set when it can't be written.
+// Writes BuildGameReport to the desktop (on Linux ~/Documents) as
+// Skylanders-problem-report-<date>.txt; an empty path with `error` set when it can't be written.
 std::filesystem::path WriteGameProblemReport(const std::string& program, std::string& error);
 
 }  // namespace skylanders

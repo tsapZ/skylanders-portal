@@ -351,8 +351,14 @@ class ProblemNoteDialog final : public rex::ui::ImGuiDialog {
       ShowPortalToast(Tr("Noted. Report a problem in Core of Light sends it along.",
                          "Notiert. \xE2\x80\x9EProblem melden\xE2\x80\x9C in Core of Light schickt es mit."));
     } else {
+#if defined(_WIN32)
       ShowPortalToast(Tr("Noted. The report is on your desktop: ",
                          "Notiert. Der Bericht liegt auf deinem Desktop: ") +
+#else
+      // Linux puts it in ~/Documents (problem_report.cpp ReportFolder), not on the desktop (CoL #135).
+      ShowPortalToast(Tr("Noted. The report is in your Documents folder (~/Documents): ",
+                         "Notiert. Der Bericht liegt im Ordner ~/Documents: ") +
+#endif
                       Utf8Path(report.filename()) +
                       Tr(". Attach it to a new issue.",
                          ". H\xC3\xA4ng ihn an ein neues Issue an."));
