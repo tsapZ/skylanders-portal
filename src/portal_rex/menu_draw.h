@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <imgui.h>
 
@@ -18,7 +19,10 @@ namespace skylanders::menu_draw {
 void AddFonts(ImFontAtlas* atlas);
 ImFont* TitleFont();
 ImFont* BoldFont();
-// Returns the first usable UI font path (bundled fonts/ or OS font dir), or empty if none.
+// The usable UI font paths in preference order (bundled fonts/ first, then OS font dirs), so a
+// caller whose first load fails can try the rest. Empty if none exists.
+std::vector<std::string> FindDefaultUiFontPaths(bool bold = false);
+// Returns the first of FindDefaultUiFontPaths, or empty if none. Kept for existing callers.
 std::string FindDefaultUiFontPath(bool bold = false);
 
 // Sizes are given in 1080p units; SetScale(display height / 1080) once per frame.
