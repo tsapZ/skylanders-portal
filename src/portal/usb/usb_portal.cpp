@@ -575,15 +575,42 @@ void UsbPortal::WriteAudioPacket(const AudioPacket& packet) {
     // pipe, so these two don't need io_mutex_ (nor wait for each other).
     ok = winusb_->WriteInterrupt(packet.data(), kAudioPacketSize);
   } else {
-    uint8_t out[1 + kAudioPacketSize];
-    out[0] = 0;  // report ID
-    std::memcpy(out + 1, packet.data(), kAudioPacketSize);
     const auto start = std::chrono::steady_clock::now();
-    if (audio_device_ != nullptr) {
-      ok = hid_write(audio_device_, out, sizeof(out)) >= 0;  // its own handle: no io_mutex_ (OpenAudioHandle)
-    } else {
+    auto write = [this](const uint8_t* data, size_t size) {
+      if (audio_device_ != nullptr) return hid_write(audio_device_, data, size);  // own handle: no io_mutex_
       std::lock_guard<std::mutex> lock(io_mutex_);
-      ok = hid_write(device_, out, sizeof(out)) >= 0;
+      return hid_write(device_, data, size);
+    };
+    const bool split = audio_hid_split_.load();
+    int first = -1;
+    int second = 0;
+    if (split) {
+      // Two reports of 32 bytes (16 samples each), each with report ID 0 in front.
+      constexpr size_t kHalf = kAudioPacketSize / 2;
+      uint8_t half[1 + kHalf];
+      half[0] = 0;
+      std::memcpy(half + 1, packet.data(), kHalf);
+      first = write(half, sizeof(half));
+      std::memcpy(half + 1, packet.data() + kHalf, kHalf);
+      second = first >= 0 ? write(half, sizeof(half)) : -1;
+      ok = first >= 0 && second >= 0;
+    } else {
+      uint8_t out[1 + kAudioPacketSize];
+      out[0] = 0;  // report ID
+      std::memcpy(out + 1, packet.data(), kAudioPacketSize);
+      first = write(out, sizeof(out));
+      ok = first >= 0;
+    }
+    // What the HID driver took of the first packet: hid_write returns the bytes written, so a 65-byte write
+    // that comes back as 33 means the driver sent only the first half (Core of Light #153/#154).
+    if (!audio_first_write_logged_) {
+      audio_first_write_logged_ = true;
+      if (split) {
+        REXLOG_INFO("Portal (usb): first speaker packet on HID as two 33-byte reports: {} and {} bytes taken", first,
+                    second);
+      } else {
+        REXLOG_INFO("Portal (usb): first speaker packet on HID: {} of {} bytes taken", first, 1 + kAudioPacketSize);
+      }
     }
     // How long the writes take, once per run in the log (Core of Light #102: on the Windows HID driver a
     // write waits for the portal to take the packet).
