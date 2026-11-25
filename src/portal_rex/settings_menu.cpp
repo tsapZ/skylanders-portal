@@ -1799,21 +1799,23 @@ void AddQuitSettings(SettingsPage& page) {
   page.settings.push_back(std::move(volume));
   // Sound output (audio_channels, SDK): headphones on an output Windows has set up as 5.1 or 7.1
   // play only front left and right, and voices a game puts on the center channel alone are lost
-  // (Spyro's Adventure's movies, Core of Light #61). Stereo mixes the center into both sides.
+  // (Spyro's Adventure's movies, Core of Light #61). Stereo mixes the center into both sides, and
+  // is the default since 2026-11-25 (ApplyGraphicsDefaults; Core of Light #154).
   Setting output;
   output.cvar = "audio_channels";
   output.en = "Sound output";
   output.de = "Tonausgabe";
-  output.help_en = "Automatic plays surround sound when Windows has the output set up for it.\n"
+  output.help_en = "Stereo (the default) mixes the sound down to two channels, so no voices are lost "
+                   "with headphones or two speakers, whatever Windows has the output set up as.\n"
                    "\n"
-                   "Stereo always mixes it down to two channels. Pick it if voices are missing (in "
-                   "movies, for example) with headphones on a surround output. Takes effect after a "
-                   "restart.";
-  output.help_de = "Automatisch spielt Raumklang, wenn Windows den Ausgang daf\xC3\xBCr eingerichtet hat.\n"
+                   "Automatic plays surround sound when Windows has the output set up for it: pick it "
+                   "for real surround speakers. Takes effect after a restart.";
+  output.help_de = "Stereo (Standard) mischt den Ton auf zwei Kan\xC3\xA4le herunter, so fehlen mit "
+                   "Kopfh\xC3\xB6rern oder zwei Lautsprechern keine Stimmen, egal wie Windows den "
+                   "Ausgang eingerichtet hat.\n"
                    "\n"
-                   "Stereo mischt immer auf zwei Kan\xC3\xA4le herunter. Das hilft, wenn mit Kopfh\xC3\xB6rern "
-                   "an einem Raumklang-Ausgang Stimmen fehlen (zum Beispiel in Filmen). Wirkt nach "
-                   "einem Neustart.";
+                   "Automatisch spielt Raumklang, wenn Windows den Ausgang daf\xC3\xBCr eingerichtet hat: "
+                   "das Richtige f\xC3\xBCr echte Raumklang-Boxen. Wirkt nach einem Neustart.";
   output.options = {{"auto", "Automatic", "Automatisch"}, {"stereo", "Stereo", "Stereo"}};
   page.settings.push_back(std::move(output));
   Setting fps;
