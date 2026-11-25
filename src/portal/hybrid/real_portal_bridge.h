@@ -75,6 +75,9 @@ class RealPortalBridge {
   // The game's light commands ('C', and Trap Team's 'J' and 'L') for the portal: the newest per
   // command and side goes to the real portal once it is active, and again after it is set up anew.
   void OnLight(const Report& report);
+  // Forgets the game's lights, so none still waiting goes out after the game turned them off on
+  // closing (TurnRealPortalLightsOff). Any thread.
+  void DropLights();
 
   // The game's speaker switch ('M'): the newest goes to the real portal once it is active, and again
   // after it is set up anew. Its answer says whether the real portal has a speaker (RealHasSpeaker),
@@ -168,6 +171,10 @@ class RealPortalBridge {
   void NoteSpeaker(bool speaker, const char* why);
   void TrackCopies();
   int FindCopy(const std::filesystem::path& source) const;
+  // Under mu_: the next light to send, at most one per kLightInterval, taking the lights in turns
+  // (after the one sent last), so one that changes all the time (a side's fade) doesn't hold the
+  // others back.
+  std::optional<Report> TakeLight(Clock::time_point now);
 
   SoftwarePortal* emulated_;
   Options options_;
@@ -177,6 +184,7 @@ class RealPortalBridge {
   std::array<RealSlot, kMaxFigures> slots_{};
   std::optional<Command> pending_;
   Clock::time_point last_light_{};
+  uint16_t last_light_key_ = 0;  // TakeLight's turn: the key of the light sent last
   Wake wake_ = Wake::kActive;
   Clock::time_point last_alive_{};  // the last sign of an active real portal
   bool restart_logged_ = false;

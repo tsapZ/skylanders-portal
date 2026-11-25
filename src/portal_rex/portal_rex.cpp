@@ -1087,6 +1087,16 @@ bool PlaceFigureFromFile(int slot, const std::filesystem::path& path) {
   return software->PlaceFigure(slot, *figure, path);
 }
 
+void TurnRealPortalLightsOff() {
+  // Automatic: the bridge forgets the game's lights first, so none it still holds goes out after.
+  if (portal::RealPortalBridge* bridge = g_bridge.load()) bridge->DropLights();
+  portal::UsbPortal* usb = g_usb_portal.load();
+  if (!usb) return;
+  if (const int lights = usb->LightsOff(); lights > 0) {
+    REXLOG_INFO("Portal: the real portal's lights off on closing ({} the game had set)", lights);
+  }
+}
+
 bool RemoveFigureFromSlot(int slot) {
   portal::SoftwarePortal* software = g_software_portal.load();
   if (!software) return false;

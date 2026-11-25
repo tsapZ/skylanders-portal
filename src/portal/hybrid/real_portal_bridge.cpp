@@ -325,6 +325,20 @@ void RealPortalBridge::SendNext() {
     real_->Write(*write);
     return;
   }
+  // The game's lights before the reads, at most one per kLightInterval: they used to wait until no
+  // figure was being read, so a trap's light, which Trap Team pulses while it reads the trap, stayed
+  // as it was for the 10 s of a whole read and then jumped to the last state (Core of Light #153).
+  // A light has no answer, so the next read follows right after it.
+  std::optional<Report> light;
+  {
+    std::lock_guard lock(mu_);
+    light = TakeLight(now);
+  }
+  if (light) {
+    last_light_ = now;
+    real_->Write(*light);  // no reply
+    return;
+  }
   // A figure just put on gets its first blocks before the rest of the ones the game already has:
   // a swapper's second half (or a second figure) reaches the game after its kEarlyBlocks, not once
   // the first figure is whole (SwapForceRecomp #42: about 9 s per half with a Trap Team portal).
@@ -350,24 +364,31 @@ void RealPortalBridge::SendNext() {
   if (speaker) {
     pending_ = Command{'M', -1, 0, now};
     real_->Write(*speaker);
-    return;
   }
-  std::optional<Report> light;
-  {
-    std::lock_guard lock(mu_);
-    if (Clock::now() - last_light_ >= kLightInterval) {
-      for (auto& [key, entry] : lights_) {
-        if (!entry.second) continue;
-        light = entry.first;
-        entry.second = false;
+}
+
+std::optional<Report> RealPortalBridge::TakeLight(Clock::time_point now) {
+  if (now - last_light_ < kLightInterval) return std::nullopt;
+  // The first light due after the one sent last, else the first due one from the start.
+  auto due = lights_.end();
+  for (auto it = lights_.upper_bound(last_light_key_); it != lights_.end(); ++it) {
+    if (it->second.second) {
+      due = it;
+      break;
+    }
+  }
+  if (due == lights_.end()) {
+    for (auto it = lights_.begin(); it != lights_.end(); ++it) {
+      if (it->second.second) {
+        due = it;
         break;
       }
     }
   }
-  if (light) {
-    last_light_ = Clock::now();
-    real_->Write(*light);  // no reply
-  }
+  if (due == lights_.end()) return std::nullopt;
+  due->second.second = false;
+  last_light_key_ = due->first;
+  return due->second.first;
 }
 
 int RealPortalBridge::NextBlock(int real_slot) const {
@@ -630,6 +651,11 @@ void RealPortalBridge::OnLight(const Report& report) {
   const uint16_t key = uint16_t(report[0] << 8) | (report[0] == 'C' ? 0 : report[1]);
   std::lock_guard lock(mu_);
   lights_[key] = {report, true};
+}
+
+void RealPortalBridge::DropLights() {
+  std::lock_guard lock(mu_);
+  lights_.clear();
 }
 
 std::vector<uint32_t> RealPortalBridge::RealUids() const {

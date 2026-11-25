@@ -88,6 +88,11 @@ bool NotePortalDriverUnusable(const char* driver);
 // there is no active software portal or the slot was already empty.
 bool RemoveFigureFromSlot(int slot);
 
+// When the game closes (ShutdownPortalMenu): a real USB portal gets every light the game set turned
+// off, as a console leaves it, so a Trap Team trap light doesn't stay on in the next game (Core of
+// Light #153). Nothing without a real portal.
+void TurnRealPortalLightsOff();
+
 // The figure RemoveFigureFromSlot last took off `slot`, with the file it was saving to, so it can
 // go back when the game wants that one back (portal_menu.h PlayerSkylanderWantedBack). `order`
 // grows with every figure taken off, so the newest of several slots can be told. Any thread.

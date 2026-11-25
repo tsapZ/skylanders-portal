@@ -331,6 +331,45 @@ int main() {
                        [](const Report& r) { return r[0] == 'J' && r[1] == 0 && r[2] == 0x10; }));
   }
 
+  // Core of Light #153 1: the game's light goes out while a figure is still being read, not only
+  // after its last block (Trap Team pulses a trap's light while it reads the trap).
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+    inner.PlaceFigure(0, chop);
+    bridge.OnLight(Cmd({'L', 0x00, 0x7C, 0x4A}));
+    RunFor(bridge, &real, std::chrono::milliseconds(300));
+    CHECK(FirstFigure(emulated) == kMaxFigures - 1);
+    size_t first_light = real.sent.size(), last_read = 0;
+    for (size_t i = 0; i < real.sent.size(); ++i) {
+      if (real.sent[i][0] == 'L' && first_light == real.sent.size()) first_light = i;
+      if (real.sent[i][0] == 'Q') last_read = i;
+    }
+    CHECK(first_light < real.sent.size());
+    CHECK(first_light < last_read);
+  }
+
+  // Core of Light #153 2: a light the game changes all the time (a side's fade) doesn't hold the
+  // others back: they take turns.
+  {
+    SoftwarePortal inner, emulated;
+    Habits real(&inner);
+    RealPortalBridge bridge(&emulated, {dir, nullptr, nullptr});
+    bridge.OnLight(Cmd({'L', 0x01, 0x00}));
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(700);
+    for (uint8_t fade = 0; std::chrono::steady_clock::now() < end; ++fade) {
+      bridge.OnLight(Cmd({'J', 0x00, fade, 0x00, 0x00}));
+      bridge.Step(&real);
+      std::this_thread::yield();
+    }
+    const auto sent = [&](uint8_t command) {
+      return std::count_if(real.sent.begin(), real.sent.end(), [&](const Report& r) { return r[0] == command; });
+    };
+    CHECK(sent('L') == 1);
+    CHECK(sent('J') >= 2);
+  }
+
   // #62 4: a toy whose backup file is already on the emulated portal through the menu is left out,
   // and that file isn't renamed or saved over.
   {
