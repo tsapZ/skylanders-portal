@@ -18,6 +18,12 @@ int RunCheck(const std::filesystem::path& xex) {
   const auto problem = skylanders::xex::DescribeXexProblem(xex, result, SKYLANDERS_XEX_SHA256,
                                                            SKYLANDERS_GAME_TITLE);
 
+  // Another build with its own exe in the package: the setup takes the disc (exit code 5), the game starts that exe.
+  if (result.other_build && !result.sibling_exe.empty()) {
+    std::printf("OK, another build of the game, it runs with %s: %s\n", result.sibling_exe.c_str(),
+                result.header.c_str());
+    return skylanders::xex::ExitCodeForResult(result);
+  }
   if (problem.empty()) {
     if (result.status == skylanders::xex::XexCheck::SameCode) {
       std::printf("OK, another pressing with the same code: %s\n", result.header.c_str());

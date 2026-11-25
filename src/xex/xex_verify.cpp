@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <utility>
 #include <vector>
 
 namespace skylanders::xex {
@@ -125,6 +126,7 @@ XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expe
   std::vector<std::string> expected;
   std::vector<std::string> pins;
   std::string own_code;  // "code=<pin>": the code this build is recompiled from (cmake/game_xex.cmake)
+  std::vector<std::pair<std::string, std::string>> siblings;  // "sibling=<exe>@<pin>": {pin, exe}
   for (size_t start = 0;;) {
     const size_t comma = expected_list.find(',', start);
     auto entry = expected_list.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
@@ -135,6 +137,16 @@ XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expe
       pins.push_back(*pin);
     } else if (entry.starts_with("code=") && NormalizePin(entry.substr(5))) {
       own_code = *NormalizePin(entry.substr(5));
+    } else if (entry.starts_with("sibling=") && entry.find('@') != std::string_view::npos) {
+      // An exe's file name only, next to this one: no folders, nothing empty.
+      const auto rest = entry.substr(8);
+      const auto at = rest.find('@');
+      const auto exe = rest.substr(0, at);
+      const auto pin = NormalizePin(rest.substr(at + 1));
+      if (exe.empty() || !pin || exe.find_first_of("/\\:") != std::string_view::npos || exe == "." || exe == "..") {
+        return {XexCheck::BadExpected, {}};
+      }
+      siblings.emplace_back(*pin, std::string(exe));
     } else {
       return {XexCheck::BadExpected, {}};
     }
@@ -164,6 +176,16 @@ XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expe
     result.status = XexCheck::Mismatch;
     result.other_build = true;
   }
+  // The other build's own exe, when this one ships next to it: any file with that code, listed or not.
+  if (!own_code.empty() && !result.code_pin.empty() && result.code_pin != own_code) {
+    for (const auto& [pin, exe] : siblings) {
+      if (pin != result.code_pin) continue;
+      result.status = XexCheck::Mismatch;
+      result.other_build = true;
+      result.sibling_exe = exe;
+      break;
+    }
+  }
   return result;
 }
 
@@ -186,6 +208,12 @@ std::string DescribeXexProblem(const std::filesystem::path& xex, const XexCheckR
              " disc belongs in the rom folder in the game's folder, with default.xex directly in it."
              "\nRun the setup again and pick your disc, or set the game up in Core of Light.";
     case XexCheck::Mismatch: {
+      // The game starts the sibling exe itself; this text is for when it isn't there (or the setup's check).
+      if (result.other_build && !result.sibling_exe.empty()) {
+        return "This " + std::string(game) + " disc is another build of the game (" + result.header +
+               "). It runs with " + result.sibling_exe + ", which belongs next to this game's exe but isn't "
+               "there.\nRun the setup again, or update the game in Core of Light.";
+      }
       if (result.other_build) {
         return "This " + std::string(game) + " disc is another build of the game (" + result.header +
                "): its code isn't the code this download was made from, so it can't run it.\n"

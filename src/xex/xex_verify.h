@@ -28,6 +28,10 @@ struct XexCheckResult {
   // Mismatch only: the disc is listed (hash or pin), but its code isn't the "code=" entry's, the code this
   // build is recompiled from (another build of the game: the port built from source with that disc runs it).
   bool other_build = false;
+  // other_build only: the exe made from that other build, when the list names one ("sibling=<exe>@<pin>"), so the
+  // game can start it instead (RunSiblingBuild, sibling_build.h). SuperChargers ships one for its French / Dutch and
+  // Scandinavian discs (Core of Light #135, #118).
+  std::string sibling_exe;
 };
 
 // Lowercase hex SHA-256 of the file at `path`, or nullopt if it cannot be read completely.
@@ -37,7 +41,9 @@ std::optional<std::string> Sha256File(const std::filesystem::path& path);
 // case, surrounding whitespace ignored), each a 64-hex-character SHA-256 or a code pin
 // ("82450000:" and 64 hex characters). A hash matching is a Match, else a code pin matching is
 // SameCode. One more entry, "code=<pin>" (cmake/game_xex.cmake adds the pin of the game's own
-// rom/default.xex), makes any file with another code a Mismatch with other_build set.
+// rom/default.xex), makes any file with another code a Mismatch with other_build set. "sibling=<exe>@<pin>" entries
+// name the exe built from another code (cmake/game_xex.cmake SIBLINGS): a file with that code is a Mismatch with
+// other_build and sibling_exe set (an entry for this build's own code is ignored, so both builds share one list).
 XexCheckResult VerifyXex(const std::filesystem::path& xex, std::string_view expected_sha256);
 
 // The code pin of the XEX2 file at `path` (xex_header.h), or nullopt when it has none.
