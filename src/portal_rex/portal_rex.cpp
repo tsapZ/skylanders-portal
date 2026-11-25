@@ -386,6 +386,18 @@ class TransitioningPortal final : public skylanders::portal::PortalDevice {
   int added_reports_ = 0;
 };
 
+// A portal plugged in with a driver the game can't open (UnusablePortalDriver) gets a message once
+// a run, since the game itself only shows "Can't find the Portal of Power" (SSARecomp #13: a
+// PS4 portal on Zadig's libusbK). Called after each failed open, so a message that found no
+// screen yet comes with the next try a second later.
+void HintUnusablePortalDriver() {
+  static std::atomic<bool> shown{false};
+  const char* driver = skylanders::portal::UnusablePortalDriver();
+  if (driver == nullptr || shown.load() || !skylanders::NotePortalDriverUnusable(driver)) return;
+  shown.store(true);
+  REXLOG_WARN("Portal: the portal has the {} driver, which the game can't open (Zadig: WinUSB)", driver);
+}
+
 // Builds a ready-to-use UsbPortal, or nullptr if no matching device is connected. Never stored
 // anywhere itself -- callers decide whether to publish it (SwitchPortalMode) or discard it.
 skylanders::portal::UsbPortal* SetUpUsbPortal() {
@@ -395,6 +407,7 @@ skylanders::portal::UsbPortal* SetUpUsbPortal() {
     return usb;
   }
   delete usb;  // never published anywhere, so nothing else could have seen this one -- safe to free
+  HintUnusablePortalDriver();
   return nullptr;
 }
 

@@ -35,6 +35,13 @@ inline constexpr std::pair<uint16_t, uint16_t> kKnownPortals[] = {
     {0x1430, 0x1F17},  // Xbox 360 Skylanders portal -- untested
 };
 
+// When a portal (vendor 1430) is plugged in with a driver the game can't open, that driver as a
+// player knows it ("libusbK" or "libusb-win32" from Zadig, "Xbox 360 controller" for a 360
+// portal on xusb22), else nullptr. Known once the first UsbPortal listed the devices (Windows
+// only); any thread. SSARecomp #13: a PS4 portal on libusbK got only the game's "Can't find the
+// Portal of Power".
+const char* UnusablePortalDriver();
+
 // A real, physical Portal of Power, opened over USB HID via hidapi -- no WinUSB/Zadig driver
 // replacement needed; hid_send_output_report() reaches the device through the stock HID class
 // driver (docs/portal-protocol.md).

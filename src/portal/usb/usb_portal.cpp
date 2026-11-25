@@ -30,6 +30,9 @@ namespace skylanders::portal {
 
 namespace {
 
+// UnusablePortalDriver's answer, set by LogPortalDrivers; a string literal, so no lock.
+std::atomic<const char*> g_unusable_driver{nullptr};
+
 
 // hid_error() returns a wide string whose encoding matches Windows UTF-16 (wchar_t is 16-bit) or
 // POSIX UTF-32 (wchar_t is 32-bit) -- narrow it for REXLOG, which expects UTF-8.
@@ -73,6 +76,15 @@ std::string WideUtf8(const wchar_t* text) {
 // portal usually gets the Xbox controller driver (xusb22) and, after Zadig, WinUSB or libusbK, none
 // of which is a HID device (TrapTeamRecomp #19; Xenia talks to the Xbox 360 portal over WinUSB, its
 // commands start with 0B 14). Hardware ids and driver names only, nothing about the user.
+// A driver service on a vendor 1430 device that neither hidapi (HidUsb) nor WinUsbPortalIo /
+// Xbox360Portal (WinUSB) can open, by the name a player knows it by; nullptr for the others.
+const char* UnusableDriverName(const wchar_t* service) {
+  if (_wcsicmp(service, L"libusbK") == 0) return "libusbK";
+  if (_wcsicmp(service, L"libusb0") == 0) return "libusb-win32";
+  if (_wcsicmp(service, L"xusb22") == 0) return "Xbox 360 controller";
+  return nullptr;
+}
+
 void LogPortalDrivers() {
   HDEVINFO set = SetupDiGetClassDevsW(nullptr, L"USB", nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
   if (set == INVALID_HANDLE_VALUE) return;
@@ -94,6 +106,7 @@ void LogPortalDrivers() {
                                       sizeof(description) - sizeof(wchar_t), nullptr);
     REXLOG_INFO("Portal (usb): USB device {} ({}), driver {}", WideUtf8(ids), WideUtf8(description),
                 service[0] ? WideUtf8(service) : std::string("none"));
+    if (const char* unusable = UnusableDriverName(service)) g_unusable_driver.store(unusable);
     ++found;
   }
   SetupDiDestroyDeviceInfoList(set);
@@ -114,6 +127,8 @@ std::string HexBytes(const uint8_t* data, size_t n) {
 }
 
 }  // namespace
+
+const char* UnusablePortalDriver() { return g_unusable_driver.load(); }
 
 UsbPortal::UsbPortal() : traffic_("usb", [](const std::string& line) { REXLOG_INFO("{}", line); }) {
   // The USB mode builds a UsbPortal once a second while none opens (portal_rex's hot-plug retry),

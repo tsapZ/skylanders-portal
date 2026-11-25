@@ -79,6 +79,11 @@ void NoteFigureSave(const std::filesystem::path& file, bool saved);
 // messages.
 void NoteRealToyLeftOut(const std::string& name);
 
+// From any thread: a portal is plugged in with a driver the game can't open (`driver`, named as
+// skylanders::portal::UnusablePortalDriver names it); shows how to switch it. False while there
+// is no screen to show it on yet. Defined with the portal menu's messages.
+bool NotePortalDriverUnusable(const char* driver);
+
 // Removes the figure from `slot`, if any, and forgets what file it was saving to. Returns false if
 // there is no active software portal or the slot was already empty.
 bool RemoveFigureFromSlot(int slot);
