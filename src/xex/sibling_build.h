@@ -13,8 +13,8 @@ namespace skylanders::xex {
 
 // Starts `exe_name` from this exe's folder with this process's arguments and waits for it. Windows: returns its exit
 // code (the started game is in a job object that closes with this process, so ending this one ends it too); nullopt
-// when the file isn't there or doesn't start. Linux: replaces this process (execv) and only returns, nullopt, when
-// that fails.
+// when the file isn't there, is this exe itself, or doesn't start. Linux: replaces this process (execv) and only
+// returns, nullopt, when that fails (or for the same reasons).
 std::optional<int> RunSiblingBuild(std::string_view exe_name);
 
 }  // namespace skylanders::xex

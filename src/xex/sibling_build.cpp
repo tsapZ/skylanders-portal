@@ -29,6 +29,14 @@ std::filesystem::path SiblingPath(const std::filesystem::path& own, std::string_
   return own.parent_path() / std::filesystem::path(name);
 }
 
+// The sibling is there and isn't this exe itself (an exe renamed to the other build's name would start itself
+// again and again).
+bool UsableSibling(const std::filesystem::path& own, const std::filesystem::path& sibling) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(sibling, ec)) return false;
+  return !std::filesystem::equivalent(own, sibling, ec) && !ec;
+}
+
 }  // namespace
 
 #if defined(_WIN32)
@@ -45,8 +53,7 @@ std::optional<int> RunSiblingBuild(std::string_view exe_name) {
     own.resize(own.size() * 2);
   }
   const std::filesystem::path sibling = SiblingPath(std::filesystem::path(own), exe_name);
-  std::error_code ec;
-  if (!std::filesystem::is_regular_file(sibling, ec)) return std::nullopt;
+  if (!UsableSibling(std::filesystem::path(own), sibling)) return std::nullopt;
 
   // This command line without its program name (quoted or not), after the sibling's quoted path.
   const std::wstring line = GetCommandLineW();
@@ -94,7 +101,7 @@ std::optional<int> RunSiblingBuild(std::string_view exe_name) {
   const std::filesystem::path own = std::filesystem::read_symlink("/proc/self/exe", ec);
   if (ec || own.empty()) return std::nullopt;
   const std::filesystem::path sibling = SiblingPath(own, exe_name);
-  if (!std::filesystem::is_regular_file(sibling, ec)) return std::nullopt;
+  if (!UsableSibling(own, sibling)) return std::nullopt;
 
   std::vector<std::string> args;
   std::ifstream in("/proc/self/cmdline", std::ios::binary);
