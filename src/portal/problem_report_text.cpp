@@ -50,6 +50,23 @@ std::string Utf8(const fs::path& path) {
   return std::string(reinterpret_cast<const char*>(text.data()), text.size());
 }
 
+// A letter, a digit or a byte of a UTF-8 character: what a name is made of.
+bool WordByte(char c) {
+  const auto u = static_cast<unsigned char>(c);
+  return (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') || (u >= '0' && u <= '9') || u >= 0x80;
+}
+
+// Whether `word` (found at `pos`) stands on its own there: no letter or digit right before or after
+// it, at the ends where the word itself starts or ends with one. Without this a short name went
+// out inside ordinary words, and the words gave it away: a computer named "tim" turned the log's
+// "frame time" into "frame %COMPUTERNAME%e".
+bool StandsAlone(std::string_view text, size_t pos, std::string_view word) {
+  if (WordByte(word.front()) && pos > 0 && WordByte(text[pos - 1])) return false;
+  const size_t end = pos + word.size();
+  if (WordByte(word.back()) && end < text.size() && WordByte(text[end])) return false;
+  return true;
+}
+
 std::string Private(const std::string& text,
                     const std::vector<std::pair<std::string, std::string>>& words) {
   std::string out;
@@ -60,7 +77,7 @@ std::string Private(const std::string& text,
     for (const auto& word : words) {
       if (word.first.empty() || word.first.size() > text.size() - pos) continue;
       if (SameIgnoringAsciiCase(std::string_view(text).substr(pos, word.first.size()), word.first) &&
-          (!match || word.first.size() > match->first.size())) {
+          StandsAlone(text, pos, word.first) && (!match || word.first.size() > match->first.size())) {
         match = &word;
       }
     }
