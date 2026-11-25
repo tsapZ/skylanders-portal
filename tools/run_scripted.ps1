@@ -49,8 +49,13 @@ public static class SfrWindow {
 
 function Get-GameWindow {
     $script:Game.Refresh()
-    if ($script:Game.MainWindowHandle -eq [IntPtr]::Zero) { throw "the game has no window" }
-    $script:Game.MainWindowHandle
+    if ($script:Game.MainWindowHandle -ne [IntPtr]::Zero) { return $script:Game.MainWindowHandle }
+    # A game started with its other build's disc runs that build's exe and waits for it (src/xex/sibling_build.h,
+    # 2026-11-26: SuperChargers' superchargersrecompiled_fr_nl_nordic): the window is that one's.
+    $other = Get-Process "${GameName}iled*" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Id -ne $script:Game.Id -and $_.MainWindowHandle -ne [IntPtr]::Zero } | Select-Object -First 1
+    if ($other) { return $other.MainWindowHandle }
+    throw "the game has no window"
 }
 
 function Save-Shot([string]$Name, [bool]$Full) {
