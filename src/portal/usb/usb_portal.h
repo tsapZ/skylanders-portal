@@ -70,6 +70,12 @@ class UsbPortal final : public PortalDevice {
   // The speaker took no sound; callers send it to the PC instead.
   bool SpeakerGaveUp() const { return speaker_health_.GaveUp(); }
 
+  // Turns off every light the game set on this portal ('C', and the Traptanium sides' 'J' and trap
+  // light 'L'): each such command once more with its colour, brightness and time zeroed. For closing
+  // the game: a portal keeps its lights, and the games before Trap Team never send 'L', so a trap
+  // light Trap Team left on stayed on in them (Core of Light #153). Returns how many went out.
+  int LightsOff();
+
   // Best-effort status, derived by passively observing replies that already flow through Read()
   // as part of relaying the game's own polling -- no extra USB traffic, no separate poller thread
   // competing with the game's hook thread for the device. Reflects what the game itself has seen
@@ -134,6 +140,8 @@ class UsbPortal final : public PortalDevice {
   Report ReceiveRaw();                 // unlocked -- callers hold io_mutex_
 
   std::mutex io_mutex_;  // serializes every raw HID transfer: Write(), Read(), DumpFigure()
+  // The lights the game set (LightsOff): the command and, for J and L, its side byte. Under io_mutex_.
+  std::vector<std::pair<uint8_t, uint8_t>> lights_used_;
   // The game's commands and what it got back, in plain lines for a player's log (traffic_log.h).
   PortalTrafficLog traffic_;
 

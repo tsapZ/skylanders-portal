@@ -274,6 +274,12 @@ void UsbPortal::Write(const Report& report) {
   // reaching real hardware (see DumpFigure's comment).
   if (dumping_slot_.load() >= 0) return;
   if (IsOpen()) traffic_.OnCommand(report);
+  if (report[0] == 'C' || report[0] == 'J' || report[0] == 'L') {
+    const std::pair<uint8_t, uint8_t> light{report[0], report[0] == 'C' ? 0 : report[1]};
+    if (std::find(lights_used_.begin(), lights_used_.end(), light) == lights_used_.end()) {
+      lights_used_.push_back(light);
+    }
+  }
   if (report[0] == 0x57) {  // 'W': write one figure block -- log for offset research.
     const int slot = report[1] & 0x0F;
     const int block = report[2];
@@ -288,6 +294,21 @@ void UsbPortal::Write(const Report& report) {
     return;
   }
   SendRaw(report);
+}
+
+int UsbPortal::LightsOff() {
+  std::vector<std::pair<uint8_t, uint8_t>> lights;
+  {
+    std::lock_guard<std::mutex> lock(io_mutex_);
+    lights = lights_used_;
+  }
+  for (const auto& [command, side] : lights) {
+    Report off{};
+    off[0] = command;
+    if (command != 'C') off[1] = side;  // J side r g b time, L side ...: all zero after the side
+    Write(off);
+  }
+  return int(lights.size());
 }
 
 Report UsbPortal::Read() {

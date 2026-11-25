@@ -6581,6 +6581,8 @@ void PortalScreenComing(uint32_t user) {
 std::atomic<bool> g_picture_cache_stop{false};
 
 void ShutdownPortalMenu() {
+  // Every game calls this when it closes: the real portal's lights go off then (Core of Light #153).
+  TurnRealPortalLightsOff();
   ShutdownDevOverlay();
   g_picture_cache_stop = true;
   StopItemThread();
