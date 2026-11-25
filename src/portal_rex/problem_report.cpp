@@ -82,7 +82,15 @@ fs::path ReportFolder() {
   return fs::current_path(ec);
 }
 #else
-fs::path ExeFolder() { return {}; }
+// The game's folder from /proc/self/exe (Linux; elsewhere it isn't there and the folder stays empty).
+// Without it a report made on Linux had no settings file, which sits next to the program, and its
+// logs only from the working folder (Core of Light #135: a validation line in the toml couldn't be
+// checked).
+fs::path ExeFolder() {
+  std::error_code ec;
+  const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+  return ec ? fs::path() : exe.parent_path();
+}
 
 fs::path ReportFolder() {
   const fs::path folder = DocumentsFolder();
