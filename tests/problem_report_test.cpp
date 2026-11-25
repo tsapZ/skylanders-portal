@@ -125,6 +125,29 @@ int main() {
   CHECK(log_text.find("%USERPROFILE%") != std::string::npos);
   CHECK(log_text.find("TESTPLAYER") == std::string::npos);
 
+  // A short name goes only where it stands alone: inside an ordinary word it stays, or the word
+  // would give it away ("frame time" was "frame %COMPUTERNAME%e" for a computer named "tim").
+  {
+    const fs::path words_exe = root / L"words_exe";
+    fs::create_directories(words_exe / L"logs", ec);
+    WriteFile(words_exe / L"testgame.toml",
+              "pc = tim\nlog = frame time 16 ms, timer TIMED\nother = Timothy Victim\n"
+              "where = \"C:\\Users\\tim\\Documents\"\nhost = TIM-PC\nnote = tim's\nfolder = tim_2\n");
+    const std::vector<std::pair<std::string, std::string>> tim = {
+        {"C:\\Users\\tim", "%USERPROFILE%"},
+        {"tim", "%COMPUTERNAME%"},
+    };
+    const std::string words_report = BuildGameReport(words_exe, words_exe, "testgame", tim);
+    const std::string text = PartText(words_report, "testgame/testgame.toml");
+    CHECK(text.find("pc = %COMPUTERNAME%\n") != std::string::npos);
+    CHECK(text.find("log = frame time 16 ms, timer TIMED\n") != std::string::npos);
+    CHECK(text.find("other = Timothy Victim\n") != std::string::npos);
+    CHECK(text.find("\"%USERPROFILE%\\Documents\"") != std::string::npos);
+    CHECK(text.find("host = %COMPUTERNAME%-PC\n") != std::string::npos);
+    CHECK(text.find("note = %COMPUTERNAME%'s\n") != std::string::npos);
+    CHECK(text.find("folder = %COMPUTERNAME%_2\n") != std::string::npos);
+  }
+
   CHECK(PartText(report, "testgame/notes/problem-work-new.txt").find("NOTE work new") !=
         std::string::npos);
   CHECK(PartText(report, "testgame/notes/problem-exe-new.txt").find("NOTE exe new") !=
