@@ -146,6 +146,17 @@ void ApplyGraphicsDefaults() {
                                 "12288C4056FDEAD8,3561F4FF40DF3C8A,0B730E004D3A390F")) {  // IM
     REXLOG_WARN("Could not set draw_resolution_guest_grid_shaders");
   }
+  // Not graphics, but every game's shared default lives here: Sound output Stereo. The SDK's
+  // "auto" plays 5.1 whenever Windows has the output set up for surround, and with headphones or two
+  // speakers on such an output the voices the games put on the center channel alone were lost (80 %
+  // of Trap Team's French talk, Core of Light #154; Spyro's Adventure's movies, #61). Stereo mixes
+  // the center into both sides; real surround speakers play everything either way, and Automatic
+  // gives them the surround back (owner 2026-11-25). Only when nothing set it, so a chosen
+  // Automatic stays.
+  if (rex::cvar::GetFlagSource("audio_channels") == rex::cvar::Source::kDefault &&
+      !rex::cvar::SetFlagAsProgramDefault("audio_channels", "stereo")) {
+    REXLOG_WARN("Could not set audio_channels to stereo");
+  }
 }
 
 static void UseHdPack(const std::filesystem::path& user_data_root, std::string_view game) {
