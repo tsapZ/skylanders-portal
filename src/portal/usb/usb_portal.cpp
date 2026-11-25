@@ -276,9 +276,27 @@ void UsbPortal::Write(const Report& report) {
   if (IsOpen()) traffic_.OnCommand(report);
   if (report[0] == 'C' || report[0] == 'J' || report[0] == 'L') {
     const std::pair<uint8_t, uint8_t> light{report[0], report[0] == 'C' ? 0 : report[1]};
-    if (std::find(lights_used_.begin(), lights_used_.end(), light) == lights_used_.end()) {
+    auto it = std::find(lights_used_.begin(), lights_used_.end(), light);
+    const bool first = it == lights_used_.end();
+    if (first) {
       lights_used_.push_back(light);
+      lights_on_.push_back(false);
+      it = lights_used_.end() - 1;
     }
+    // Each light going on or off, in the log (Core of Light #153: what Trap Team does with the trap
+    // light while it reads a trap): on = any colour or brightness byte set (C r g b, J side r g b,
+    // L side ...). Only the changes, at most kLightLines of them, so a fade doesn't fill the log.
+    const size_t index = size_t(it - lights_used_.begin());
+    const size_t from = report[0] == 'C' ? 1 : 2;
+    const size_t to = report[0] == 'J' ? 5 : 4;
+    const bool on = std::any_of(report.begin() + from, report.begin() + to, [](uint8_t b) { return b != 0; });
+    if ((first || on != bool(lights_on_[index])) && light_lines_ < kLightLines) {
+      ++light_lines_;
+      REXLOG_INFO("Portal (usb): light {}{} {}: {}{}", char(report[0]),
+                  report[0] == 'C' ? std::string() : " " + std::to_string(report[1]), on ? "on" : "off",
+                  HexBytes(report.data(), 8), light_lines_ == kLightLines ? " (the last light line)" : "");
+    }
+    lights_on_[index] = on;
   }
   if (report[0] == 0x57) {  // 'W': write one figure block -- log for offset research.
     const int slot = report[1] & 0x0F;

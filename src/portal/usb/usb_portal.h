@@ -140,8 +140,12 @@ class UsbPortal final : public PortalDevice {
   Report ReceiveRaw();                 // unlocked -- callers hold io_mutex_
 
   std::mutex io_mutex_;  // serializes every raw HID transfer: Write(), Read(), DumpFigure()
-  // The lights the game set (LightsOff): the command and, for J and L, its side byte. Under io_mutex_.
+  // The lights the game set (LightsOff): the command and, for J and L, its side byte; whether each is
+  // on now, and how many on/off lines went to the log (Write). Under io_mutex_.
   std::vector<std::pair<uint8_t, uint8_t>> lights_used_;
+  std::vector<char> lights_on_;
+  int light_lines_ = 0;
+  static constexpr int kLightLines = 300;
   // The game's commands and what it got back, in plain lines for a player's log (traffic_log.h).
   PortalTrafficLog traffic_;
 
