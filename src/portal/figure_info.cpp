@@ -319,6 +319,17 @@ std::string_view SwapperBaseName(const SkylanderInfo& sky) {
   return name;
 }
 
+std::optional<size_t> OtherHalfFor(const SkylanderInfo& real,
+                                   const std::vector<const SkylanderInfo*>& placement) {
+  const SwapperHalf half = GetSwapperHalf(real);
+  if (half == SwapperHalf::kNone) return std::nullopt;
+  const SwapperHalf wanted = half == SwapperHalf::kTop ? SwapperHalf::kBottom : SwapperHalf::kTop;
+  for (size_t i = 0; i < placement.size(); ++i) {
+    if (placement[i] && GetSwapperHalf(*placement[i]) == wanted) return i;
+  }
+  return std::nullopt;
+}
+
 std::string DisplayName(std::string_view catalog_name) {
   std::string out(catalog_name);
   for (size_t pos = out.find("_s"); pos != std::string::npos; pos = out.find("_s", pos + 2)) {

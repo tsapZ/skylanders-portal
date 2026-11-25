@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "portal/figure_catalog.h"
 
@@ -55,6 +58,14 @@ const SkylanderInfo* SwapperPartner(const SkylanderInfo& sky);
 
 // The swapper's name without " Top" / " Bottom" ("Freeze Blade"); the plain name otherwise.
 std::string_view SwapperBaseName(const SkylanderInfo& sky);
+
+// hybrid (Core of Light #160): a swapper half `real` stands alone on the real portal (its other
+// half not there, or a tag that no longer answers). Of a placement picked in the portal menu (a
+// swapper's top and bottom, or one figure), the index of the figure that goes on next to it: the
+// first half of the other kind, so the game puts the two together. nullopt when `real` is no
+// swapper half or the placement holds no half of the other kind.
+std::optional<size_t> OtherHalfFor(const SkylanderInfo& real,
+                                   const std::vector<const SkylanderInfo*>& placement);
 
 // The name shown in menus: "_s" in catalog names stands for an apostrophe ("Dragon_s Peak"), and
 // typographic apostrophes become plain ones.

@@ -202,6 +202,7 @@ enum class Text {
   kRealItem,
   kRealStays,
   kRealSkylander,
+  kRealOtherHalf,
   kPillRealPortal,
   kAdventurePack,
   kAdventurePackInfo,
@@ -347,6 +348,7 @@ constexpr const char* kEnglish[] = {
     "A magic item is on the real portal: lift it off there first.",
     "This figure stands on the real portal: lift it off there to take it off.",
     "%s is on the real portal: lift it off there to play another Skylander.",
+    "%s stays on the real portal: only %s goes on next to it.",
     "Real portal",
     "Adventure pack",
     "Opens a level of its own when it comes onto the portal.",
@@ -498,6 +500,7 @@ constexpr const char* kGerman[] = {
     "Diese Figur steht auf dem echten Portal: Nimm sie dort runter, um sie wegzunehmen.",
     "%s steht auf dem echten Portal: Nimm die Figur dort runter, um einen anderen Skylander zu "
     "spielen.",
+    "%s bleibt auf dem echten Portal: Nur %s kommt dazu.",
     "Echtes Portal",
     "Abenteuer-Paket",
     "\xC3\x96"
@@ -2418,6 +2421,21 @@ std::optional<std::string> RealSkylanderOf(uint32_t user) {
   return std::nullopt;
 }
 
+// hybrid: this player's one Skylander on the real portal if it is a swapper half (Core of Light
+// #160: a top whose bottom's tag no longer answers, so only the top got a copy). The portal menu
+// then puts on only the other half of what the player picks. Two real halves, or a real figure that
+// is no half: nullptr.
+const SkylanderInfo* RealLoneSwapperHalfOf(uint32_t user) {
+  const SkylanderInfo* half = nullptr;
+  int real = 0;
+  for (int slot : PlayerSkylanderSlots(user)) {
+    if (!IsRealPortalCopy(slot)) continue;
+    ++real;
+    half = FigureIn(slot);
+  }
+  return real == 1 && half && portal::GetSwapperHalf(*half) != SwapperHalf::kNone ? half : nullptr;
+}
+
 std::atomic<bool> g_keep_on_open{false};  // KeepSkylanderOnWhileMenuOpen
 std::atomic<bool> g_pause_with_menu{false};  // PauseGameWhileMenuOpen
 std::atomic<int> g_menu_pauses{0};  // menus whose pause stands: the first one pauses, the last one resumes
@@ -4004,9 +4022,23 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     ConfirmFiles(paths, placed);
   }
 
-  void ConfirmFiles(const std::vector<std::filesystem::path>& paths,
-                    const std::vector<const SkylanderInfo*>& figures) {
-    if (paths.empty()) return;
+  void ConfirmFiles(const std::vector<std::filesystem::path>& chosen_paths,
+                    const std::vector<const SkylanderInfo*>& chosen) {
+    if (chosen_paths.empty()) return;
+    std::vector<std::filesystem::path> paths = chosen_paths;
+    std::vector<const SkylanderInfo*> figures = chosen;
+    // hybrid, one swapper half of this player alone on the real portal (Core of Light #160): of the
+    // chosen swapper only the other half goes on, next to it, and the game puts the two together as
+    // two real halves. Not kept in Recent: without the real half there it would be a half alone.
+    const SkylanderInfo* real_half = RealLoneSwapperHalfOf(user_);
+    std::optional<size_t> other;
+    if (real_half && chosen_paths.size() == chosen.size()) other = portal::OtherHalfFor(*real_half, chosen);
+    if (other) {
+      paths = {chosen_paths[*other]};
+      figures = {chosen[*other]};
+    } else {
+      real_half = nullptr;
+    }
     for (const auto& path : paths) {
       if (OnRealPortal(path)) {
         ShowToast(T(Text::kOnRealPortal));
@@ -4039,8 +4071,16 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       return;
     }
     // This player's Skylander stands on the real portal: it stays (LiftPlayer left it on), so
-    // another one goes on only once the toy is lifted off (TrapTeamRecomp #22).
-    if (const std::optional<std::string> real = RealSkylanderOf(user_)) {
+    // another one goes on only once the toy is lifted off (TrapTeamRecomp #22); a lone swapper half
+    // there takes the other half (above).
+    if (real_half) {
+      char line[256];
+      std::snprintf(line, sizeof(line), T(Text::kRealOtherHalf), FigureName(*real_half).c_str(),
+                    FigureName(*figures.front()).c_str());
+      ShowToast(line, 3.5f);
+      REXLOG_INFO("Portal menu: player {}: only {} goes on, next to {} on the real portal", user_ + 1,
+                  figures.front()->name, real_half->name);
+    } else if (const std::optional<std::string> real = RealSkylanderOf(user_)) {
       if (real->empty()) {
         ShowToast(T(Text::kRealStays), 3.5f);
       } else {
@@ -4052,7 +4092,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
                   user_ + 1);
       return;
     }
-    AddRecent(user_, paths);
+    if (!real_half) AddRecent(user_, paths);
     pending_paths_ = paths;
     restore_ = false;
     ResumeGame();  // before the swap: the game takes it as usual

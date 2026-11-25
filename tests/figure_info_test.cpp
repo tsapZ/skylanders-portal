@@ -89,6 +89,18 @@ int main() {
   CHECK(spyro && GetSwapperHalf(*spyro) == SwapperHalf::kNone && SwapperPartner(*spyro) == nullptr);
   CHECK(SwapperBaseName(*spyro) == "Spyro");
 
+  // A lone real half takes the other kind of half from a placement (Core of Light #160).
+  const SkylanderInfo* other_bottom = ByName("Nitro Freeze Blade Bottom");
+  CHECK(OtherHalfFor(*top, {top, bottom}) == std::optional<size_t>(1));
+  CHECK(OtherHalfFor(*bottom, {top, bottom}) == std::optional<size_t>(0));
+  CHECK(OtherHalfFor(*top, {nitro_top, other_bottom}) == std::optional<size_t>(1));  // another swapper's bottom
+  CHECK(OtherHalfFor(*top, {other_bottom}) == std::optional<size_t>(0));
+  CHECK(!OtherHalfFor(*top, {nitro_top}));        // only a top: nothing to put beside a top
+  CHECK(!OtherHalfFor(*top, {spyro}));            // no swapper at all
+  CHECK(!OtherHalfFor(*top, {}));
+  CHECK(!OtherHalfFor(*spyro, {top, bottom}));    // the real figure is no half
+  CHECK(OtherHalfFor(*bottom, {nullptr, top}) == std::optional<size_t>(1));
+
   // Characters and version badges.
   auto character = [](std::string_view name) {
     const SkylanderInfo* sky = ByName(name);
