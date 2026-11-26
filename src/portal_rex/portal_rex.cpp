@@ -66,8 +66,8 @@ REXCVAR_DEFINE_INT32(portal_speaker_pacing, 0, "Portal",
     .range(0, 16);
 REXCVAR_DEFINE_BOOL(portal_speaker_hid_split, false, "Portal",
                     "Real portal's speaker on Windows' HID driver: send each 64-byte sound packet as two "
-                    "32-byte reports (a test for a choppy Traptanium speaker, Core of Light #154; no effect "
-                    "on WinUSB)");
+                    "32-byte reports from the start (the game switches to this by itself when the driver "
+                    "takes only half a packet, Core of Light #154; no effect on WinUSB)");
 REXCVAR_DEFINE_BOOL(portal_speaker_report, false, "Portal",
                     "Log the game's portal speaker stream every 5 seconds: frames, sizes, samples a "
                     "second (8000 is real time) and how evenly the frames come (for speaker problems)");

@@ -48,6 +48,13 @@ class SpeakerWriteHealth {
   std::atomic<bool> gave_up_{false};
 };
 
+// A speaker packet written to the HID driver as one report (report ID + 64 bytes) that came back with only the report
+// ID and the first half taken (33 of 65): the portal's HID description gives its output reports 32 bytes, and Windows'
+// own driver sends just that much of a longer write. A PlayStation Traptanium portal on that driver played every
+// packet's first half only and sounded choppy; two 33-byte reports per packet played clean (Core of Light #154,
+// 2026-11-26, both logs). Any other count (a failed write, the whole packet, another cut) is not this case.
+inline bool HidSpeakerWriteTookHalf(int taken) { return taken == static_cast<int>(1 + kAudioPacketSize / 2); }
+
 // Collects PCM samples into full AudioPackets; leftover samples wait for the next Add.
 class PcmPacketizer {
  public:

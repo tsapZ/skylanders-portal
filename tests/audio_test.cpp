@@ -61,5 +61,13 @@ int main() {
     CHECK(!health.Note(true));   // a later success doesn't undo it
     CHECK(health.GaveUp());
   }
+
+  // A 65-byte speaker write on Windows' HID driver that took 33 bytes (report ID + the first half) switches the
+  // writer to two reports a packet (Core of Light #154); a failed write, the whole packet or another count doesn't.
+  CHECK(HidSpeakerWriteTookHalf(33));
+  CHECK(!HidSpeakerWriteTookHalf(65));
+  CHECK(!HidSpeakerWriteTookHalf(-1));
+  CHECK(!HidSpeakerWriteTookHalf(0));
+  CHECK(!HidSpeakerWriteTookHalf(17));
   return Finish("audio");
 }

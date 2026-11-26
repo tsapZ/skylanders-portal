@@ -639,6 +639,19 @@ void UsbPortal::WriteAudioPacket(const AudioPacket& packet) {
       std::memcpy(out + 1, packet.data(), kAudioPacketSize);
       first = write(out, sizeof(out));
       ok = first >= 0;
+      if (HidSpeakerWriteTookHalf(first)) {
+        // The driver sent only the first half (audio.h): the second half goes out as its own report, and every
+        // packet from now on as two, as portal_speaker_hid_split does (it no longer needs to be set by hand).
+        audio_hid_split_.store(true);
+        constexpr size_t kHalf = kAudioPacketSize / 2;
+        uint8_t half[1 + kHalf];
+        half[0] = 0;
+        std::memcpy(half + 1, packet.data() + kHalf, kHalf);
+        second = write(half, sizeof(half));
+        ok = second >= 0;
+        REXLOG_INFO("Portal (usb): the portal took {} of {} bytes of a speaker packet; each packet goes out as two "
+                    "{}-byte reports from now on", first, sizeof(out), sizeof(half));
+      }
     }
     // What the HID driver took of the first packet: hid_write returns the bytes written, so a 65-byte write
     // that comes back as 33 means the driver sent only the first half (Core of Light #153/#154).

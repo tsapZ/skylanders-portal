@@ -74,9 +74,11 @@ class UsbPortal final : public PortalDevice {
   // game's uneven frames (up to ~12 ms apart instead of 7.5) don't leave the portal's buffer empty.
   void SetAudioPacing(int lead_packets) { audio_pacing_lead_.store(lead_packets < 0 ? 0 : lead_packets); }
   // portal_speaker_hid_split: on the HID driver each 64-byte sound packet goes out as two 32-byte reports,
-  // the size the portal's HID description gives its output reports, instead of one 64-byte write. A test
-  // for Core of Light #153/#154: a Traptanium speaker sounded choppy on HID and clean on WinUSB, whose
-  // interrupt writes take the 64 bytes as they are. No effect on WinUSB.
+  // the size the portal's HID description gives its output reports, instead of one 64-byte write. Core of
+  // Light #153/#154: a Traptanium speaker sounded choppy on HID and clean on WinUSB, whose interrupt writes
+  // take the 64 bytes as they are; on HID the driver took 33 of the 65 bytes, with the split it played clean.
+  // Since 2026-11-26 the writer switches to the split by itself after such a write (HidSpeakerWriteTookHalf),
+  // so the setting only starts with it. No effect on WinUSB.
   void SetAudioHidSplit(bool split) { audio_hid_split_.store(split); }
 
   // The speaker took no sound; callers send it to the PC instead.
