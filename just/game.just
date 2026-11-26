@@ -122,6 +122,9 @@ play-release *ARGS: build-release
 
 # --- Package -------------------------------------------------------------------
 
+# Both package recipes also take out/siblings/<triple>/*: the exes of the game's other builds, built from another
+# checkout with that build's disc (src/xex/sibling_build.h; the maintainer's release.py puts them there).
+#
 # Package the release build for copying to another machine: the executable, its runtime shared
 # libraries, and the settings template -- everything except rom/. This repo ships no game data on
 # purpose (see README.md), and the running game reads from rom/ continuously, not just at build
@@ -133,6 +136,7 @@ package-release: build-release
     rm -rf "$dist" && \
     mkdir -p "$dist" && \
     cp out/build/{{ triple }}-release/{{ exe }}{{ exe_suffix }} "$dist/" && \
+    if [ -d out/siblings/{{ triple }} ]; then cp out/siblings/{{ triple }}/* "$dist/"; fi && \
     if [ -e out/build/{{ triple }}-release/{{ game }}_xexcheck{{ exe_suffix }} ]; then cp out/build/{{ triple }}-release/{{ game }}_xexcheck{{ exe_suffix }} "$dist/"; fi && \
     for lib in out/build/{{ triple }}-release/*.dll out/build/{{ triple }}-release/*.so out/build/{{ triple }}-release/*.dylib {{ sdk_lib_dir }}/*.dylib; do if [ -e "$lib" ]; then cp "$lib" "$dist/"; fi; done && \
     if [ "{{ os() }}" != "windows" ]; then \
@@ -173,6 +177,7 @@ package-installer: build-release
     rm -rf installer/staging && \
     mkdir -p installer/staging && \
     cp out/build/win-amd64-release/{{ exe }}.exe installer/staging/ && \
+    if [ -d out/siblings/win-amd64 ]; then cp out/siblings/win-amd64/*.exe installer/staging/; fi && \
     cp out/build/win-amd64-release/{{ game }}_xexcheck.exe installer/staging/ && \
     for lib in out/build/win-amd64-release/*.dll; do [ -e "$lib" ] && cp "$lib" installer/staging/; done && \
     iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe" && \

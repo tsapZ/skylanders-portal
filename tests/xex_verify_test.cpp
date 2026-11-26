@@ -222,6 +222,32 @@ int main() {
     CHECK(!VerifyXex(fc, hash_a + ",code=" + *pin).other_build);
     CHECK(VerifyXex(fc, hash_a + ",code=" + *pin).status == XexCheck::Mismatch);
     CHECK(VerifyXex(fa, hash_a + ",code=82010000:abc").status == XexCheck::BadExpected);
+
+    // "sibling=<exe>@<pin>" (2026-11-26): the exe of the other build, shipped next to this one. A disc with its code
+    // names it, listed or not; the entry for this build's own code is skipped, so both builds share the list.
+    const std::string siblings = ",sibling=game.exe@" + *pin + ",sibling=game_other.exe@" + pin_c;
+    const std::string from_a = hash_a + "," + *pin + siblings + ",code=" + *pin;
+    CHECK(VerifyXex(fa, from_a).status == XexCheck::Match);
+    CHECK(VerifyXex(fa, from_a).sibling_exe.empty());
+    CHECK(VerifyXex(fb, from_a).status == XexCheck::SameCode);
+    const auto to_c = VerifyXex(fc, from_a);  // fc isn't listed by hash or pin here
+    CHECK(to_c.status == XexCheck::Mismatch);
+    CHECK(to_c.other_build);
+    CHECK(to_c.sibling_exe == "game_other.exe");
+    const std::string to_c_msg = skylanders::xex::DescribeXexProblem(fc, to_c, from_a, "Skylanders: Test");
+    CHECK(to_c_msg.find("game_other.exe") != std::string::npos);
+    const std::string from_c = hash_c + "," + pin_c + siblings + ",code=" + pin_c;
+    CHECK(VerifyXex(fc, from_c).status == XexCheck::Match);
+    CHECK(VerifyXex(fa, from_c).sibling_exe == "game.exe");
+    CHECK(VerifyXex(fb, from_c).sibling_exe == "game.exe");
+    // without "code=" there is no other build, so no sibling either
+    CHECK(VerifyXex(fc, hash_a + siblings).sibling_exe.empty());
+    // an exe in another folder, an empty name or a bad pin spoils the list
+    CHECK(VerifyXex(fa, hash_a + ",sibling=..\\x.exe@" + pin_c).status == XexCheck::BadExpected);
+    CHECK(VerifyXex(fa, hash_a + ",sibling=a/x.exe@" + pin_c).status == XexCheck::BadExpected);
+    CHECK(VerifyXex(fa, hash_a + ",sibling=@" + pin_c).status == XexCheck::BadExpected);
+    CHECK(VerifyXex(fa, hash_a + ",sibling=x.exe@82010000:abc").status == XexCheck::BadExpected);
+    CHECK(VerifyXex(fa, hash_a + ",sibling=x.exe").status == XexCheck::BadExpected);
   }
 
   // Files every copy of the disc has: a "*" part is any one folder (CoL #64, an extract tool that

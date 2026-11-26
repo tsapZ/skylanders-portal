@@ -20,6 +20,13 @@ int main() {
   CHECK(ExitCodeForStatus(XexCheck::Mismatch) == 2);
   CHECK(ExitCodeForStatus(XexCheck::Unreadable) == 3);
   CHECK(ExitCodeForStatus(XexCheck::BadExpected) == 4);
+  // Another build: 5 when its exe ships next to this one (the setup takes it), else the plain mismatch.
+  skylanders::xex::XexCheckResult other{XexCheck::Mismatch, "x"};
+  other.other_build = true;
+  CHECK(skylanders::xex::ExitCodeForResult(other) == 2);
+  other.sibling_exe = "game_other.exe";
+  CHECK(skylanders::xex::ExitCodeForResult(other) == 5);
+  CHECK(skylanders::xex::ExitCodeForResult({XexCheck::Match, "x"}) == 0);
 
   if (g_failures == 0) std::puts("all xex_check_exit_code tests passed");
   return g_failures == 0 ? 0 : 1;
