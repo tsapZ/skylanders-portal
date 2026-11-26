@@ -112,6 +112,9 @@ check_xex() {
   "$xexcheck" "$1" || code=$?
   case "$code" in
     0) ;;
+    # Another build of the game, run by the exe made from it that comes with this download (skylanders-portal
+    # sibling_build.h; SuperChargers' French / Dutch and Scandinavian discs, 2026-11-26).
+    5) ;;
     2) echo "This disc does not match the supported version." >&2; return 1 ;;
     3) echo "Couldn't read $1." >&2; return 1 ;;
     *) echo "Version check failed (exit code $code)." >&2; return 1 ;;
