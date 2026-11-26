@@ -104,8 +104,12 @@ std::optional<int> RunSiblingBuild(std::string_view exe_name) {
   if (!UsableSibling(own, sibling)) return std::nullopt;
 
   std::vector<std::string> args;
-  std::ifstream in("/proc/self/cmdline", std::ios::binary);
-  const std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  std::string raw;
+  {
+    // Closed before the execv: no destructor runs after a successful one, and the started game would keep the file.
+    std::ifstream in("/proc/self/cmdline", std::ios::binary);
+    raw.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
   for (size_t pos = 0; pos < raw.size();) {
     const size_t nul = raw.find('\0', pos);
     args.push_back(raw.substr(pos, nul == std::string::npos ? std::string::npos : nul - pos));
