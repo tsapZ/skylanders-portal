@@ -370,26 +370,31 @@ int main() {
     CHECK(sent('J') >= 2);
   }
 
-  // Core of Light #153 3: every change the game makes to the trap light (L side 1) is logged as the game sends it,
-  // a repeat isn't, and the other lights aren't (the usb log has their on / off).
+  // Core of Light #153 3: the trap light (L side 1) as the game sends it: going on or off always gets a line, a
+  // value change at most one per 50 ms, a repeat none, and the other lights none (the usb log has their on / off).
   {
     SoftwarePortal emulated;
     std::vector<std::string> lines;
     RealPortalBridge::Options options{dir, nullptr, nullptr};
     options.log = [&](const std::string& line) { lines.push_back(line); };
     RealPortalBridge bridge(&emulated, options);
-    bridge.OnLight(Cmd({'L', 0x01, 0xFF, 0xFF, 0xFF}));
-    bridge.OnLight(Cmd({'L', 0x01, 0xFF, 0xFF, 0xFF}));  // the same again
-    bridge.OnLight(Cmd({'L', 0x01, 0x80, 0x80, 0x80}));  // a pulse's lower step
-    bridge.OnLight(Cmd({'L', 0x00, 0x0C, 0x00, 0x00}));  // a side light
-    bridge.OnLight(Cmd({'J', 0x02, 0x12, 0x12, 0xE5}));
-    bridge.OnLight(Cmd({'L', 0x01, 0x00, 0x00, 0x00}));  // off
+    bridge.OnLight(Cmd({'L', 0x01, 0xFF, 0xFF, 0xFF}));  // on: a line
+    bridge.OnLight(Cmd({'L', 0x01, 0xFF, 0xFF, 0xFF}));  // the same again: none
+    bridge.OnLight(Cmd({'L', 0x01, 0xC0, 0xC0, 0xC0}));  // a step within 50 ms: none
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    bridge.OnLight(Cmd({'L', 0x01, 0x80, 0x80, 0x80}));  // a pulse's lower step after 50 ms: a line
+    bridge.OnLight(Cmd({'L', 0x00, 0x0C, 0x00, 0x00}));  // a side light: none
+    bridge.OnLight(Cmd({'J', 0x01, 0x12, 0x12, 0xE5}));  // J side 1 isn't the trap light: none
+    bridge.OnLight(Cmd({'L', 0x01, 0x00, 0x00, 0x00}));  // off, within 50 ms: a line all the same
     const auto trap = std::count_if(lines.begin(), lines.end(), [](const std::string& l) {
       return l.find("the game sets the trap light") != std::string::npos;
     });
     CHECK(trap == 3);
     CHECK(std::any_of(lines.begin(), lines.end(), [](const std::string& l) {
       return l.find("trap light: 4c 01 80 80 80") != std::string::npos;
+    }));
+    CHECK(std::none_of(lines.begin(), lines.end(), [](const std::string& l) {
+      return l.find("trap light: 4c 01 c0") != std::string::npos;
     }));
   }
 

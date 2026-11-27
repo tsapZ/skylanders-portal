@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <chrono>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -163,6 +164,10 @@ class UsbPortal final : public PortalDevice {
   std::vector<std::array<uint8_t, 8>> lights_last_;  // each light's last command, for the trap light's every change
   int light_lines_ = 0;
   static constexpr int kLightLines = 300;
+  // The trap light's value changes (Write): their own lines, at most one per 50 ms.
+  int trap_lines_ = 0;
+  std::chrono::steady_clock::time_point trap_logged_{};
+  static constexpr int kTrapLines = 600;
   // The game's commands and what it got back, in plain lines for a player's log (traffic_log.h).
   PortalTrafficLog traffic_;
 

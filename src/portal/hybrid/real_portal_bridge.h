@@ -200,9 +200,9 @@ class RealPortalBridge {
   // The newest light per command and side (C: one, J / L: per side byte), and whether it still has
   // to go out.
   std::map<uint16_t, std::pair<Report, bool>> lights_;
-  // The trap light (J / L side 1) as the game last set it, and how many of its changes went into the log (OnLight).
-  std::map<uint16_t, std::array<uint8_t, 8>> trap_light_seen_;
+  // The trap light's log lines (OnLight): how many, and when the last one went out.
   int trap_light_lines_ = 0;
+  Clock::time_point trap_light_logged_{};
   // The game's newest speaker switch, and whether it still has to go out.
   std::optional<Report> speaker_switch_;
   bool speaker_switch_due_ = false;
