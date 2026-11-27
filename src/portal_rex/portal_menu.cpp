@@ -2749,6 +2749,7 @@ struct Actions {
   bool accept = false, back = false, details = false, lb = false, rb = false, lt = false,
        rt = false;
   bool take_off = false;  // Y: take the item off the portal
+  bool open_again = false;  // the open button (chord) again: back, or while hidden, come up now
   bool pin = false, forget = false;  // R3, L3: pin or remove the entry in the Recent tab
   bool options = false;   // Start: options (shown games, only my figures, leave the portal)
 
@@ -2785,8 +2786,8 @@ class PadReader {
     a.rt = rt && !prev_rt_;
     prev_lt_ = lt;
     prev_rt_ = rt;
-    // The open button again closes the menu.
-    if (menu_input::IsOpenChord(buttons) && !menu_input::IsOpenChord(prev_)) a.back = true;
+    // The open button again closes the menu (while it still waits hidden: brings it up, Draw).
+    if (menu_input::IsOpenChord(buttons) && !menu_input::IsOpenChord(prev_)) a.back = a.open_again = true;
     const float lx = float(int16_t(pad.thumb_lx)) / 32767.0f;
     const float ly = float(int16_t(pad.thumb_ly)) / 32767.0f;
     const bool dirs[4] = {
@@ -2982,9 +2983,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
     // A swapper half of this player's still on the real portal after the lift (the other half came from the menu,
     // Core of Light #160): the game doesn't show its portal screen for a lone half, so the menu waited for its
     // fallback (portal_menu_open_delay_ms), and a second press in that time cancelled it. Nothing to wait for then.
-    const bool real_half_left = software_ && !lifted_.empty() && user_ < g_player_slots.size() &&
-                                std::any_of(g_player_slots[user_].begin(), g_player_slots[user_].end(),
-                                            [](int slot) { return IsRealPortalCopy(slot); });
+    const bool real_half_left = software_ && !lifted_.empty() && RealLoneSwapperHalfOf(user_) != nullptr;
     revealed_ = auto_opened_ || !software_ || lifted_.empty() || real_half_left;
     if (revealed_) reveal_time_ = Clock::now();
     if (real_half_left) REXLOG_INFO("Portal menu: a real half stays on for player {}, the menu comes up at once", user_ + 1);
@@ -3007,6 +3006,7 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
 
   uint32_t user() const { return user_; }
   bool auto_opened() const { return auto_opened_; }
+  bool revealed() const { return revealed_; }
   bool wants_back() const { return wants_back_; }
 
   // hybrid: the player put a figure on the real portal while the menu was open, so that one is
@@ -3107,12 +3107,14 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       actions.accept = false;
     }
     if (!revealed_) {
-      // B or the open button again: never mind, the figure goes back.
-      if (actions.back) {
+      // B: never mind, the figure goes back. The open button again: the player sees nothing yet and
+      // wants the menu, so it comes up now (Core of Light #160: a second press within the wait used to
+      // cancel it, and a player who kept pressing never saw it).
+      if (actions.back && !actions.open_again) {
         StartCancel();
         return;
       }
-      if (!ShouldReveal()) return;
+      if (!actions.open_again && !ShouldReveal()) return;
       Reveal();
       actions = {};
     }
@@ -7168,7 +7170,9 @@ void RegisterPortalMenu(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContex
                         });
   rex::ui::RegisterBind("bind_portal_menu", "F6",
                         "Open or close the portal menu for the keyboard's player", [] {
-                          if (g_menu) {
+                          if (g_menu && !g_menu->revealed()) {
+                            g_menu->Reveal();  // pressed again while it waits hidden: now (#160)
+                          } else if (g_menu) {
                             g_menu->Cancel();
                           } else if (menu_input::MenuOpen()) {
                             // Another menu (the player menu) is open.
