@@ -31,8 +31,10 @@ constexpr int kReadAttempts = 12;
 constexpr int kEarlyBlocks = 8;
 // The light: at most this often.
 constexpr auto kLightInterval = std::chrono::milliseconds(100);
-// Log lines for the trap light as the game sets it (OnLight): a few minutes of pulses and fades.
-constexpr int kTrapLightLines = 400;
+// The trap light as the game sets it (OnLight): at most one line per kTrapLightStep for its value
+// changes (going on or off always gets one), kTrapLightLines in all: half a minute of a pulse.
+constexpr int kTrapLightLines = 600;
+constexpr auto kTrapLightStep = std::chrono::milliseconds(50);
 // Reports handled per step: the real portal queues a status report every few milliseconds.
 constexpr int kReportsPerStep = 16;
 
@@ -651,24 +653,31 @@ void RealPortalBridge::OnLight(const Report& report) {
   if (report[0] != 'C' && report[0] != 'J' && report[0] != 'L') return;
   // C sets the whole portal; J (a side's colour with a fade) and L (the trap light) say which side.
   const uint16_t key = uint16_t(report[0] << 8) | (report[0] == 'C' ? 0 : report[1]);
-  std::lock_guard lock(mu_);
-  lights_[key] = {report, true};
-  // The trap light as the game sets it, every change (Core of Light #153): the portal gets only the newest one per
-  // turn, so a pulse or a fade the game makes shows here, next to what the usb log says went out.
-  if (report[0] != 'C' && report[1] == 1 && trap_light_lines_ < kTrapLightLines) {
-    std::array<uint8_t, 8> now{};
-    std::copy(report.begin(), report.begin() + 8, now.begin());
-    auto [seen, added] = trap_light_seen_.try_emplace(key, now);
-    if (added || seen->second != now) {
-      seen->second = now;
-      static constexpr char kHex[] = "0123456789abcdef";
-      std::string bytes;
-      for (uint8_t b : now) bytes += std::string(bytes.empty() ? "" : " ") + kHex[b >> 4] + kHex[b & 0xF];
-      ++trap_light_lines_;
-      Log("Hybrid portal: the game sets the trap light: " + bytes +
-          (trap_light_lines_ == kTrapLightLines ? " (the last such line)" : ""));
+  std::string line;
+  {
+    std::lock_guard lock(mu_);
+    // The trap light (L side 1) as the game sets it (Core of Light #153): the portal gets only the
+    // newest value per turn, so a pulse or a fade the game makes shows here, next to what the usb
+    // log says went out. Logged after the lock: the game's thread waits on it.
+    const auto old = lights_.find(key);
+    if (report[0] == 'L' && report[1] == 1 && trap_light_lines_ < kTrapLightLines) {
+      const auto lit = [](const Report& r) { return r[2] || r[3] || r[4]; };
+      const bool seen = old != lights_.end();
+      const bool same = seen && std::equal(report.begin(), report.begin() + 8, old->second.first.begin());
+      const bool switched = !seen || lit(report) != lit(old->second.first);
+      const Clock::time_point now = Clock::now();
+      if (!same && (switched || now - trap_light_logged_ >= kTrapLightStep)) {
+        trap_light_logged_ = now;
+        ++trap_light_lines_;
+        static constexpr char kHex[] = "0123456789abcdef";
+        line = "Hybrid portal: the game sets the trap light:";
+        for (int i = 0; i < 8; ++i) line += {' ', kHex[report[i] >> 4], kHex[report[i] & 0xF]};
+        if (trap_light_lines_ == kTrapLightLines) line += " (the last such line)";
+      }
     }
+    lights_[key] = {report, true};
   }
+  if (!line.empty()) Log(line);
 }
 
 void RealPortalBridge::DropLights() {
