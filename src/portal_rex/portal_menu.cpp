@@ -2979,8 +2979,15 @@ class PortalMenuDialog final : public rex::ui::ImGuiDialog {
       paused_game_ = true;
       REXLOG_INFO("Portal menu: the game paused behind the menu (Start)");
     }
-    revealed_ = auto_opened_ || !software_ || lifted_.empty();
+    // A swapper half of this player's still on the real portal after the lift (the other half came from the menu,
+    // Core of Light #160): the game doesn't show its portal screen for a lone half, so the menu waited for its
+    // fallback (portal_menu_open_delay_ms), and a second press in that time cancelled it. Nothing to wait for then.
+    const bool real_half_left = software_ && !lifted_.empty() && user_ < g_player_slots.size() &&
+                                std::any_of(g_player_slots[user_].begin(), g_player_slots[user_].end(),
+                                            [](int slot) { return IsRealPortalCopy(slot); });
+    revealed_ = auto_opened_ || !software_ || lifted_.empty() || real_half_left;
     if (revealed_) reveal_time_ = Clock::now();
+    if (real_half_left) REXLOG_INFO("Portal menu: a real half stays on for player {}, the menu comes up at once", user_ + 1);
     REXLOG_INFO("Portal menu: opened for player {}{}", user_ + 1,
                 quick_               ? " (quick swap)"
                 : companion_request_ ? " (the game asks for a trap or a vehicle)"
