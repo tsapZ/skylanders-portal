@@ -370,6 +370,29 @@ int main() {
     CHECK(sent('J') >= 2);
   }
 
+  // Core of Light #153 3: every change the game makes to the trap light (L side 1) is logged as the game sends it,
+  // a repeat isn't, and the other lights aren't (the usb log has their on / off).
+  {
+    SoftwarePortal emulated;
+    std::vector<std::string> lines;
+    RealPortalBridge::Options options{dir, nullptr, nullptr};
+    options.log = [&](const std::string& line) { lines.push_back(line); };
+    RealPortalBridge bridge(&emulated, options);
+    bridge.OnLight(Cmd({'L', 0x01, 0xFF, 0xFF, 0xFF}));
+    bridge.OnLight(Cmd({'L', 0x01, 0xFF, 0xFF, 0xFF}));  // the same again
+    bridge.OnLight(Cmd({'L', 0x01, 0x80, 0x80, 0x80}));  // a pulse's lower step
+    bridge.OnLight(Cmd({'L', 0x00, 0x0C, 0x00, 0x00}));  // a side light
+    bridge.OnLight(Cmd({'J', 0x02, 0x12, 0x12, 0xE5}));
+    bridge.OnLight(Cmd({'L', 0x01, 0x00, 0x00, 0x00}));  // off
+    const auto trap = std::count_if(lines.begin(), lines.end(), [](const std::string& l) {
+      return l.find("the game sets the trap light") != std::string::npos;
+    });
+    CHECK(trap == 3);
+    CHECK(std::any_of(lines.begin(), lines.end(), [](const std::string& l) {
+      return l.find("trap light: 4c 01 80 80 80") != std::string::npos;
+    }));
+  }
+
   // #62 4: a toy whose backup file is already on the emulated portal through the menu is left out,
   // and that file isn't renamed or saved over.
   {

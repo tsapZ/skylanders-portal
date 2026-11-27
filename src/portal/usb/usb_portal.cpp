@@ -296,16 +296,23 @@ void UsbPortal::Write(const Report& report) {
     if (first) {
       lights_used_.push_back(light);
       lights_on_.push_back(false);
+      lights_last_.push_back({});
       it = lights_used_.end() - 1;
     }
     // Each light going on or off, in the log (Core of Light #153: what Trap Team does with the trap
     // light while it reads a trap): on = any colour or brightness byte set (C r g b, J side r g b,
-    // L side ...). Only the changes, at most kLightLines of them, so a fade doesn't fill the log.
+    // L side ...). Only the changes, at most kLightLines of them, so a fade doesn't fill the log. The
+    // trap light (J / L side 1) with every change of its value too: a pulse or a fade the game makes
+    // with it never reaches 0 (#153: on a console it pulses while the villain talks, fades when he's
+    // summoned or sent back, and goes off with the trap).
     const size_t index = size_t(it - lights_used_.begin());
     const size_t from = report[0] == 'C' ? 1 : 2;
     const size_t to = report[0] == 'J' ? 5 : 4;
     const bool on = std::any_of(report.begin() + from, report.begin() + to, [](uint8_t b) { return b != 0; });
-    if ((first || on != bool(lights_on_[index])) && light_lines_ < kLightLines) {
+    const bool trap = report[0] != 'C' && report[1] == 1;
+    const bool changed = !std::equal(report.begin(), report.begin() + 8, lights_last_[index].begin());
+    std::copy(report.begin(), report.begin() + 8, lights_last_[index].begin());
+    if ((first || on != bool(lights_on_[index]) || (trap && changed)) && light_lines_ < kLightLines) {
       ++light_lines_;
       REXLOG_INFO("Portal (usb): light {}{} {}: {}{}", char(report[0]),
                   report[0] == 'C' ? std::string() : " " + std::to_string(report[1]), on ? "on" : "off",

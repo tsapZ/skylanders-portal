@@ -31,6 +31,8 @@ constexpr int kReadAttempts = 12;
 constexpr int kEarlyBlocks = 8;
 // The light: at most this often.
 constexpr auto kLightInterval = std::chrono::milliseconds(100);
+// Log lines for the trap light as the game sets it (OnLight): a few minutes of pulses and fades.
+constexpr int kTrapLightLines = 400;
 // Reports handled per step: the real portal queues a status report every few milliseconds.
 constexpr int kReportsPerStep = 16;
 
@@ -651,6 +653,22 @@ void RealPortalBridge::OnLight(const Report& report) {
   const uint16_t key = uint16_t(report[0] << 8) | (report[0] == 'C' ? 0 : report[1]);
   std::lock_guard lock(mu_);
   lights_[key] = {report, true};
+  // The trap light as the game sets it, every change (Core of Light #153): the portal gets only the newest one per
+  // turn, so a pulse or a fade the game makes shows here, next to what the usb log says went out.
+  if (report[0] != 'C' && report[1] == 1 && trap_light_lines_ < kTrapLightLines) {
+    std::array<uint8_t, 8> now{};
+    std::copy(report.begin(), report.begin() + 8, now.begin());
+    auto [seen, added] = trap_light_seen_.try_emplace(key, now);
+    if (added || seen->second != now) {
+      seen->second = now;
+      static constexpr char kHex[] = "0123456789abcdef";
+      std::string bytes;
+      for (uint8_t b : now) bytes += std::string(bytes.empty() ? "" : " ") + kHex[b >> 4] + kHex[b & 0xF];
+      ++trap_light_lines_;
+      Log("Hybrid portal: the game sets the trap light: " + bytes +
+          (trap_light_lines_ == kTrapLightLines ? " (the last such line)" : ""));
+    }
+  }
 }
 
 void RealPortalBridge::DropLights() {

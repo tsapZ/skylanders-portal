@@ -160,6 +160,7 @@ class UsbPortal final : public PortalDevice {
   // on now, and how many on/off lines went to the log (Write). Under io_mutex_.
   std::vector<std::pair<uint8_t, uint8_t>> lights_used_;
   std::vector<char> lights_on_;
+  std::vector<std::array<uint8_t, 8>> lights_last_;  // each light's last command, for the trap light's every change
   int light_lines_ = 0;
   static constexpr int kLightLines = 300;
   // The game's commands and what it got back, in plain lines for a player's log (traffic_log.h).
