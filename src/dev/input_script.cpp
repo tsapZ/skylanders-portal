@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 #include "portal_rex/utf8_path.h"
@@ -273,6 +274,9 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
     Event e{};
     e.start = t;
     bool ok = true;
+    // A number that doesn't parse (std::stoul/stoi on "zz" or on more than eight hex digits) is a
+    // syntax error like any other, not an exception that ends the game before the script starts.
+    try {
     if (cmd == "wait") {
       double seconds = 0.0;
       ok = bool(words >> seconds);
@@ -409,6 +413,9 @@ bool ParseScript(std::istream& in, std::vector<Event>& events) {
       std::getline(words >> std::ws, e.args);
       e.kind = Event::Kind::kCustom;
     } else {
+      ok = false;
+    }
+    } catch (const std::logic_error&) {  // std::invalid_argument, std::out_of_range
       ok = false;
     }
     if (!ok) {
